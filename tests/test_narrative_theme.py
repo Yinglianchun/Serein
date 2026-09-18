@@ -106,7 +106,7 @@ def test_discovery_requires_explicit_scout_assignment(live, monkeypatch):
 
 
 @pytest.mark.parametrize('protocol', ['openai', 'anthropic'])
-def test_configured_discovery_transport_and_output_budget(protocol):
+def test_configured_discovery_transport_has_no_task_specific_output_budget(protocol):
     from serein.compat.narrative_theme import model_json
     model = {'model': 'gpt-synthetic' if protocol == 'openai' else 'synthetic-scout',
         'protocol': protocol, 'base_url': 'https://model.example.invalid/v1', 'api_key': 'synthetic'}
@@ -132,7 +132,16 @@ def test_configured_discovery_transport_and_output_budget(protocol):
             assert await model_json(client, model, 'Select materials', {'theme': '雨声'}) == {'terms': ['雨声']}
             await model_json(client, model, 'Select materials', {'theme': '雨声', 'candidates': []})
     asyncio.run(run())
-    assert [call['max_tokens'] for call in calls] == [1000, 1800]
+    if protocol == 'openai':
+        assert all(
+            not {'max_tokens', 'max_completion_tokens', 'max_output_tokens'}.intersection(call)
+            for call in calls
+        )
+    else:
+        # Anthropic Messages requires max_tokens at the transport layer. The
+        # generic adapter supplies one stable fallback; Narrative discovery no
+        # longer applies its old stage-specific 1000/1800 budgets.
+        assert [call['max_tokens'] for call in calls] == [1024, 1024]
 
 
 def test_discovery_http_errors_do_not_expose_provider_body(live, monkeypatch):
