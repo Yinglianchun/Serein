@@ -91,7 +91,7 @@ async def tag_one(database,job):
                     **({'forbidden_names':blocked_names,
                         'validation_feedback':job.get('error','') if job.get('attempts') else ''} if generate_cues else {}),
                     'materials':sent_materials},ensure_ascii=False)}],
-                'response_format':{'type':'json_object'},'max_tokens':3000,
+                'response_format':{'type':'json_object'},
                 **non_thinking_options(model)})
             output=tagging_output(response)
             domain=output.get('domain')
