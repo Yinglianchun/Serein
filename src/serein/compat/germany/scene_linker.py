@@ -2098,9 +2098,6 @@ class SceneLinker:
                 from openai import AsyncOpenAI
                 client = AsyncOpenAI(api_key=api_key, base_url=base_url,
                                      timeout=float(raw.get("timeout_seconds", 60.0)), max_retries=0)
-            token_parameter = str(raw.get("token_parameter") or "max_tokens").strip()
-            if token_parameter not in {"max_tokens", "max_completion_tokens"}:
-                token_parameter = "max_tokens"
             providers.append(
                 {
                     "name": name,
@@ -2108,8 +2105,6 @@ class SceneLinker:
                     "base_url": base_url,
                     "protocol": str(raw.get("protocol") or "openai"),
                     "client": client,
-                    "max_tokens": max(200, min(int(raw.get("max_tokens", 1100)), 4000)),
-                    "token_parameter": token_parameter,
                     "temperature": raw.get("temperature"),
                 }
             )
@@ -2562,7 +2557,6 @@ class SceneLinker:
                 {"role": "system", "content": SCENE_LINKER_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
-            provider["token_parameter"]: provider["max_tokens"],
         }
         thinking_options = non_thinking_options(provider)
         if thinking_options:
