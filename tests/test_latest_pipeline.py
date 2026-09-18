@@ -61,7 +61,7 @@ def test_three_stages_and_writer_sees_exact_predecessor_originals(settings):
     task=asyncio.run(p.advance(settings.database,include_recent=True));prompt=task['request']['prompt']
     assert len(task['request']['messages'])==4
     assert task['role']=='event_writer' and 'Book club plan 1' in prompt and 'Book club plan 2' in prompt
-    assert '<previous_events_json>' in prompt and '正文不设固定字数上限，也不设最低字数' in prompt
+    assert '<previous_events_json>' in prompt and '正文最多 1000 字，这是写作硬上限而非目标' in prompt
     with Store(settings.database) as store:
         detail=json.loads(store.conn.execute('SELECT details_json FROM pipeline_event_details').fetchone()[0])
         assert 'evidence' not in detail
@@ -81,30 +81,31 @@ def test_settled_event_is_queued_only_when_arc_linker_is_selected(settings):
         assert tuple(row)==(fact['item_id'],fact['fingerprint'],'pending')
 
 
-def test_writer_body_has_no_fixed_length_limit():
+def test_writer_body_uses_1000_guidance_with_1500_tolerance():
     request={'messages':[{'id':1,'content':'A book was returned'}]}
     output=output_for('event_writer',request)
     output['event_draft']='书还了。'
     assert latest.validate_event_writer_result(output)==[]
-    output['event_draft']='书'*5000
+    output['event_draft']='书'*1500
     assert latest.validate_event_writer_result(output)==[]
-    assert len(output['event_draft'])==5000
+    output['event_draft']='书'*1501
+    assert '正文超过容错上限 1500 字：1501 字' in ' '.join(latest.validate_event_writer_result(output))
     output['title']=''
     assert '标题为空' in latest.validate_event_writer_result(output)
 
 
-def test_long_agent_draft_settles_without_truncation(settings):
+def test_model_counting_tolerance_settles_without_truncation(settings):
     ingest(settings)
     curator=curator_task(settings)
     p.submit(settings.database,curator['job_id'],output_for(curator['role'],curator['request']))
     task=asyncio.run(p.advance(settings.database,include_recent=True))
     output=output_for('event_writer',task['request'])
-    output['event_draft']='书'*5000
+    output['event_draft']='书'*1500
     p.submit(settings.database,task['job_id'],output)
     assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
     with Store(settings.database,read_only=True) as store:
         saved=store.conn.execute('SELECT body FROM fact_events').fetchone()[0]
-        assert saved==output['event_draft'] and len(saved)==5000
+        assert saved==output['event_draft'] and len(saved)==1500
 
 
 def test_writer_prompt_examples_match_both_evidence_outcomes():
