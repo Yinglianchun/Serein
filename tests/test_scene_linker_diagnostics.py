@@ -16,11 +16,12 @@ def response_client(content, finish_reason='stop'):
 def call(linker, content, finish_reason='stop'):
     client = response_client(content, finish_reason)
     provider = {'name': 'synthetic', 'model': 'deepseek-flash', 'base_url': 'https://api.deepseek.com',
-                'protocol': 'openai', 'client': client,
-                'token_parameter': 'max_tokens', 'max_tokens': 200}
+                'protocol': 'openai', 'client': client}
     payload = {'new_scene': {'scene_id': 'scene:synthetic'}}
     result = asyncio.run(linker._call_provider(provider, payload))
-    assert client.chat.completions.create.await_args.kwargs['extra_body']=={'thinking':{'type':'disabled'}}
+    kwargs=client.chat.completions.create.await_args.kwargs
+    assert kwargs['extra_body']=={'thinking':{'type':'disabled'}}
+    assert 'max_tokens' not in kwargs and 'max_completion_tokens' not in kwargs and 'max_output_tokens' not in kwargs
     return result
 
 
