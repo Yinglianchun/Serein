@@ -1,0 +1,21 @@
+name: Route recovery validation
+on:
+  push:
+    branches: [Haven/fix-route-history-recovery]
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Package tracked source for isolated review
+        run: git archive --format=zip HEAD -o "$RUNNER_TEMP/route-recovery-source.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: route-recovery-source
+          path: ${{ runner.temp }}/route-recovery-source.zip
+          retention-days: 1
