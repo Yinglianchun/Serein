@@ -112,7 +112,7 @@ async def run(settings):
                 response=await complete(model,{'messages':[
                     {'role':'system','content':FULL_PROMPT if item['mode']=='full_tagging' else CUE_ONLY_PROMPT},
                     {'role':'user','content':encode(payload)}],
-                    'response_format':{'type':'json_object'},'max_tokens':3500 if item['mode']=='full_tagging' else 1200,
+                    'response_format':{'type':'json_object'},
                     **non_thinking_options(model)})
                 output=tagging_output(response)
                 cues=validate_cues(output.get('cues'),item['forbidden_names'])
