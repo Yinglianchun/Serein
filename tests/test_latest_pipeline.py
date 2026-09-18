@@ -86,9 +86,9 @@ def test_writer_body_has_no_fixed_length_limit():
     output=output_for('event_writer',request)
     output['event_draft']='书还了。'
     assert latest.validate_event_writer_result(output)==[]
-    output['event_draft']='书'*1200
+    output['event_draft']='书'*5000
     assert latest.validate_event_writer_result(output)==[]
-    assert len(output['event_draft'])==1200
+    assert len(output['event_draft'])==5000
     output['title']=''
     assert '标题为空' in latest.validate_event_writer_result(output)
 
@@ -99,12 +99,12 @@ def test_long_agent_draft_settles_without_truncation(settings):
     p.submit(settings.database,curator['job_id'],output_for(curator['role'],curator['request']))
     task=asyncio.run(p.advance(settings.database,include_recent=True))
     output=output_for('event_writer',task['request'])
-    output['event_draft']='书'*1200
+    output['event_draft']='书'*5000
     p.submit(settings.database,task['job_id'],output)
     assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
     with Store(settings.database,read_only=True) as store:
         saved=store.conn.execute('SELECT body FROM fact_events').fetchone()[0]
-        assert saved==output['event_draft'] and len(saved)==1200
+        assert saved==output['event_draft'] and len(saved)==5000
 
 
 def test_writer_prompt_examples_match_both_evidence_outcomes():
