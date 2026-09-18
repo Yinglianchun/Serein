@@ -575,7 +575,7 @@ async def job(database,batch,request,key,runner):
                 content=([{'type':'text','text':prompt}]+[{'type':'image_url','image_url':{'url':item['url']}} for item in request.get('images',[])]) if request.get('images') else prompt
                 response=await asyncio.wait_for(complete({**model,'request_timeout_seconds':policy['timeout_seconds']},
                     {'messages':[{'role':'system','content':request['rules']},{'role':'user','content':content}],
-                     'response_format':{'type':'json_object'},'max_tokens':8192}),timeout=policy['timeout_seconds']+20)
+                     'response_format':{'type':'json_object'}}),timeout=policy['timeout_seconds']+20)
                 received=True
                 raw=response['choices'][0]['message']['content']
                 output=json.loads(raw)
