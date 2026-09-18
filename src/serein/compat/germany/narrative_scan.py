@@ -249,7 +249,7 @@ class NarrativeScout:
                         if roll.get('integrity_status') == 'ok' and roll.get('lifecycle') == 'active']
                     candidates = await propose_new_roll_candidates(client=client, model=scout_model,
                         corridors=corridors, role_rules=self.role_rules(),
-                        completion_options={'max_tokens':2600,'temperature':0},
+                        completion_options={'temperature':0},
                         existing_candidates=[], existing_rolls=existing_rolls)
                     arc_changes = self.apply_arc_candidates(candidates, model=scout_model)
                     scout_status = 'ok' if corridors else 'no_keyword_matches'
