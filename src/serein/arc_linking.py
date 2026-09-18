@@ -101,7 +101,7 @@ async def _model_decision(settings,event,candidates,invoke_model=None):
     if not model:raise ValueError('请先选择 Event · Arc 归档模型')
     response=await complete(model,{'messages':[{'role':'system','content':SYSTEM_PROMPT},
         {'role':'user','content':json.dumps(payload,ensure_ascii=False)}],
-        'response_format':{'type':'json_object'},'max_tokens':800})
+        'response_format':{'type':'json_object'}})
     content=response['choices'][0]['message']['content']
     fenced=re.fullmatch(r'\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*',content,re.S|re.I)
     return normalize_decision(json.loads(fenced[1] if fenced else content),candidates)
