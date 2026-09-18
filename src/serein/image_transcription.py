@@ -34,7 +34,7 @@ async def transcribe_images(model, images, *, timeout_seconds=180):
     response = await complete(
         {**model, "request_timeout_seconds": timeout_seconds},
         {"messages": [{"role": "user", "content": content}],
-         "response_format": {"type": "json_object"}, "max_tokens": 8192},
+         "response_format": {"type": "json_object"}},
     )
     raw = _content_text(response["choices"][0]["message"]["content"]).strip()
     output = json.loads(raw)
