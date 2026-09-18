@@ -180,7 +180,7 @@ class Migration:
             {'role':'user','content':encode({'title':doc['title'],'content':doc['body_md'],'kind':'scene',
                 'domains':catalog,'materials':sent,**({'forbidden_names':names} if generate_cues else {}),
                 **({'validation_feedback':'上次结果未通过校验：'+feedback+'。请修正后重新返回完整 JSON。'+('cues 不得包含禁用名字，正文与实体仍按原文处理。' if generate_cues else '')} if feedback else {})})}],
-            'response_format':{'type':'json_object'},'max_tokens':3500,
+            'response_format':{'type':'json_object'},
             **non_thinking_options(model)})
         output=tagging_output(response)
         domain=output.get('domain')
