@@ -172,6 +172,7 @@ def test_persona_and_anti_retreat_independent_and_memo_ack(settings,monkeypatch)
     calls=[]
     async def complete(model,payload):
         calls.append(payload)
+        assert 'max_tokens' not in payload and 'max_completion_tokens' not in payload and 'max_output_tokens' not in payload
         return {'choices':[{'message':{'content':json.dumps({'signal':True,'kind':'conflict','confidence':.99})}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     save_settings(settings.database,{'models':[{'id':'local','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
