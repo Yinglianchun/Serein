@@ -36,14 +36,14 @@ jobs:
         run: python -m pytest -q tests/test_pipeline_route_history.py tests/test_pipeline_limits.py tests/test_latest_pipeline.py tests/test_public_features.py tests/test_track_continuation_parity.py tests/test_event_handoff.py tests/test_pipeline_scenes.py tests/test_narrative_theme.py
       - name: Full backend
         run: python -m pytest -q
-      - name: Frontend tests
+      - name: Frontend build
         working-directory: web
         run: |
           npm ci
-          npm test
-      - name: Frontend build
+          npm run build
+      - name: Frontend tests
         working-directory: web
-        run: npm run build
+        run: npm test
       - name: Compile and diff check
         run: |
           python -m compileall -q src tests
