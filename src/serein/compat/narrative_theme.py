@@ -64,7 +64,7 @@ def validate_creation(body):
 async def model_json(client, model, system, payload):
     options = {'reasoning_effort': 'low'} if model['model'].startswith('gpt-') else {}
     url, headers, body = request_for(model, {'temperature': 0, 'stream': False,
-        'max_tokens': 1800 if 'candidates' in payload else 1000, **options,
+        **options,
         'messages': [{'role': 'system', 'content': system},
                      {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]})
     response = await client.post(url, headers=headers, json=body)
