@@ -108,7 +108,6 @@ class DeepSeekCuePassageBinder:
                 },
             ],
             temperature=0,
-            max_tokens=max(300, min(1200, 160 * len(cues))),
             response_format={"type": "json_object"},
             extra_body=non_thinking_options({"model": self.model, "base_url": self.base_url}),
         )
