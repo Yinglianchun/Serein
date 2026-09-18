@@ -504,5 +504,8 @@
   "web/src/storage/settingsError.js",
   "web/src/upstreamSecrets.js",
   "web/tests/instance-store.test.mjs",
-  "web/tests/upstream-secrets.test.mjs"
+  "web/tests/upstream-secrets.test.mjs",
+  "src/serein/extensions/pipeline_recovery.py",
+  "tests/test_pipeline_route_history.py",
+  "docs/route-recovery.md"
 ]

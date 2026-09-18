@@ -76,6 +76,8 @@ def _frames(database, batch):
     cursor = 0
     for row in jobs:
         request = json.loads(row['request_json'])
+        if request.get('batch_id') != batch['id']:
+            raise p.RoutingRecoveryError('Router job belongs to another producer batch')
         messages = p._router_prefix(original, request, cursor)
         cursor += len(messages)
         if row['output_json'] is None:
@@ -158,6 +160,9 @@ def recover_cached_routes(database, data, assignments):
             source_messages = {m['id']: m for m in frame['messages']}
             overlap = expected.keys() & source_messages.keys()
             actual = {a['source_message_id']: a for a in frame['assignments']}
+            if ([key for key in expected if key in overlap] !=
+                    [key for key in source_messages if key in overlap]):
+                continue
             if not overlap or any(_message_key(expected[key]) != _message_key(source_messages[key])
                                   or actual.get(key) != wanted[key] for key in overlap):
                 continue
@@ -220,7 +225,7 @@ def assert_downstream_snapshot(database, batch, data):
                     or frozen.get('base_event_candidates', []) != component.get('base_event_candidates', [])
                     or frozen.get('context_session_ids', []) != component.get('context_session_ids', [])):
                 raise ValueError('frozen ownership, bridge endpoints or predecessors differ')
-        except (IndexError, KeyError, TypeError, ValueError) as error:
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
             raise p.RoutingRecoveryError('downstream job disagrees with frozen component: '+str(error)) from error
 
 
@@ -268,11 +273,11 @@ def _rebuild(database, batch_id):
                 continue
             row = store.conn.execute('SELECT * FROM pipeline_routes WHERE raw_id=?', (frozen['id'],)).fetchone()
             provenance = store.conn.execute('SELECT * FROM pipeline_route_provenance WHERE raw_id=?', (frozen['id'],)).fetchone()
-            if row:
-                cache.append({'raw_id': frozen['id'], 'route_json': row['route_json'],
+            if row or provenance:
+                cache.append({'raw_id': frozen['id'], 'route_json': row['route_json'] if row else None,
                               'provenance': dict(provenance) if provenance else None})
                 try:
-                    route = json.loads(row['route_json'])
+                    route = json.loads(row['route_json'] if row else provenance['route_json'])
                     reserved.extend({'track_id': value} for value in
                                     [route['primary_track_id'], *route['context_track_ids']]
                                     if isinstance(value, str))

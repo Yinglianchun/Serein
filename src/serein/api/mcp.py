@@ -239,7 +239,7 @@ def create_server(app: Application, *, private=False, http=False):
                       'handoff', 'narrative_revision_inbox', 'review_narrative_revision', 'publish_narrative'}
     builtins = internal_tools | {"memory_read", "memory_materials", "memory_search", "memory_write", "memory_candidates", "memory_recall", "source_messages", "source_read"}
     for name, function in app.contributions.tools.items():
-        if private and name in {'pipeline_next','pipeline_submit',*app._optional_names}:
+        if private and name in {'pipeline_next','pipeline_submit','pipeline_rebuild',*app._optional_names}:
             continue
         if name not in builtins:
             if name in registered:

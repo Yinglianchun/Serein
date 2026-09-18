@@ -6,11 +6,12 @@ export function PipelineSettings({onOpenSummary}) {
   const [task,setTask]=useState(null),[output,setOutput]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
   const [work,setWork]=useState(null);
   const [limits,setLimits]=useState(null);
-  const mounted=useRef(true),polling=useRef(false);
+  const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null);
+  const [rebuildTarget,setRebuildTarget]=useState('');
   const running=['queued','running'].includes(work?.status);
   const needsRepair=work?.status==='needs_repair'||work?.result?.status==='needs_repair';
   const failure=work?.error||(needsRepair?work?.result?.reason:'');
-  const stages={idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复'};
+  const stages={idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复',rebuilt:'计划已重建'};
   async function call(action,body) {
     const response=await fetch('/__serein/pipeline/'+action,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const result=await response.json();
@@ -37,6 +38,22 @@ export function PipelineSettings({onOpenSummary}) {
     try {
       const result=await call('next',{include_recent:true});accept(result);setOutput('');
       setStatus('后台任务已提交，可离开页面；已完成步骤会保留。');
+    }catch(error){setStatus(error.message);}finally{setBusy(false);}
+  }
+  function beginRebuild() {
+    setRebuildTarget(work?.result?.batch_id||work?.batch_id||'');
+    rebuildDialog.current.showModal();
+  }
+  async function confirmRebuild() {
+    if(busy||!rebuildTarget)return;
+    setBusy(true);
+    try {
+      const result=await call('rebuild',{batch_id:rebuildTarget,confirm:'REBUILD_PIPELINE_BATCH'});
+      if(result.status!=='rebuilt')throw new Error('整理任务正在运行，请稍后刷新再操作。');
+      rebuildDialog.current.close();setRebuildTarget('');setTask(null);setOutput('');
+      accept(await call('status'));
+      accept(await call('next',{include_recent:true}));
+      setStatus('旧计划与模型结果已保留，正在重新归线；已保存的 Event 不变。');
     }catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   function download() {
@@ -68,13 +85,23 @@ export function PipelineSettings({onOpenSummary}) {
       {work.result?.deferred>0&&<p>暂缓 {work.result.deferred} 条原话；其中 {work.result.protected_deferrals?.length||0} 条事件提案涉及已有内容保护。可对照原话与已有事件人工处理。</p>}
       {work.result?.skipped>0&&<p>本批跳过 {work.result.skipped} 条原话，原始记录仍保留。</p>}
       {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
-      {needsRepair&&<p>批次：<code>{work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留；修复材料后可重新校验，通过后继续。此批仍阻塞结算队列，不会自动跳过。</p>}
+      {needsRepair&&<p>批次：<code>{work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。不会跳过原话或删除已保存的 Event。</p>}
       {task&&<p>等待 {stages[task.role]||task.role}：下载任务交给 Agent，再提交返回的 JSON。</p>}</div>}
     {work?.attempts?.length>0&&<details><summary>模型返回与纠错记录</summary>{work.attempts.map(item=><p key={item.id}>
       第 {item.attempt} 次：{item.error||'校验通过'} · {item.output_chars} 字符 <button type="button" onClick={()=>downloadAttempt(item.id)}>下载返回</button></p>)}</details>}
     <div className="settings-actions"><button type="button" disabled={busy||running} onClick={next}>{running?'后台整理中…':needsRepair?'重新校验并继续':'继续整理'}</button>
+      {needsRepair&&<button type="button" disabled={busy||running} onClick={beginRebuild}>作废本批计划并重新归线</button>}
       {task&&<button type="button" onClick={download}>下载 agent 任务</button>}</div>
     {task&&<><label className="settings-field"><span>Agent 返回的 JSON</span><textarea rows={8} value={output} onChange={event=>setOutput(event.target.value)}/></label>
       <div className="settings-actions"><button type="button" disabled={busy||!output.trim()} onClick={submit}>提交并校验</button></div></>}
+    <dialog ref={rebuildDialog} className="agent-guide" aria-labelledby="pipeline-rebuild-title" onCancel={()=>setRebuildTarget('')}>
+      <h3 id="pipeline-rebuild-title">重新生成这批原话的整理计划？</h3>
+      <p>批次：<code>{rebuildTarget}</code></p>
+      <p>旧的归线、切分和 Writer 结果会保留为历史记录，但不会再用于新计划。尚未处理的原话将重新归线，可能需要重新调用模型。</p>
+      <p>原话和已经保存的 Event 不会被删除。此操作不会把原话标成已处理或跳过。</p>
+      <div className="settings-actions"><button type="button" disabled={busy} onClick={()=>{rebuildDialog.current.close();setRebuildTarget('');}}>取消</button>
+        <button type="button" disabled={busy||!rebuildTarget} onClick={confirmRebuild}>确认作废旧计划并重新归线</button></div>
+      <p role="status">{status}</p>
+    </dialog>
     <p role="status">{status}</p></section>;
 }

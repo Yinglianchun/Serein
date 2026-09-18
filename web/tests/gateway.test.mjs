@@ -209,6 +209,11 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     assert.equal((await fetch(base+'/__serein/pipeline/next',{method:'POST',headers:postHeaders,body:'{"include_recent":true}'})).status,200);
     assert.ok(requests.some(r=>r.path==='/v1/pipeline/next'&&r.method==='POST'));
     assert.equal((await fetch(base+'/__serein/pipeline/next',{method:'POST',headers:{...postHeaders,Origin:'https://foreign.invalid'},body:'{}'})).status,403);
+    const rebuildBody={batch_id:'pipeline:synthetic',confirm:'REBUILD_PIPELINE_BATCH'};
+    assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{method:'POST',headers:postHeaders,body:JSON.stringify(rebuildBody)})).status,200);
+    assert.deepEqual(requests.find(r=>r.path==='/v1/pipeline/rebuild')?.body,rebuildBody);
+    assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{method:'POST',headers:{...postHeaders,Origin:'https://foreign.invalid'},body:JSON.stringify(rebuildBody)})).status,403);
+    assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{headers:auth})).status,405);
     const upload='upload%3A'+'a'.repeat(64);
     for(const action of ['continue','pause'])assert.equal((await fetch(base+'/__serein/imports/'+upload+'/'+action,{method:'POST',headers:postHeaders,body:'{}'})).status,200);
     assert.equal((await fetch(base+'/v1/models',{headers:auth})).status,401);

@@ -72,6 +72,11 @@ def routes(settings,auth):
         if row is None:raise ValueError('找不到这次模型返回')
         return dict(row)
 
+    @router.post('/v1/pipeline/rebuild')
+    async def pipeline_rebuild(body:dict):
+        from ..extensions.pipeline_recovery import rebuild
+        return await rebuild(settings.database,body.get('batch_id'),body.get('confirm'))
+
     @router.post('/v1/pipeline/next')
     def pipeline_next(body:dict):
         if type(body.get('include_recent',True)) is not bool:raise ValueError('include_recent must be boolean')

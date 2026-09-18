@@ -129,7 +129,7 @@ def test_legacy_chunk_replay_never_uses_end_of_day_card_for_early_batch(settings
     assert recovered['recovered_route_sources'][0]['source_message_ids'] == [1, 2]
 
 
-@pytest.mark.parametrize('damage', ['scope', 'message', 'bridge', 'ordinal', 'incomplete'])
+@pytest.mark.parametrize('damage', ['scope', 'message', 'bridge', 'ordinal', 'producer', 'incomplete'])
 def test_incompatible_producer_never_bypasses_repair(settings, damage):
     ingest(settings)
     _, data = freeze(settings)
@@ -146,6 +146,8 @@ def test_incompatible_producer_never_bypasses_repair(settings, damage):
             output['message_assignments'][0]['routing_role'] = 'bridge'
         elif damage == 'ordinal':
             request['next_track_ordinal'] = 99
+        elif damage == 'producer':
+            request['batch_id'] = 'route:unrelated'
         else:
             output = None
         store.conn.execute('UPDATE pipeline_jobs SET request_json=?,output_json=? WHERE id=?',
@@ -378,3 +380,21 @@ def test_missing_cache_never_reroutes_under_frozen_downstream_work(settings, mon
         pytest.fail('cannot reroute while old ownership is still frozen')
     result = asyncio.run(p.advance(settings.database, include_recent=True, runner=forbidden))
     assert result['status'] == 'needs_repair' and 'route proof' in result['reason']
+
+
+def test_rebuild_audits_orphan_provenance_before_invalidating_it(settings):
+    ingest(settings)
+    batch, data = hold_bad_cache(settings)
+    with Store(settings.database) as store:
+        row = store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=1').fetchone()
+        store.conn.execute('INSERT INTO pipeline_route_provenance VALUES (?,?,?)',
+                           (1, 'route:missing', row[0]))
+        store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id=1')
+    asyncio.run(recovery.rebuild(settings.database, batch['id'], 'REBUILD_PIPELINE_BATCH'))
+    with Store(settings.database, read_only=True) as store:
+        audit = json.loads(store.conn.execute('SELECT result_json FROM pipeline_batches WHERE id=?',
+                                             (batch['id'],)).fetchone()[0])
+        archived = next(item for item in audit['discarded_route_cache'] if item['raw_id'] == 1)
+        assert archived['route_json'] is None
+        assert archived['provenance']['batch_id'] == 'route:missing'
+        assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance').fetchone()[0] == 0

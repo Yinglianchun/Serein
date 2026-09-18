@@ -36,6 +36,8 @@ def initialize(database):
             CREATE TABLE IF NOT EXISTS pipeline_attempts(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,attempt INTEGER NOT NULL,
                 created_at TEXT NOT NULL,output_text TEXT NOT NULL,error TEXT NOT NULL);
         ''')
+        from .pipeline_recovery import initialize as initialize_recovery
+        initialize_recovery(store.conn)
         from ..imports import archive_imported_originals
         archive_imported_originals(store.conn)
         # Retire only the frozen plan that mixed in archive-only imports. Other
@@ -77,7 +79,7 @@ def new_batch(database,include_recent,clock=None):
     if not include_recent and current<watermark:return None
     cutoff=watermark-timedelta(minutes=20)
     with Store(database) as store,store.transaction(immediate=True):
-        old=store.conn.execute("SELECT * FROM pipeline_batches WHERE status IN ('pending','needs_repair') ORDER BY rowid LIMIT 1").fetchone()
+        old=store.conn.execute("SELECT * FROM pipeline_batches WHERE status IN ('pending','needs_repair') ORDER BY COALESCE(json_extract(input_json,'$.queue_order'),rowid),rowid LIMIT 1").fetchone()
         if old:
             if old['status']=='needs_repair':return dict(old)
             old_data=json.loads(old['input_json'])
@@ -182,11 +184,16 @@ def cached_route_result(database,data):
     expected=[item['id'] for item in data['routing_messages']]
     with Store(database,read_only=True) as store:
         rows=[store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=?',(key,)).fetchone() for key in expected]
+        # A removed cache row may still have an intact recorded producer.
+        rows=[row or store.conn.execute('SELECT route_json FROM pipeline_route_provenance WHERE raw_id=?',(key,)).fetchone() for key,row in zip(expected,rows)]
         if not rows or not all(rows):return None
         try:assignments=[json.loads(row[0]) for row in rows]
         except (TypeError,ValueError) as error:
             raise RoutingRecoveryError('cached route JSON is invalid') from error
         used=_assignment_tracks(data,assignments)
+        from .pipeline_recovery import recover_cached_routes
+        recovered=recover_cached_routes(database,data,assignments)
+        if recovered is not None:return recovered
         cards={card['track_id']:card for card in data['tracks'] if _card_is_complete(card)}
         missing=[key for key in used if key not in cards]
         if missing:
@@ -238,6 +245,8 @@ def _component_signature(components):
 def save_routing_snapshot(database,batch,data,routed):
     """Persist the exact interpretation before any downstream model stage runs."""
     validate_routing_result(data,routed)
+    from .pipeline_recovery import assert_downstream_snapshot
+    assert_downstream_snapshot(database,batch,data)
     fresh=components(database,data,routed,include_materials='components' not in data)
     if 'components' in data and _component_signature(data['components'])!=_component_signature(fresh):
         raise RoutingRecoveryError('frozen components disagree with recovered routing result')
@@ -656,7 +665,8 @@ def settle(database,batch,data,routed,plans):
             'deferred':len({source for _,plan,_ in plans for source in plan['defer_source_message_ids']}),
             'protected_deferrals':[entry for _,plan,_ in plans for entry in plan['hard_skips']]}
     def finish(conn):
-        for a in assignments:conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
+        from .pipeline_recovery import record_routes
+        record_routes(conn,batch['id'],assignments)
         for item,detail in zip(items,details):
             key=conn.execute('SELECT item_id FROM fact_events WHERE origin_id=?',(item['origin_id'],)).fetchone()[0]
             conn.execute('INSERT OR IGNORE INTO pipeline_track_events VALUES (?,?)',(detail['track_id'],key))
@@ -719,13 +729,18 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
     if batch['status']=='needs_repair' and not retry_repair:
         return json.loads(batch['result_json'])
     try:
+        from .pipeline_recovery import assert_downstream_snapshot
+        assert_downstream_snapshot(database,batch,data)
         routed=data.get('routing_result')
         if routed is None:
             if router_jobs(database,batch):
                 routed=await route_batch(database,batch,data,runner)
             else:
-                routed=cached_route_result(database,data)
-                if routed is None:routed=await route_batch(database,batch,data,runner)
+                routed=None if data.get('ignore_route_cache') else cached_route_result(database,data)
+                if routed is None:
+                    if 'components' in data:
+                        raise RoutingRecoveryError('no complete route proof for frozen downstream plan; rebuild explicitly')
+                    routed=await route_batch(database,batch,data,runner)
             data=save_routing_snapshot(database,batch,data,routed)
         else:
             validate_routing_result(data,routed)
@@ -781,7 +796,11 @@ def tools_for(settings):
     def pipeline_submit(job_id:str,output:dict)->dict:
         """Submit a frozen role result. Curator owns boundaries; Writer never changes them."""
         return submit(settings.database,job_id,output)
-    return {'pipeline_next':pipeline_next,'pipeline_submit':pipeline_submit}
+    async def pipeline_rebuild(batch_id:str,confirm:str)->dict:
+        """Explicitly retire an uncommitted needs_repair plan; retain all originals and old jobs."""
+        from .pipeline_recovery import rebuild
+        return await rebuild(settings.database,batch_id,confirm)
+    return {'pipeline_next':pipeline_next,'pipeline_submit':pipeline_submit,'pipeline_rebuild':pipeline_rebuild}
 
 async def flush_routes(database):
     with execution(database):return await _flush_routes_frozen(database)
@@ -814,9 +833,13 @@ async def _flush_routes_frozen(database):
         output=await route_batch(database,batch,data,None)
         assignments,updates,_=route_result(data,output)
         with Store(database) as store,store.transaction(immediate=True):
+            # Publish the producer's frozen interpretation and route provenance atomically.
+            validate_routing_result(data,output)
+            data['routing_result']=output
             track_state.persist(store.conn,output['track_state_updates'],scope,preserve_newer=True)
-            for a in assignments:store.conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
-            store.conn.execute("UPDATE pipeline_batches SET status='routed' WHERE id=?",(key,))
+            from .pipeline_recovery import record_routes
+            record_routes(store.conn,key,assignments)
+            store.conn.execute("UPDATE pipeline_batches SET status='routed',input_json=? WHERE id=?",(encode(data),key))
 
 
 async def scheduled_advance(database):
