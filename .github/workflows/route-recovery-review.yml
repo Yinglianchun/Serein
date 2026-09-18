@@ -1,0 +1,50 @@
+name: Route recovery review
+
+on:
+  push:
+    branches: [Haven/fix-route-history-recovery]
+    paths:
+      - src/serein/extensions/pipeline.py
+      - src/serein/extensions/pipeline_recovery.py
+      - tests/test_pipeline_route_history.py
+      - tests/test_narrative_theme.py
+      - docs/route-recovery.md
+      - src/serein/api/imports.py
+      - src/serein/api/mcp.py
+      - web/src/components/PipelineSettings.jsx
+      - web/tests/gateway.test.mjs
+      - web/vite.config.mjs
+      - .github/workflows/route-recovery-review.yml
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: python -m pip install '.[test,http,background]'
+      - name: Focused recovery and pipeline regressions
+        run: python -m pytest -q tests/test_pipeline_route_history.py tests/test_pipeline_limits.py tests/test_latest_pipeline.py tests/test_public_features.py tests/test_track_continuation_parity.py tests/test_event_handoff.py tests/test_pipeline_scenes.py tests/test_narrative_theme.py
+      - name: Full backend
+        run: python -m pytest -q
+      - name: Frontend tests
+        working-directory: web
+        run: |
+          npm ci
+          npm test
+      - name: Frontend build
+        working-directory: web
+        run: npm run build
+      - name: Compile and diff check
+        run: |
+          python -m compileall -q src tests
+          git diff --check
