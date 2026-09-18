@@ -65,6 +65,7 @@ def test_chat_transcription_is_byte_bound_persisted_and_reused(settings, monkeyp
     calls=[]
     async def complete(model, payload):
         calls.append(payload)
+        assert 'max_tokens' not in payload and 'max_completion_tokens' not in payload and 'max_output_tokens' not in payload
         return {'choices':[{'message':{'content':json.dumps({'image_transcriptions':[
             {'input_image':1,'text':'Visible title','unreadable':False}]})}}]}
     monkeypatch.setattr('serein.image_transcription.complete', complete)
