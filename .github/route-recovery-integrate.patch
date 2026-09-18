@@ -1,0 +1,244 @@
+diff --git a/release-files.json b/release-files.json
+index 3060dda..5ff03fb 100644
+--- a/release-files.json
++++ b/release-files.json
+@@ -506,3 +506,6 @@
+   "web/tests/instance-store.test.mjs",
+-  "web/tests/upstream-secrets.test.mjs"
++  "web/tests/upstream-secrets.test.mjs",
++  "src/serein/extensions/pipeline_recovery.py",
++  "tests/test_pipeline_route_history.py",
++  "docs/route-recovery.md"
+ ]
+diff --git a/src/serein/api/imports.py b/src/serein/api/imports.py
+index 270098f..6ba42b2 100644
+--- a/src/serein/api/imports.py
++++ b/src/serein/api/imports.py
+@@ -74,2 +74,7 @@ def routes(settings,auth):
+ 
++    @router.post('/v1/pipeline/rebuild')
++    async def pipeline_rebuild(body:dict):
++        from ..extensions.pipeline_recovery import rebuild
++        return await rebuild(settings.database,body.get('batch_id'),body.get('confirm'))
++
+     @router.post('/v1/pipeline/next')
+diff --git a/src/serein/api/mcp.py b/src/serein/api/mcp.py
+index 89af5dc..09e9825 100644
+--- a/src/serein/api/mcp.py
++++ b/src/serein/api/mcp.py
+@@ -241,3 +241,3 @@ def create_server(app: Application, *, private=False, http=False):
+     for name, function in app.contributions.tools.items():
+-        if private and name in {'pipeline_next','pipeline_submit',*app._optional_names}:
++        if private and name in {'pipeline_next','pipeline_submit','pipeline_rebuild',*app._optional_names}:
+             continue
+diff --git a/src/serein/extensions/pipeline.py b/src/serein/extensions/pipeline.py
+index cff5978..afc60f8 100644
+--- a/src/serein/extensions/pipeline.py
++++ b/src/serein/extensions/pipeline.py
+@@ -38,2 +38,4 @@ def initialize(database):
+         ''')
++        from .pipeline_recovery import initialize as initialize_recovery
++        initialize_recovery(store.conn)
+         from ..imports import archive_imported_originals
+@@ -79,3 +81,3 @@ def new_batch(database,include_recent,clock=None):
+     with Store(database) as store,store.transaction(immediate=True):
+-        old=store.conn.execute("SELECT * FROM pipeline_batches WHERE status IN ('pending','needs_repair') ORDER BY rowid LIMIT 1").fetchone()
++        old=store.conn.execute("SELECT * FROM pipeline_batches WHERE status IN ('pending','needs_repair') ORDER BY COALESCE(json_extract(input_json,'$.queue_order'),rowid),rowid LIMIT 1").fetchone()
+         if old:
+@@ -184,2 +186,4 @@ def cached_route_result(database,data):
+         rows=[store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=?',(key,)).fetchone() for key in expected]
++        # A removed cache row may still have an intact recorded producer.
++        rows=[row or store.conn.execute('SELECT route_json FROM pipeline_route_provenance WHERE raw_id=?',(key,)).fetchone() for key,row in zip(expected,rows)]
+         if not rows or not all(rows):return None
+@@ -189,2 +193,5 @@ def cached_route_result(database,data):
+         used=_assignment_tracks(data,assignments)
++        from .pipeline_recovery import recover_cached_routes
++        recovered=recover_cached_routes(database,data,assignments)
++        if recovered is not None:return recovered
+         cards={card['track_id']:card for card in data['tracks'] if _card_is_complete(card)}
+@@ -240,2 +247,4 @@ def save_routing_snapshot(database,batch,data,routed):
+     validate_routing_result(data,routed)
++    from .pipeline_recovery import assert_downstream_snapshot
++    assert_downstream_snapshot(database,batch,data)
+     fresh=components(database,data,routed,include_materials='components' not in data)
+@@ -658,3 +667,4 @@ def settle(database,batch,data,routed,plans):
+     def finish(conn):
+-        for a in assignments:conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
++        from .pipeline_recovery import record_routes
++        record_routes(conn,batch['id'],assignments)
+         for item,detail in zip(items,details):
+@@ -721,2 +731,4 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
+     try:
++        from .pipeline_recovery import assert_downstream_snapshot
++        assert_downstream_snapshot(database,batch,data)
+         routed=data.get('routing_result')
+@@ -726,4 +738,7 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
+             else:
+-                routed=cached_route_result(database,data)
+-                if routed is None:routed=await route_batch(database,batch,data,runner)
++                routed=None if data.get('ignore_route_cache') else cached_route_result(database,data)
++                if routed is None:
++                    if 'components' in data:
++                        raise RoutingRecoveryError('no complete route proof for frozen downstream plan; rebuild explicitly')
++                    routed=await route_batch(database,batch,data,runner)
+             data=save_routing_snapshot(database,batch,data,routed)
+@@ -783,3 +798,7 @@ def tools_for(settings):
+         return submit(settings.database,job_id,output)
+-    return {'pipeline_next':pipeline_next,'pipeline_submit':pipeline_submit}
++    async def pipeline_rebuild(batch_id:str,confirm:str)->dict:
++        """Explicitly retire an uncommitted needs_repair plan; retain all originals and old jobs."""
++        from .pipeline_recovery import rebuild
++        return await rebuild(settings.database,batch_id,confirm)
++    return {'pipeline_next':pipeline_next,'pipeline_submit':pipeline_submit,'pipeline_rebuild':pipeline_rebuild}
+ 
+@@ -816,5 +835,9 @@ async def _flush_routes_frozen(database):
+         with Store(database) as store,store.transaction(immediate=True):
++            # Publish the producer's frozen interpretation and route provenance atomically.
++            validate_routing_result(data,output)
++            data['routing_result']=output
+             track_state.persist(store.conn,output['track_state_updates'],scope,preserve_newer=True)
+-            for a in assignments:store.conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
+-            store.conn.execute("UPDATE pipeline_batches SET status='routed' WHERE id=?",(key,))
++            from .pipeline_recovery import record_routes
++            record_routes(store.conn,key,assignments)
++            store.conn.execute("UPDATE pipeline_batches SET status='routed',input_json=? WHERE id=?",(encode(data),key))
+ 
+diff --git a/web/src/components/PipelineSettings.jsx b/web/src/components/PipelineSettings.jsx
+index 4233fef..ce144ed 100644
+--- a/web/src/components/PipelineSettings.jsx
++++ b/web/src/components/PipelineSettings.jsx
+@@ -8,3 +8,4 @@ export function PipelineSettings({onOpenSummary}) {
+   const [limits,setLimits]=useState(null);
+-  const mounted=useRef(true),polling=useRef(false);
++  const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null);
++  const [rebuildTarget,setRebuildTarget]=useState('');
+   const running=['queued','running'].includes(work?.status);
+@@ -12,3 +13,3 @@ export function PipelineSettings({onOpenSummary}) {
+   const failure=work?.error||(needsRepair?work?.result?.reason:'');
+-  const stages={idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复'};
++  const stages={idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复',rebuilt:'计划已重建'};
+   async function call(action,body) {
+@@ -41,2 +42,18 @@ export function PipelineSettings({onOpenSummary}) {
+   }
++  function beginRebuild() {
++    setRebuildTarget(work?.result?.batch_id||work?.batch_id||'');
++    rebuildDialog.current.showModal();
++  }
++  async function confirmRebuild() {
++    if(busy||!rebuildTarget)return;
++    setBusy(true);
++    try {
++      const result=await call('rebuild',{batch_id:rebuildTarget,confirm:'REBUILD_PIPELINE_BATCH'});
++      if(result.status!=='rebuilt')throw new Error('整理任务正在运行，请稍后刷新再操作。');
++      rebuildDialog.current.close();setRebuildTarget('');setTask(null);setOutput('');
++      accept(await call('status'));
++      accept(await call('next',{include_recent:true}));
++      setStatus('旧计划与模型结果已保留，正在重新归线；已保存的 Event 不变。');
++    }catch(error){setStatus(error.message);}finally{setBusy(false);}
++  }
+   function download() {
+@@ -70,3 +87,3 @@ export function PipelineSettings({onOpenSummary}) {
+       {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
+-      {needsRepair&&<p>批次：<code>{work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留；修复材料后可重新校验，通过后继续。此批仍阻塞结算队列，不会自动跳过。</p>}
++      {needsRepair&&<p>批次：<code>{work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。不会跳过原话或删除已保存的 Event。</p>}
+       {task&&<p>等待 {stages[task.role]||task.role}：下载任务交给 Agent，再提交返回的 JSON。</p>}</div>}
+@@ -75,2 +92,3 @@ export function PipelineSettings({onOpenSummary}) {
+     <div className="settings-actions"><button type="button" disabled={busy||running} onClick={next}>{running?'后台整理中…':needsRepair?'重新校验并继续':'继续整理'}</button>
++      {needsRepair&&<button type="button" disabled={busy||running} onClick={beginRebuild}>作废本批计划并重新归线</button>}
+       {task&&<button type="button" onClick={download}>下载 agent 任务</button>}</div>
+@@ -78,2 +96,11 @@ export function PipelineSettings({onOpenSummary}) {
+       <div className="settings-actions"><button type="button" disabled={busy||!output.trim()} onClick={submit}>提交并校验</button></div></>}
++    <dialog ref={rebuildDialog} className="agent-guide" aria-labelledby="pipeline-rebuild-title" onCancel={()=>setRebuildTarget('')}>
++      <h3 id="pipeline-rebuild-title">重新生成这批原话的整理计划？</h3>
++      <p>批次：<code>{rebuildTarget}</code></p>
++      <p>旧的归线、切分和 Writer 结果会保留为历史记录，但不会再用于新计划。尚未处理的原话将重新归线，可能需要重新调用模型。</p>
++      <p>原话和已经保存的 Event 不会被删除。此操作不会把原话标成已处理或跳过。</p>
++      <div className="settings-actions"><button type="button" disabled={busy} onClick={()=>{rebuildDialog.current.close();setRebuildTarget('');}}>取消</button>
++        <button type="button" disabled={busy||!rebuildTarget} onClick={confirmRebuild}>确认作废旧计划并重新归线</button></div>
++      <p role="status">{status}</p>
++    </dialog>
+     <p role="status">{status}</p></section>;
+diff --git a/web/tests/gateway.test.mjs b/web/tests/gateway.test.mjs
+index d51481b..3edc9e8 100644
+--- a/web/tests/gateway.test.mjs
++++ b/web/tests/gateway.test.mjs
+@@ -211,2 +211,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
+     assert.equal((await fetch(base+'/__serein/pipeline/next',{method:'POST',headers:{...postHeaders,Origin:'https://foreign.invalid'},body:'{}'})).status,403);
++    const rebuildBody={batch_id:'pipeline:synthetic',confirm:'REBUILD_PIPELINE_BATCH'};
++    assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{method:'POST',headers:postHeaders,body:JSON.stringify(rebuildBody)})).status,200);
++    assert.deepEqual(requests.find(r=>r.path==='/v1/pipeline/rebuild')?.body,rebuildBody);
++    assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{method:'POST',headers:{...postHeaders,Origin:'https://foreign.invalid'},body:JSON.stringify(rebuildBody)})).status,403);
++    assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{headers:auth})).status,405);
+     const upload='upload%3A'+'a'.repeat(64);
+diff --git a/web/vite.config.mjs b/web/vite.config.mjs
+index e6a0ef4..5f5430d 100644
+--- a/web/vite.config.mjs
++++ b/web/vite.config.mjs
+@@ -782,3 +782,3 @@ function sereinMemoryBridge() {
+         const action=request.url?.split("?")[0];
+-        if(!(request.method==="GET" && (action==="/status" || /^\/attempts\/\d+$/.test(action))) && !(request.method==="POST" && ["/next","/submit"].includes(action))) {
++        if(!(request.method==="GET" && (action==="/status" || /^\/attempts\/\d+$/.test(action))) && !(request.method==="POST" && ["/next","/submit","/rebuild"].includes(action))) {
+           response.statusCode=405;response.end(JSON.stringify({error:"method_not_allowed"}));return;
+diff --git a/src/serein/extensions/pipeline_recovery.py b/src/serein/extensions/pipeline_recovery.py
+--- a/src/serein/extensions/pipeline_recovery.py
++++ b/src/serein/extensions/pipeline_recovery.py
+@@ -78,2 +78,4 @@
+         request = json.loads(row['request_json'])
++        if request.get('batch_id') != batch['id']:
++            raise p.RoutingRecoveryError('Router job belongs to another producer batch')
+         messages = p._router_prefix(original, request, cursor)
+@@ -160,2 +162,5 @@
+             actual = {a['source_message_id']: a for a in frame['assignments']}
++            if ([key for key in expected if key in overlap] !=
++                    [key for key in source_messages if key in overlap]):
++                continue
+             if not overlap or any(_message_key(expected[key]) != _message_key(source_messages[key])
+@@ -222,3 +227,3 @@
+                 raise ValueError('frozen ownership, bridge endpoints or predecessors differ')
+-        except (IndexError, KeyError, TypeError, ValueError) as error:
++        except (AttributeError, IndexError, KeyError, TypeError, ValueError) as error:
+             raise p.RoutingRecoveryError('downstream job disagrees with frozen component: '+str(error)) from error
+@@ -270,7 +275,7 @@
+             provenance = store.conn.execute('SELECT * FROM pipeline_route_provenance WHERE raw_id=?', (frozen['id'],)).fetchone()
+-            if row:
+-                cache.append({'raw_id': frozen['id'], 'route_json': row['route_json'],
++            if row or provenance:
++                cache.append({'raw_id': frozen['id'], 'route_json': row['route_json'] if row else None,
+                               'provenance': dict(provenance) if provenance else None})
+                 try:
+-                    route = json.loads(row['route_json'])
++                    route = json.loads(row['route_json'] if row else provenance['route_json'])
+                     reserved.extend({'track_id': value} for value in
+diff --git a/tests/test_pipeline_route_history.py b/tests/test_pipeline_route_history.py
+--- a/tests/test_pipeline_route_history.py
++++ b/tests/test_pipeline_route_history.py
+@@ -131,3 +131,3 @@
+ 
+-@pytest.mark.parametrize('damage', ['scope', 'message', 'bridge', 'ordinal', 'incomplete'])
++@pytest.mark.parametrize('damage', ['scope', 'message', 'bridge', 'ordinal', 'producer', 'incomplete'])
+ def test_incompatible_producer_never_bypasses_repair(settings, damage):
+@@ -148,2 +148,4 @@
+             request['next_track_ordinal'] = 99
++        elif damage == 'producer':
++            request['batch_id'] = 'route:unrelated'
+         else:
+@@ -380 +382,19 @@
+     assert result['status'] == 'needs_repair' and 'route proof' in result['reason']
++
++
++def test_rebuild_audits_orphan_provenance_before_invalidating_it(settings):
++    ingest(settings)
++    batch, data = hold_bad_cache(settings)
++    with Store(settings.database) as store:
++        row = store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=1').fetchone()
++        store.conn.execute('INSERT INTO pipeline_route_provenance VALUES (?,?,?)',
++                           (1, 'route:missing', row[0]))
++        store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id=1')
++    asyncio.run(recovery.rebuild(settings.database, batch['id'], 'REBUILD_PIPELINE_BATCH'))
++    with Store(settings.database, read_only=True) as store:
++        audit = json.loads(store.conn.execute('SELECT result_json FROM pipeline_batches WHERE id=?',
++                                             (batch['id'],)).fetchone()[0])
++        archived = next(item for item in audit['discarded_route_cache'] if item['raw_id'] == 1)
++        assert archived['route_json'] is None
++        assert archived['provenance']['batch_id'] == 'route:missing'
++        assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance').fetchone()[0] == 0
