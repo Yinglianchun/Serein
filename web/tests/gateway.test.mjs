@@ -39,13 +39,14 @@ test('gateway separates web auth from API auth, saves settings and streams respo
       if(req.url==='/diaries/999999'){res.statusCode=404;res.end('{"message":"Synthetic diary missing"}');return;}
       res.end('{"status":"deleted","recoverable":true}');return;
     }
-    if(['/api/fact-events/status','/api/fact-events/delete','/api/buckets/delete','/v1/tools/call'].includes(req.url)){
+    if(['/api/fact-events/status','/api/fact-events/delete','/api/buckets/delete','/v1/tools/call','/v1/pipeline/rebuild'].includes(req.url)){
       let raw='';req.on('data',chunk=>raw+=chunk);req.on('end',()=>{
         const body=JSON.parse(raw);requests.push({path:req.url,body});
         const payload=req.url==='/api/fact-events/status'
           ? {item:{item_id:body.item_id,item_type:'event',status:body.status}}
           : req.url==='/api/fact-events/delete' ? {deleted:1,item_type:'event',item_ids:[body.item_id]}
           : req.url==='/api/buckets/delete' ? {deleted:body.bucket_ids.length}
+          : req.url==='/v1/pipeline/rebuild' ? {status:'rebuilt',batch_id:body.batch_id}
           : {result:{status:'updated',updated_at:'synthetic-new-version'}};
         res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(payload));
       });return;
@@ -211,7 +212,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     assert.equal((await fetch(base+'/__serein/pipeline/next',{method:'POST',headers:{...postHeaders,Origin:'https://foreign.invalid'},body:'{}'})).status,403);
     const rebuildBody={batch_id:'pipeline:synthetic',confirm:'REBUILD_PIPELINE_BATCH'};
     assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{method:'POST',headers:postHeaders,body:JSON.stringify(rebuildBody)})).status,200);
-    assert.deepEqual(requests.find(r=>r.path==='/v1/pipeline/rebuild')?.body,rebuildBody);
+    assert.ok(requests.some(r=>r.path==='/v1/pipeline/rebuild'&&JSON.stringify(r.body)===JSON.stringify(rebuildBody)));
     assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{method:'POST',headers:{...postHeaders,Origin:'https://foreign.invalid'},body:JSON.stringify(rebuildBody)})).status,403);
     assert.equal((await fetch(base+'/__serein/pipeline/rebuild',{headers:auth})).status,405);
     const upload='upload%3A'+'a'.repeat(64);
