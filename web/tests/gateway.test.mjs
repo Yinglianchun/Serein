@@ -91,13 +91,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     }
     assert.ok(started,output);
     assert.equal((await fetch(base)).status,401);
-    let ready;
-    for(let i=0;i<30;i++){
-      ready=await fetch(base+'/ready');
-      if(ready.status===200)break;
-      await new Promise(r=>setTimeout(r,100));
-    }
-    assert.equal(ready.status,200);
+    assert.equal((await fetch(base+'/ready')).status,200);
     for(const [path,method] of [['/.well-known/oauth-protected-resource','GET'],['/.well-known/oauth-authorization-server','GET'],['/register','POST'],['/authorize','GET'],['/token','POST']]){
       const response=await fetch(base+path,{method,headers:method==='POST'?{'Content-Type':'application/json'}:{},body:method==='POST'?'{}':undefined});
       assert.ok([200,201].includes(response.status));
