@@ -253,7 +253,16 @@ def save_routing_snapshot(database,batch,data,routed):
     data['routing_result']=routed
     data.setdefault('components',fresh)
     with Store(database) as store,store.transaction(immediate=True):
-        track_state.persist(store.conn,routed['track_state_updates'],data['scope'],preserve_newer=True)
+        if routed.get('recovered_route_sources'):
+            # Historical recovery must never rewind a Track card that has moved
+            # or changed since the producer ran. Fill only truly missing cards;
+            # the frozen batch keeps its exact recovered snapshot in input_json.
+            for card in routed['track_state_updates']:
+                store.conn.execute(
+                    'INSERT OR IGNORE INTO pipeline_tracks VALUES (?,?,?)',
+                    (card['track_id'], card.get('last_session_id', data['scope']), encode(card)))
+        else:
+            track_state.persist(store.conn,routed['track_state_updates'],data['scope'],preserve_newer=True)
         if batch['status']=='needs_repair':
             data['last_routing_repair']={'checked_at':now(),'previous_result':json.loads(batch['result_json'])}
             store.conn.execute("UPDATE pipeline_batches SET status='pending',result_json=NULL WHERE id=?",(batch['id'],))
