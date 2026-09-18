@@ -144,7 +144,7 @@ Persona 是只读的状态卡片展示页：当前心情、内心独白/余韵�
 
 rolling_engineering 只合并仍服务同一建设主线的全部相关 active leaves；不强迫选同 Track 的所有旧 Event，不相关的唯一旧条目也不阻止 create。命中 protected/manual/forked/blocked/scene_ref/narrative_ref 时，host 把拟议替换转成 defer。旧原文与新原文由 host 取 exact union，并继承来源角色；Writer 读取完整前版正文及其 owned 原文，防止逐次合并丢掉早期内容。上下文不会因此获得证据所有权。
 
-Writer 正文不设固定字数上下限，短经历写清即止，较长或多次合并的经历优先保留关键经过、因果与结果，不逐轮复述；保留自检与至多两轮结构／证据纠错，不重新切分。Writer 自检和图片转录保存到 pipeline_event_details；原文证据由现有 Event 事务绑定，保留活动叶、指纹、来源集合、引用保护与幂等收据。Scene 仍由聊天里的 agent 主动写，自动 Event 不进入 Bridge 信箱，也不生成 scene_candidate 或创建关系边。
+Writer 正文以 1000 字为写作硬上限而非目标，短经历写清即止，不凑字；较长或多次合并的经历优先保留不可替代的原话锚点、关键经过、因果与结果，不逐轮复述。host 以 1500 字作为模型计数误差的容错阈值，超过时进入纠错，程序不截断正文；保留自检与至多两轮结构／证据纠错，不重新切分。Writer 自检和图片转录保存到 pipeline_event_details；原文证据由现有 Event 事务绑定，保留活动叶、指纹、来源集合、引用保护与幂等收据。Scene 仍由聊天里的 agent 主动写，自动 Event 不进入 Bridge 信箱，也不生成 scene_candidate 或创建关系边。
 
 设置 → 功能中的“Event 升为 Scene”（features.event_to_scene）默认关闭。保存后即时启停工具；关闭后拒绝旧客户端继续调用，保留已有 Event 和 Scene。可写实例开启后的 `promote_event_to_scene` 供主窗口在读过 Event 及当前绑定原话后，提交自己编辑的标题和正文。工具核对 Event 当前版本，以新 ID 保存 Scene，沿用 Event 的全部有效原话绑定，并记录来源 Event ID、版本和正文哈希；Event 原件不改写。Scene 覆盖全部原话后，原 Event 停止自动浮现；已有修订箱待处理提示中涉及该 Event 的项撤出，后续扫描也跳过它，Scene 仍按自己的材料资格参与扫描。重复操作 ID 返回原回执；另一操作再次转换同一 Event 会报冲突，后续修改应编辑已生成的 Scene。
 
