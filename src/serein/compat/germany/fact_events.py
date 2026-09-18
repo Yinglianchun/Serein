@@ -2063,7 +2063,7 @@ def _normalize_item(raw: Any) -> dict[str, Any]:
     item_type = str(raw.get("type") or raw.get("item_type") or "").strip().lower()
     if item_type not in ITEM_TYPES:
         raise ValueError("type must be fact or event")
-    body = _required_text(raw.get("body"), "body", 1600 if item_type == "event" else 500)
+    body = _required_text(raw.get("body"), "body", None if item_type == "event" else 500)
     title = str(raw.get("title") or "").strip()
     if item_type == "event":
         title = _required_text(title, "event title", 160)
@@ -2332,11 +2332,11 @@ def _normalize_expected_predecessors(raw: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _required_text(value: Any, field: str, limit: int) -> str:
+def _required_text(value: Any, field: str, limit: int | None) -> str:
     text = str(value or "").strip()
     if not text:
         raise ValueError(f"{field} is required")
-    if len(text) > limit:
+    if limit is not None and len(text) > limit:
         raise ValueError(f"{field} is too long")
     return text
 
