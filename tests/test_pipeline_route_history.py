@@ -78,6 +78,31 @@ def test_recover_producer_without_rerouting_or_overwriting_later_card(settings, 
     assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['status'] == 'current'
 
 
+def test_historical_recovery_never_overwrites_existing_card_without_anchor_metadata(settings):
+    ingest(settings)
+    batch, data = freeze(settings)
+    routed = history(settings, data)
+    later = deepcopy(routed['tracks'][0])
+    later.pop('recent_source_message_ids', None)
+    later.pop('recent_turns', None)
+    later.update(last_session_id='later-window', throughline='LEGACY LATER CARD WITHOUT ANCHORS')
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_tracks SET scope=?,card_json=? WHERE id=?',
+                           ('later-window', encode(later), later['track_id']))
+    async def runner(role, request):
+        assert role != 'track_router'
+        assert 'LEGACY LATER CARD WITHOUT ANCHORS' not in request['prompt']
+        return output_for(role, request)
+    result = asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
+    assert result['events'] == 1
+    with Store(settings.database, read_only=True) as store:
+        frozen = json.loads(store.conn.execute(
+            'SELECT input_json FROM pipeline_batches WHERE id=?', (batch['id'],)).fetchone()[0])
+        assert frozen['routing_result']['recovered_route_sources'][0]['batch_id'] == 'route:synthetic'
+        assert json.loads(store.conn.execute(
+            'SELECT card_json FROM pipeline_tracks WHERE id=?', (later['track_id'],)).fetchone()[0]) == later
+
+
 def test_completed_downstream_jobs_reuse_frozen_plan_after_historical_recovery(settings, monkeypatch):
     ingest(settings)
     batch, data = freeze(settings)
