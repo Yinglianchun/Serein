@@ -12,10 +12,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Package tracked source for isolated review
-        run: git archive --format=zip HEAD -o "$RUNNER_TEMP/route-recovery-source.zip"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip wheel '.[test,http,background]' --wheel-dir "$RUNNER_TEMP/wheels"
       - uses: actions/upload-artifact@v4
         with:
-          name: route-recovery-source
-          path: ${{ runner.temp }}/route-recovery-source.zip
+          name: route-recovery-test-wheels
+          path: ${{ runner.temp }}/wheels/*.whl
           retention-days: 1
