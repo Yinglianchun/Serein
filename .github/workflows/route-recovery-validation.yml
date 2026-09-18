@@ -14,10 +14,10 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
       - run: python -m pip wheel '.[test,http,background]' --wheel-dir "$RUNNER_TEMP/wheels"
       - uses: actions/upload-artifact@v4
         with:
-          name: route-recovery-test-wheels
+          name: route-recovery-test-wheels-313
           path: ${{ runner.temp }}/wheels/*.whl
           retention-days: 1
