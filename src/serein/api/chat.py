@@ -352,7 +352,7 @@ def routes(settings, services, auth):
             raise HTTPException(400,'Writer requires complete accessible images')
         content=[{'type':'text','text':body['prompt']}, *[{'type':'image_url','image_url':{'url':url}} for url in images]] if images else body['prompt']
         try:
-            result=await complete(model,{'messages':[{'role':'user','content':content}], 'max_tokens':8192,
+            result=await complete(model,{'messages':[{'role':'user','content':content}],
                 'response_format':{'type':'json_schema','json_schema':{'name':'narrative_preview','strict':True,'schema':body['output_schema']}}})
             return {'result':json.loads(result['choices'][0]['message']['content'])}
         except (httpx.HTTPError,ValueError,KeyError,IndexError,TypeError):
