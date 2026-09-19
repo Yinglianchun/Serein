@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from test_public_features import settings, ingest, output_for
+from test_public_features import settings, output_for
+from serein.compat.raw_archive import raw_archive
 from serein.core.store import Store
 from serein.deployment import read_settings, save_settings
 from serein.extensions import pipeline as p
@@ -35,8 +36,16 @@ def base_output(role,request):
 
 
 def two_event_dialogue(settings):
-    ingest(settings,1)
-    ingest(settings,2)
+    raw_archive(settings).ingest([
+        {'source_event_id':'u1','session_id':'parallel','role':'user',
+         'text':'First plan','created_at':'2025-01-01T00:00:00Z'},
+        {'source_event_id':'a1','session_id':'parallel','role':'assistant',
+         'text':'First reply','created_at':'2025-01-01T00:01:00Z'},
+        {'source_event_id':'u2','session_id':'parallel','role':'user',
+         'text':'Second plan','created_at':'2025-01-01T00:02:00Z'},
+        {'source_event_id':'a2','session_id':'parallel','role':'assistant',
+         'text':'Second reply','created_at':'2025-01-01T00:03:00Z'},
+    ],source='test')
 
 
 def test_writer_concurrency_setting_defaults_validates_and_only_enables_inline_execution(settings):
@@ -103,8 +112,8 @@ def test_first_writer_pass_runs_concurrently_and_settles_in_curator_order(settin
             "SELECT origin_id,body FROM fact_events WHERE status='active' ORDER BY origin_id"
         ).fetchall()
         assert len(rows)==2
-        assert rows[0]['origin_id'].endswith(':0') and 'Book club plan 1' in rows[0]['body']
-        assert rows[1]['origin_id'].endswith(':1') and 'Book club plan 2' in rows[1]['body']
+        assert rows[0]['origin_id'].endswith(':0') and 'First plan' in rows[0]['body']
+        assert rows[1]['origin_id'].endswith(':1') and 'Second plan' in rows[1]['body']
 
 
 def test_writer_context_followup_stays_serial_after_parallel_first_pass(settings):
