@@ -51,7 +51,7 @@ def read_from_store(store):
             'tagging': saved.get('tagging', {'domains': DEFAULT_DOMAINS}),
             'tagging_version': saved.get('tagging_version', 1),
             'dream': {'main_prompt':'', 'daily_probability':0.4, **saved.get('dream', {})},
-            'pipeline': {'auto_enabled':True,'execution_mode':legacy_mode,'max_input_chars':12000,'max_prompt_chars':40000,'timeout_seconds':600, **saved.get('pipeline',{})},
+            'pipeline': {'auto_enabled':True,'execution_mode':legacy_mode,'max_input_chars':12000,'max_prompt_chars':40000,'timeout_seconds':600,'event_writer_concurrency':1, **saved.get('pipeline',{})},
             'assignments': {key:value for key,value in saved.get('assignments', {}).items() if key!='event_evidence'}}
 
 
@@ -184,6 +184,9 @@ def save_settings(database, changes):
             raise ValueError('“异步图片转录”和“眼睛”只能开启一个')
         if any(image_features) and not current['assignments'].get('image_transcription'):
             raise ValueError('开启图片转录或“眼睛”前，请先选择图片转录模型')
+        writer_concurrency=current['pipeline'].get('event_writer_concurrency',1)
+        if type(writer_concurrency) is not int or not 1<=writer_concurrency<=8:
+            raise ValueError('Event Writer concurrency must be an integer between 1 and 8')
         mode=current['pipeline']['execution_mode']
         if mode not in ('legacy','api','agent'):raise ValueError('Unknown Event execution mode')
         if mode=='api':
