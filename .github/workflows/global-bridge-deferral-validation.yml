@@ -1,0 +1,56 @@
+name: Global bridge deferral validation
+
+on:
+  push:
+    branches: [Haven/fix-global-bridge-deferral]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install '.[test,http,background]'
+      - run: python -m compileall -q src tests
+      - name: Focused bridge / route / budget regressions
+        run: python -m pytest -q tests/test_track_continuation_parity.py tests/test_pipeline_route_history.py tests/test_latest_pipeline.py tests/test_pipeline_limits.py tests/test_recall_candidate_budget.py
+      - name: Full backend
+        run: python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - working-directory: web
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m pip install '.[test,http,background]'
+      - run: |
+          python scripts/release.py "$RUNNER_TEMP/serein-release.zip"
+          git diff --check
