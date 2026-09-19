@@ -685,9 +685,11 @@ def settle(database,batch,data,routed,plans):
     if arc_linking_enabled:
         from ..arc_linking import initialize as initialize_arc_linking
         initialize_arc_linking(database)
-    items=[];details=[];processed={};all_new={m['id'] for m in data['messages']}
+    items=[];details=[];all_new={m['id'] for m in data['messages']}
+    deferred={source for _,plan,_ in plans for source in plan['defer_source_message_ids']}
+    skipped=set();settled=set()
     for component,plan,event_results in plans:
-        processed.update({key:'skipped' for key in plan['skip_source_message_ids']})
+        skipped.update(plan['skip_source_message_ids'])
         for event,written in event_results:
             if not written['evidence_sufficient']:continue
             by_id={m['id']:m for m in component['context_messages']}
@@ -703,12 +705,19 @@ def settle(database,batch,data,routed,plans):
                 item.update(supersedes_item_ids=[b['event_id'] for b in bases],expected_predecessors=[{'item_id':b['event_id'],'fingerprint':b['fingerprint'],
                     'source_keys':[dict(zip(('source_system','session_id','message_id'),source_key(ref))) for ref in b['source_refs']]} for b in bases])
             items.append(item);details.append({'track_id':event['primary_track_id'],'writer':written,'curator_image_transcriptions':written.get('curator_image_transcriptions',[]),'source_activity_roles':{str(b['source_message_id']):b['activity_role'] for b in event['source_bindings']}})
-            processed.update({key:'settled' for key in event['source_message_ids'] if key in all_new})
+            settled.update(key for key in event['source_message_ids'] if key in all_new)
+    # A shared bridge unit may be visible in two bounded Track corridors. Host
+    # settlement is global per raw source, so corridor outcomes need a stable
+    # precedence: defer > settled > skipped. A defer on either side must leave
+    # the source pending for the deferred Track, while a settled Event beats a
+    # skip from the other corridor when no corridor needs to revisit it.
+    processed={key:'skipped' for key in skipped-deferred-settled}
+    processed.update({key:'settled' for key in settled-deferred})
     assignments,tracks,_=route_result(data,routed)
     result={'status':'processed','batch_id':batch['id'],'completed_at':now(),'events':len(items),'processed_originals':len(processed),
             'pending':len(data['messages'])+len(data['parked'])-len(processed),
             'skipped':sum(value=='skipped' for value in processed.values()),
-            'deferred':len({source for _,plan,_ in plans for source in plan['defer_source_message_ids']}),
+            'deferred':len(deferred),
             'protected_deferrals':[entry for _,plan,_ in plans for entry in plan['hard_skips']]}
     def finish(conn):
         from .pipeline_recovery import record_routes
