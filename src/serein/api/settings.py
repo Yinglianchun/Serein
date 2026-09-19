@@ -184,7 +184,7 @@ class PipelinePatch(BaseModel):
     execution_mode: Literal['legacy','api','agent'] | None = None
     model_config = ConfigDict(extra='forbid')
     max_input_chars: int | None = Field(default=None,ge=2000,le=100000)
-    max_prompt_chars: int | None = Field(default=None,ge=8000,le=200000)
+    max_prompt_chars: int | None = Field(default=None,ge=8000,le=4000000)
     timeout_seconds: int | None = Field(default=None,ge=30,le=1800)
 
 
