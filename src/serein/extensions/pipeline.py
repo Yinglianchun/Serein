@@ -730,6 +730,46 @@ async def transcribe_component(database,batch,component,index,runner,*,key_prefi
         raise
 
 
+def event_writer_concurrency(database,batch,runner):
+    """Parallelize only frozen first-pass Writer calls with an inline model runner."""
+    config=snapshot(database,batch['id'])
+    value=config['policy'].get('event_writer_concurrency',1)
+    limit=value if type(value) is int and 1<=value<=8 else 1
+    if limit<=1:return 1
+    if runner is not None:return limit
+    if config['policy'].get('execution_mode')=='agent':return 1
+    return limit if config['models'].get('event_writer') else 1
+
+
+async def first_event_writer_pass(database,batch,component,plan,index,runner):
+    """Run frozen first Writer requests concurrently; preserve ordinal result order."""
+    by_id={m['id']:m for m in component['context_messages']}
+    async def invoke_one(ordinal,event):
+        owned=[by_id[key] for key in event['source_message_ids']]
+        request=request_for(database,batch,'event_writer',messages=owned,event=event,component=component)
+        written=await job(database,batch,request,f'event_writer:{index}:{ordinal}',runner)
+        return event,written,request,owned
+
+    concurrency=event_writer_concurrency(database,batch,runner)
+    if concurrency<=1 or len(plan['events'])<=1:
+        return [await invoke_one(ordinal,event) for ordinal,event in enumerate(plan['events'])]
+
+    semaphore=asyncio.Semaphore(concurrency)
+    results=[None]*len(plan['events'])
+    async def invoke_bounded(ordinal,event):
+        async with semaphore:
+            results[ordinal]=await invoke_one(ordinal,event)
+    try:
+        async with asyncio.TaskGroup() as group:
+            for ordinal,event in enumerate(plan['events']):
+                group.create_task(invoke_bounded(ordinal,event))
+    except ExceptionGroup as errors:
+        # TaskGroup wraps the model/validation failure. Preserve the existing
+        # durable diagnostic type while cancelled sibling jobs remain resumable.
+        raise errors.exceptions[0]
+    return results
+
+
 async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repair=False):
     initialize(database)
     batch=new_batch(database,include_recent)
@@ -773,11 +813,10 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
             if not pretranscribed:
                 component['curator_image_transcriptions']=bind_transcriptions(output,request.get('images',[]))
             plan=latest.normalize_event_curator_output(decision(output),component);event_results=[]
-            by_id={m['id']:m for m in component['context_messages']}
-            for ordinal,event in enumerate(plan['events']):
-                owned=[by_id[key] for key in event['source_message_ids']]
-                request=request_for(database,batch,'event_writer',messages=owned,event=event,component=component)
-                written=await job(database,batch,request,f'event_writer:{index}:{ordinal}',runner)
+            first_results=await first_event_writer_pass(database,batch,component,plan,index,runner)
+            # Any bounded context read remains serial: it can create shared image
+            # transcription work and must not race another Writer's repair path.
+            for ordinal,(event,written,request,owned) in enumerate(first_results):
                 if 'context_request' in written:
                     reading=extend_context(database,component,written['context_request'])
                     used_separate=await transcribe_component(database,batch,reading,f'{index}:{ordinal}',runner,key_prefix='writer_context_images')
