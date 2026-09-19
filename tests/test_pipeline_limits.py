@@ -72,6 +72,26 @@ def test_lowered_input_budget_rebatches_using_full_routing_material(settings):
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==0
 
 
+def test_unchanged_input_budget_keeps_valid_batch_with_parked_following_unit(settings):
+    from serein.compat.raw_archive import raw_archive
+    raw_archive(settings).ingest([
+        {'source_event_id':'u1','session_id':'parked','role':'user','text':'u'*40,'created_at':'2025-01-01T00:00:00Z'},
+        {'source_event_id':'a1','session_id':'parked','role':'assistant','text':'a'*40,'created_at':'2025-01-01T00:01:00Z'},
+        {'source_event_id':'u2','session_id':'parked','role':'user','text':'v'*80,'created_at':'2025-01-01T00:02:00Z'},
+    ],source='test')
+    save_settings(settings.database,{'pipeline':{'max_input_chars':100}})
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    frozen=json.loads(batch['input_json'])
+    assert [m['id'] for m in frozen['messages']]==[1,2]
+    assert [m['id'] for m in frozen['parked']]==[3]
+    assert len(blocks(frozen['routing_messages'],100))==2
+    same=p.new_batch(settings.database,True)
+    assert same['id']==batch['id']
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0]=='pending'
+
+
 def test_prompt_budget_change_applies_to_existing_frozen_job(settings):
     ingest(settings)
     p.initialize(settings.database)
