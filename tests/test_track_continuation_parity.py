@@ -167,6 +167,69 @@ def test_individual_message_routes_and_bridge_ownership(settings):
     assert second_roles[3] == 'bridge'
 
 
+def test_bridge_deferral_on_one_corridor_must_block_global_settlement(settings):
+    raw_archive(settings).ingest([
+        {'source_event_id': str(i), 'session_id': 'one',
+         'role': 'user' if i % 2 else 'assistant', 'text': 'Synthetic turn '+str(i),
+         'created_at': '2025-01-01T00:00:00Z'}
+        for i in range(1, 5)
+    ], source='test')
+    task = asyncio.run(p.advance(settings.database, include_recent=True))
+    router_output = {
+        'message_assignments': [
+            {'source_message_id': 1, 'primary_track_ref': 'new:1', 'context_track_refs': [], 'routing_role': 'origin'},
+            {'source_message_id': 2, 'primary_track_ref': 'new:2', 'context_track_refs': [], 'routing_role': 'landing'},
+            {'source_message_id': 3, 'primary_track_ref': 'new:1', 'context_track_refs': ['new:2'], 'routing_role': 'bridge'},
+            {'source_message_id': 4, 'primary_track_ref': 'new:2', 'context_track_refs': [], 'routing_role': 'primary_activity'},
+        ],
+        'track_updates': [
+            {'track_ref': ref, 'subject': ref, 'throughline': 'Synthetic continuation', 'status': 'active'}
+            for ref in ('new:1', 'new:2')
+        ],
+    }
+    p.submit(settings.database, task['job_id'], router_output)
+    curator = asyncio.run(p.advance(settings.database, include_recent=True))
+    with Store(settings.database, read_only=True) as store:
+        batch = dict(store.conn.execute(
+            'SELECT * FROM pipeline_batches WHERE id=?', (task['request']['batch_id'],)
+        ).fetchone())
+        data = json.loads(batch['input_json'])
+    assignments = data['routing_result']['assignments']
+    first = assignments[0]['primary_track_id']
+    second = assignments[1]['primary_track_id']
+    components = {item['track_ids'][0]: item for item in data['components']}
+    first_component = components[first]
+    second_component = components[second]
+
+    first_plan = latest.normalize_event_curator_output({
+        'events': [{'action': 'create', 'primary_track_id': first,
+                    'base_event_ids': [], 'owned_unit_roots': [1, 3]}],
+        'skip_unit_roots': [], 'defer_unit_roots': [],
+    }, first_component)
+    second_plan = latest.normalize_event_curator_output({
+        'events': [{'action': 'create', 'primary_track_id': second,
+                    'base_event_ids': [], 'owned_unit_roots': [2, 4]}],
+        'skip_unit_roots': [], 'defer_unit_roots': [3],
+    }, second_component)
+
+    written = {'title': 'Synthetic', 'event_draft': 'Synthetic Event',
+               'recallable': True, 'evidence_sufficient': True}
+    plans = [
+        (first_component, first_plan, [(first_plan['events'][0], dict(written))]),
+        (second_component, second_plan, [(second_plan['events'][0], dict(written))]),
+    ]
+    result = p.settle(settings.database, batch, data, data['routing_result'], plans)
+    assert result['deferred'] == 1
+    with Store(settings.database, read_only=True) as store:
+        outcomes = dict(store.conn.execute(
+            'SELECT raw_id,outcome FROM raw_processing ORDER BY raw_id'
+        ))
+    # Public parity with haven_bridge: a bridge unit deferred by either Track
+    # corridor must remain unsettled globally so that the deferred Track can
+    # revisit it later.
+    assert 3 not in outcomes
+
+
 def test_track_anchor_continuation_and_parked_unused_state(settings):
     ingest(settings)
     asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))
