@@ -83,7 +83,18 @@ def new_batch(database,include_recent,clock=None):
         if old:
             if old['status']=='needs_repair':return dict(old)
             old_data=json.loads(old['input_json'])
-            if len(blocks(old_data['messages'],policy['max_input_chars']))<=1:
+            current_limit=policy['max_input_chars']
+            frozen_limit=old_data.get('input_policy',{}).get('max_input_chars',current_limit)
+            routing_messages=old_data.get('routing_messages',old_data.get('messages',[]))
+            rechunked=blocks(routing_messages,current_limit)
+            stable_ids={m['id'] for m in old_data.get('messages',[])}
+            stable_chunks=sum(bool(stable_ids.intersection(m['id'] for m in block)) for block in rechunked)
+            # A lowered input target must be allowed to retire the frozen
+            # transport batch using the material that Router/Curator actually
+            # read. Under an unchanged target, only recover obviously stale
+            # batches whose stable ownership already spans multiple chunks.
+            if not ((current_limit<frozen_limit and len(rechunked)>1) or
+                    (current_limit>=frozen_limit and stable_chunks>1)):
                 return dict(old)
             # Keep accepted Router output before retiring an oversized unfinished batch.
             for row in store.conn.execute("SELECT request_json,output_json FROM pipeline_jobs WHERE batch_id=? AND role LIKE 'track_router%' AND output_json IS NOT NULL ORDER BY rowid",(old['id'],)):
@@ -573,7 +584,12 @@ async def job(database,batch,request,key,runner):
     prompt_chars=len(request['prompt'])+len(request['rules'])
     progress(prompt_chars=prompt_chars,timeout_seconds=policy['timeout_seconds'])
     if prompt_chars>policy['max_prompt_chars']:
-        raise ValueError(f"当前 {request['role']} 提示词共 {prompt_chars} 字符，超过 {policy['max_prompt_chars']} 字符上限；请减小每批输入或调整提示词上限。原话未截断，已完成阶段保留。")
+        raise ValueError(
+            f"当前 {request['role']} 提示词共 {prompt_chars} 字符，超过 {policy['max_prompt_chars']} 字符上限；"
+            "可直接提高“完整提示词字符上限”后继续当前批次。若希望缩小材料，请降低“每批原话字符上限”后再次继续，"
+            "可进一步拆分的未结算批次会按新值重批；单个完整回复包不会被截断，而会独占一批。"
+            "原话未截断，已完成阶段保留。"
+        )
     if request.get('missing_images'):raise ValueError('绑定图片缺少可读取的原图，请补齐图片材料后重建任务；原话仍保留')
     if request['role']=='event_writer' and request.get('images'):
         raise ValueError('Event Writer 只接收图片转录，不接收原图')
