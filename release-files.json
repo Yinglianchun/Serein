@@ -507,5 +507,6 @@
   "web/tests/upstream-secrets.test.mjs",
   "src/serein/extensions/pipeline_recovery.py",
   "tests/test_pipeline_route_history.py",
-  "docs/route-recovery.md"
+  "docs/route-recovery.md",
+  "tests/test_event_writer_concurrency.py"
 ]
