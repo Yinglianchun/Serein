@@ -149,8 +149,9 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
       <label className="settings-field"><span>自动 Event 执行方式</span><select value={config.pipeline.execution_mode||'legacy'} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,execution_mode:event.target.value}}))}>
         {(!config.pipeline.execution_mode||config.pipeline.execution_mode==='legacy')&&<option value="legacy">沿用旧配置（各阶段分别执行）</option>}<option value="api">API</option><option value="agent">Agent</option></select></label>
       <p>{config.pipeline.execution_mode==='agent'?'通过已认证的 Agent 执行器领取任务。阶段模型选择作为执行提示，执行器需按提示使用相应模型；仅切换此选项不会启动本机 CLI。':'在本页为归线、图片转录、切分、Event 写作分别选模型。选择独立图片转录模型后，切分器读取已落库的转录；不选择则仍由切分器直接读图。图片转录与 Writer 所选 API 需支持图片和 JSON 输出。'}</p>
-      {Object.entries({max_input_chars:['每批原话字符上限',2000,100000],max_prompt_chars:['完整提示词字符上限',8000,200000],timeout_seconds:['模型读取超时（秒）',30,1800]}).map(([key,[label,min,max]])=>
+      {Object.entries({max_input_chars:['每批原话字符上限',2000,100000],max_prompt_chars:['完整提示词字符上限',8000,200000],timeout_seconds:['模型读取超时（秒）',30,1800],event_writer_concurrency:['Event Writer 首轮并发数',1,8]}).map(([key,[label,min,max]])=>
         <label className="settings-field" key={key}><span>{label}</span><input type="number" min={min} max={max} value={config.pipeline[key]} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,[key]:Number(event.target.value)}}))}/></label>)}
+      <small>只并发 Curator 已冻结计划后的第一轮 Event Writer；Router、Curator、补读与最终结算保持串行。Agent 模式仍一次领取一个 Writer 任务。默认 1。</small>
       <button type="button" className="settings-link" onClick={onOpenPipeline}>查看整理进度与导入原话</button>
     </details>
           <AgentGuide label="配置 Agent 整理 Event" />
