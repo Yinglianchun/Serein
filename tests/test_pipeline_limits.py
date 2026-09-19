@@ -35,7 +35,52 @@ def test_time_blocks_and_unknown_time_twenty_rounds_preserve_ids():
     constrained=blocks(unknown,max_chars=100)
     assert all(sum(len(m['content']) for m in b)<=100 for b in constrained)
     unknown[0]['content']='x'*101
-    with pytest.raises(ValueError,match='单轮'):blocks(unknown,max_chars=100)
+    oversized=blocks(unknown,max_chars=100)
+    assert [m['id'] for b in oversized for m in b]==list(range(1,117))
+    assert len(oversized[0])==2
+    assert sum(len(m['content']) for m in oversized[0])>100
+    assert all(sum(len(m['content']) for m in b)<=100 for b in oversized[1:])
+
+
+def test_lowered_input_budget_rebatches_using_full_routing_material(settings):
+    from serein.compat.raw_archive import raw_archive
+    raw_archive(settings).ingest([
+        {'source_event_id':'u1','session_id':'budget','role':'user','text':'u'*40,'created_at':'2025-01-01T00:00:00Z'},
+        {'source_event_id':'a1','session_id':'budget','role':'assistant','text':'a'*40,'created_at':'2025-01-01T00:01:00Z'},
+        {'source_event_id':'u2','session_id':'budget','role':'user','text':'v'*40,'created_at':'2025-01-01T00:02:00Z'},
+        {'source_event_id':'a2','session_id':'budget','role':'assistant','text':'b'*40,'created_at':'2025-01-01T00:03:00Z'},
+    ],source='test')
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    assert [m['id'] for m in data['routing_messages']]==[1,2,3,4]
+    # Reproduce #11: stable messages alone still fit the new cap, but the
+    # frozen Router/Curator material does not.
+    data['messages']=data['messages'][:2]
+    data['parked']=data['routing_messages'][2:]
+    data['input_policy']['max_input_chars']=1000
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
+    save_settings(settings.database,{'pipeline':{'max_input_chars':100}})
+    replacement=p.new_batch(settings.database,True)
+    assert replacement['id']!=batch['id']
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0]=='superseded_input_budget'
+        fresh=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(replacement['id'],)).fetchone()[0])
+        assert fresh['input_policy']['max_input_chars']==100
+        assert [m['id'] for m in fresh['routing_messages']]==[1,2]
+        assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==0
+
+
+def test_prompt_budget_change_applies_to_existing_frozen_job(settings):
+    ingest(settings)
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    request=p.request_for(settings.database,batch,'track_router')
+    request['prompt']='x'*210000
+    save_settings(settings.database,{'pipeline':{'max_prompt_chars':300000}})
+    result=asyncio.run(p.job(settings.database,batch,request,'track_router:budget',synthetic_runner))
+    assert result['message_assignments']
 
 
 def test_import_boundary_keeps_concurrent_new_chats_and_retires_mixed_plan(settings,monkeypatch):
