@@ -85,6 +85,8 @@ def new_batch(database,include_recent,clock=None):
             old_data=json.loads(old['input_json'])
             current_limit=policy['max_input_chars']
             frozen_limit=old_data.get('input_policy',{}).get('max_input_chars',current_limit)
+            if type(frozen_limit) is not int or frozen_limit<1:
+                frozen_limit=current_limit
             routing_messages=old_data.get('routing_messages',old_data.get('messages',[]))
             rechunked=blocks(routing_messages,current_limit)
             stable_ids={m['id'] for m in old_data.get('messages',[])}
