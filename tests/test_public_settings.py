@@ -126,6 +126,16 @@ def test_unset_recall_threshold_preserves_toml(deployment):
     assert client.get('/v1/settings').json()['recall']['direct_threshold']==.78
 
 
+def test_pipeline_prompt_budget_accepts_large_context_models(deployment):
+    settings,client=deployment
+    saved=client.patch('/v1/settings',json={'pipeline':{'max_prompt_chars':300000}})
+    assert saved.status_code==200,saved.text
+    assert saved.json()['pipeline']['max_prompt_chars']==300000
+    assert read_settings(settings.database)['pipeline']['max_prompt_chars']==300000
+    assert client.patch('/v1/settings',json={'pipeline':{'max_prompt_chars':4000000}}).status_code==200
+    assert client.patch('/v1/settings',json={'pipeline':{'max_prompt_chars':4000001}}).status_code==422
+
+
 def test_recent_original_resume_limit_validation(deployment):
     _,client=deployment
     recent=client.patch('/v1/settings',json={'resume':{'recent_originals':True,'recent_original_limit':1}})
