@@ -11,9 +11,17 @@ def blocks(messages, max_chars=12000):
         known=all(m.get('metadata',{}).get('timestamp_source')!='import_time' for m in unit)
         start=datetime.fromisoformat(unit[0]['created_at'].replace('Z','+00:00')) if known else None
         size=sum(len(m.get('content',m.get('text',''))) for m in unit)
-        if size>max_chars:
-            raise ValueError(f'单轮完整对话共 {size} 字符，超过每批 {max_chars} 字符上限；请调整整理输入上限。原话未截断。')
         silence=start is not None and previous is not None and (start-previous).total_seconds()>=1200
+        if size>max_chars:
+            # Reply envelopes are transport atoms. Never truncate one just to
+            # satisfy a soft input target; isolate it so later material can
+            # still be split normally and let the prompt budget be the final
+            # model-facing guard.
+            if current:
+                result.append(current);current=[];chars=0;turns=0
+            result.append(list(unit))
+            previous=datetime.fromisoformat(unit[-1]['created_at'].replace('Z','+00:00')) if known else None
+            continue
         if current and (silence or turns>=20 or chars+size>max_chars):
             result.append(current);current=[];chars=0;turns=0
         current.extend(unit);chars+=size;turns+=1
