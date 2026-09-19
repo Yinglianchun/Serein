@@ -128,12 +128,15 @@ def test_unset_recall_threshold_preserves_toml(deployment):
 
 def test_pipeline_prompt_budget_accepts_large_context_models(deployment):
     settings,client=deployment
-    saved=client.patch('/v1/settings',json={'pipeline':{'max_prompt_chars':300000}})
+    saved=client.patch('/v1/settings',json={'pipeline':{'max_prompt_chars':300000,'event_writer_concurrency':2}})
     assert saved.status_code==200,saved.text
     assert saved.json()['pipeline']['max_prompt_chars']==300000
+    assert saved.json()['pipeline']['event_writer_concurrency']==2
     assert read_settings(settings.database)['pipeline']['max_prompt_chars']==300000
     assert client.patch('/v1/settings',json={'pipeline':{'max_prompt_chars':4000000}}).status_code==200
     assert client.patch('/v1/settings',json={'pipeline':{'max_prompt_chars':4000001}}).status_code==422
+    for value in (0,9,True,'2'):
+        assert client.patch('/v1/settings',json={'pipeline':{'event_writer_concurrency':value}}).status_code==422
 
 
 def test_recent_original_resume_limit_validation(deployment):
