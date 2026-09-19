@@ -186,6 +186,7 @@ class PipelinePatch(BaseModel):
     max_input_chars: int | None = Field(default=None,ge=2000,le=100000)
     max_prompt_chars: int | None = Field(default=None,ge=8000,le=4000000)
     timeout_seconds: int | None = Field(default=None,ge=30,le=1800)
+    event_writer_concurrency: int | None = Field(default=None,ge=1,le=8,strict=True)
 
 
 class RecallPatch(BaseModel):
