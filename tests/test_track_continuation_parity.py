@@ -206,20 +206,34 @@ def test_bridge_deferral_on_one_corridor_must_block_global_settlement(settings):
                     'base_event_ids': [], 'owned_unit_roots': [1, 3]}],
         'skip_unit_roots': [], 'defer_unit_roots': [],
     }, first_component)
+    # A protected predecessor on the context Track makes the shared bridge
+    # unit a real durable deferral (plain model defer without parked/protection
+    # is intentionally normalized to skip).
+    second_component['base_event_candidates'] = [{
+        'event_id': 'protected-base',
+        'primary_track_id': second,
+        'session_ids': [second_component['messages'][0]['session_id']],
+        'source_message_ids': [2],
+        'predecessor_event_ids': [],
+        'active': True,
+        'protected': True,
+    }]
     second_plan = latest.normalize_event_curator_output({
-        'events': [{'action': 'create', 'primary_track_id': second,
-                    'base_event_ids': [], 'owned_unit_roots': [2, 4]}],
-        'skip_unit_roots': [], 'defer_unit_roots': [3],
+        'events': [{'action': 'extend', 'primary_track_id': second,
+                    'base_event_ids': ['protected-base'], 'owned_unit_roots': [3]}],
+        'skip_unit_roots': [4], 'defer_unit_roots': [],
     }, second_component)
+    assert second_plan['events'] == []
+    assert set(second_plan['defer_source_message_ids']) == {2, 3}
 
     written = {'title': 'Synthetic', 'event_draft': 'Synthetic Event',
                'recallable': True, 'evidence_sufficient': True}
     plans = [
         (first_component, first_plan, [(first_plan['events'][0], dict(written))]),
-        (second_component, second_plan, [(second_plan['events'][0], dict(written))]),
+        (second_component, second_plan, []),
     ]
     result = p.settle(settings.database, batch, data, data['routing_result'], plans)
-    assert result['deferred'] == 1
+    assert result['deferred'] == 2
     with Store(settings.database, read_only=True) as store:
         outcomes = dict(store.conn.execute(
             'SELECT raw_id,outcome FROM raw_processing ORDER BY raw_id'
