@@ -14,7 +14,7 @@
 按旧配置模板的 `gateway.upstreams` 结构配置：添加一个上游，填写名称、API Base URL、密钥或
 `api_key_env`、协议与缓存选项，再在它下面添加多个模型。地址与密钥由该上游的全部模型共用。
 
-通过 HTTP 地址（例如局域网 IP 和端口）打开 Serein 网页时，也支持添加上游、手动添加模型和导入同名模型。旧版若点击“添加上游”没有反应，升级后刷新页面重试。这项兼容指网页访问方式，上游 API Base URL 仍按模型服务提供方的要求填写。
+通过 HTTP 地址（包括局域网 IP 和公网 IP 加端口）打开 Serein 网页时，也支持添加上游、手动添加模型和导入同名模型。旧版若点击“添加上游”没有反应，升级后刷新页面重试。这项兼容指网页访问方式，上游 API Base URL 仍按模型服务提供方的要求填写。公网明文 HTTP 会使登录凭据、提交的模型密钥和页面内容面临传输泄露风险；推荐使用 HTTPS 或加密隧道，风险提示不改变这些网页操作的兼容支持。详见 [HTTP 兼容与访问风险](interactive-install.md#http-兼容与访问风险)。
 模型的 `id` 是稳定的内部编号，`upstream_model` 是发送给提供方的真实模型号，`label` 是可选别名。
 客户端显示“上游名/别名”，别名留空就使用真实模型号。不同上游的同名模型由上游名区分，同一上游内需使用不同别名。旧内部编号继续支持请求路由。
 
@@ -70,7 +70,7 @@ Embedding 使用 `/embeddings`，Reranker 使用 `/rerank`；选择相应用途�
 
 ## 聊天客户端
 
-- Base URL：Serein 网页入口加 `/v1`，例如 `https://你的域名/v1` 或 `http://公网IP:网关端口/v1`。
+- Base URL：Serein 网页入口加 `/v1`，例如 `https://你的域名/v1` 或 `http://公网IP:网关端口/v1`。HTTP 公网 IP 示例仍受支持，但不提供传输加密，不建议长期这样传输私人记忆；公网使用推荐 HTTPS 或加密隧道。
 - API Key：安装时生成的完整 Gateway Key，输入框不加 `Bearer` 前缀。可从安装输出、`deploy/connection-guide.txt` 或 `deploy/secrets/api-token` 读取。网页登录密码和模型厂商的 Key 都不用于这里。
 - Model：从 `GET /v1/models` 拉取聊天模型。`id` 和 `name` 均为“上游名/别名或模型号”，`owned_by` 是上游名称；向量及重排模型不在其中。
 - 在客户端添加请求头 `X-Serein-Window-ID`，值为当前会话的独立 ID；同一窗口保持不变，新建窗口换值。客户端支持会话 ID 变量时可使用它。旧客户端的 `X-Ombre-Session-Id` 也可兼容。
@@ -79,6 +79,8 @@ Embedding 使用 `/embeddings`，Reranker 使用 `/rerank`；选择相应用途�
 远程 MCP 的服务器 URL 填 `https://你的域名/serein/mcp`，传输类型选 **Streamable HTTP**。支持 OAuth 的客户端（包括官端自定义 MCP）把身份验证选为 **OAuth**；浏览器打开 Serein 授权页后，手动输入 Gateway Key 并确认。OAuth 需要 HTTPS 域名，同机 localhost 例外；不要把 Key 写进 URL、回调地址或客户端名称。
 
 不支持 OAuth、但支持自定义请求头的客户端仍可使用静态方式：`Authorization: Bearer <Gateway Key>`；专门的 Bearer Token 输入框只填 Key。直接使用 `http://公网IP:网关端口/serein/mcp` 时也只能用静态方式。旧 `/mcp` 路由继续兼容。更换 Gateway Key 会同时撤销旧静态 Key 与已发放的 OAuth 凭据，需要重新授权。
+
+静态 Key 只用于鉴权，不会加密 HTTP 请求；上面的公网 HTTP MCP 示例与聊天 API 有同样的凭据和内容泄露风险。安全建议不改变这些入口的兼容支持，也不放宽 OAuth 的 HTTPS 要求。公开求助时请遮挡真实实例地址、密码和 Key，具体见 [HTTP 兼容与访问风险](interactive-install.md#http-兼容与访问风险)。
 
 网页 **使用说明 → 接入** 提供公网 IP 和域名的连接地址模板。菜单 6 会更换 Key，所有客户端均需同步；查看现有 Key 无需更换。仅连接 MCP 不会让直连其他模型平台的聊天自动经过 Serein 网关。
 
