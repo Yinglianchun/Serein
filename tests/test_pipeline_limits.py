@@ -231,30 +231,32 @@ def test_116_unknown_time_originals_are_processed_in_small_batches(settings):
 
 
 def test_oversized_router_frame_is_preserved_but_not_shortened_into_rebatch_cache(settings):
-    from serein.compat.raw_archive import raw_archive
-    raw_archive(settings).ingest([
-        {'source_event_id':str(m['id']),'session_id':'oversized','role':m['role'],
-         'text':m['content'],'created_at':m['created_at']}
-        for m in pairs(21)
-    ],source='test')
-    save_settings(settings.database,{'pipeline':{'max_input_chars':1000}})
+    ingest(settings)
     p.initialize(settings.database)
     batch=p.new_batch(settings.database,True)
-    original=json.loads(batch['input_json'])
-    assert len(original['routing_messages'])==40
     request=p.request_for(settings.database,batch,'track_router')
-    output=output_for('track_router',request)
     with Store(settings.database) as store:
+        # Emulate a frozen old-version batch whose accepted Router frame spans
+        # material that the newly lowered budget must split into several chunks.
+        original=json.loads(batch['input_json']);extended=[]
+        for n in range(21):
+            for m in original['messages']:
+                extended.append({**m,'id':m['id']+n*2,
+                                 'metadata':{'timestamp_source':'import_time'}})
+        original.update(messages=extended,routing_messages=extended)
+        original['input_policy']['max_input_chars']=1000
+        request['messages']=extended
+        output=output_for('track_router',request)
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(original),batch['id']))
         store.conn.execute('INSERT INTO pipeline_jobs(id,batch_id,role,request_json,output_json) VALUES (?,?,?,?,?)',
             (batch['id']+':track_router:0',batch['id'],'track_router:0',encode(request),encode(output)))
     save_settings(settings.database,{'pipeline':{'max_input_chars':100}})
     new=p.new_batch(settings.database,True)
-    assert new['id']!=batch['id']
+    assert new and new['id']!=batch['id']
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0]=='superseded_input_budget'
-        # The accepted 40-message frame survives for audit, but the lower budget
-        # splits it across replacement chunks, so it cannot safely provide a
-        # prefix Track card or route cache.
+        # The accepted oversized frame survives for audit, but it cannot safely
+        # provide a prefix Track card or route cache after rechunking.
         assert store.conn.execute('SELECT count(*) FROM pipeline_routes').fetchone()[0]==0
         assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance').fetchone()[0]==0
         assert store.conn.execute('SELECT output_json FROM pipeline_jobs').fetchone()[0]==encode(output)
