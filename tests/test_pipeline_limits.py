@@ -72,6 +72,53 @@ def test_lowered_input_budget_rebatches_using_full_routing_material(settings):
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==0
 
 
+def test_rebatch_reuses_only_exact_router_frame_with_explicit_provenance(settings):
+    from serein.compat.raw_archive import raw_archive
+    raw_archive(settings).ingest([
+        {'source_event_id':'u1','session_id':'provenance','role':'user','text':'u'*40,'created_at':'2025-01-01T00:00:00Z'},
+        {'source_event_id':'a1','session_id':'provenance','role':'assistant','text':'a'*40,'created_at':'2025-01-01T00:01:00Z'},
+        {'source_event_id':'u2','session_id':'provenance','role':'user','text':'v'*40,'created_at':'2025-01-01T00:02:00Z'},
+        {'source_event_id':'a2','session_id':'provenance','role':'assistant','text':'b'*40,'created_at':'2025-01-01T00:03:00Z'},
+    ],source='test')
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    data['input_policy']['max_input_chars']=1000
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
+    request=p.request_for(settings.database,batch,'track_router')
+    request['messages']=data['routing_messages'][:2]
+    output=output_for('track_router',request)
+    with Store(settings.database) as store:
+        store.conn.execute('INSERT INTO pipeline_jobs(id,batch_id,role,request_json,output_json) VALUES (?,?,?,?,?)',
+            (batch['id']+':track_router:0',batch['id'],'track_router:0',encode(request),encode(output)))
+    save_settings(settings.database,{'pipeline':{'max_input_chars':100}})
+    replacement=p.new_batch(settings.database,True)
+    fresh=json.loads(replacement['input_json'])
+    assert [m['id'] for m in fresh['routing_messages']]==[1,2]
+
+    # A second legacy superseded producer can overlap the same originals and
+    # disagree only in Track-card prose. Explicit provenance from the rebatch
+    # must keep recovery pinned to the accepted producer instead of treating
+    # both historical frames as equally valid.
+    decoy_request=json.loads(json.dumps(request))
+    decoy_request['batch_id']='route:decoy'
+    decoy_output=output_for('track_router',decoy_request)
+    decoy_output['track_updates'][0]['throughline']='decoy interpretation'
+    decoy_data={**data,'routing_messages':data['routing_messages'][:2],
+                'messages':data['messages'][:2],'parked':[]}
+    with Store(settings.database) as store:
+        store.conn.execute("INSERT INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,'superseded_input_budget')",
+            ('route:decoy',data['scope'],encode(decoy_data)))
+        store.conn.execute('INSERT INTO pipeline_jobs(id,batch_id,role,request_json,output_json) VALUES (?,?,?,?,?)',
+            ('route:decoy:track_router:0','route:decoy','track_router:0',encode(decoy_request),encode(decoy_output)))
+    recovered=p.cached_route_result(settings.database,fresh)
+    assert recovered['recovered_route_sources'][0]['batch_id']==batch['id']
+    with Store(settings.database,read_only=True) as store:
+        links=list(store.conn.execute('SELECT raw_id,batch_id FROM pipeline_route_provenance ORDER BY raw_id'))
+        assert [(row['raw_id'],row['batch_id']) for row in links]==[(1,batch['id']),(2,batch['id'])]
+
+
 def test_unchanged_input_budget_keeps_valid_batch_with_parked_following_unit(settings):
     from serein.compat.raw_archive import raw_archive
     raw_archive(settings).ingest([
@@ -183,7 +230,7 @@ def test_116_unknown_time_originals_are_processed_in_small_batches(settings):
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0]==116
 
 
-def test_oversized_pending_batch_reuses_accepted_router_output(settings):
+def test_oversized_router_frame_is_preserved_but_not_shortened_into_rebatch_cache(settings):
     ingest(settings)
     p.initialize(settings.database)
     batch=p.new_batch(settings.database,True)
@@ -204,7 +251,10 @@ def test_oversized_pending_batch_reuses_accepted_router_output(settings):
     assert new['id']!=batch['id']
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0]=='superseded_input_budget'
-        assert store.conn.execute('SELECT count(*) FROM pipeline_routes').fetchone()[0]==42
+        # The accepted 42-message frame survives for audit, but it spans two
+        # replacement chunks and cannot safely provide a prefix Track card.
+        assert store.conn.execute('SELECT count(*) FROM pipeline_routes').fetchone()[0]==0
+        assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance').fetchone()[0]==0
         assert store.conn.execute('SELECT output_json FROM pipeline_jobs').fetchone()[0]==encode(output)
 
 
