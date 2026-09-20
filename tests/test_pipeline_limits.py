@@ -119,6 +119,43 @@ def test_rebatch_reuses_only_exact_router_frame_with_explicit_provenance(setting
         assert [(row['raw_id'],row['batch_id']) for row in links]==[(1,batch['id']),(2,batch['id'])]
 
 
+def test_rebatch_cleanup_preserves_route_owned_by_different_explicit_producer(settings):
+    from serein.compat.raw_archive import raw_archive
+    raw_archive(settings).ingest([
+        {'source_event_id':'u1','session_id':'producer','role':'user','text':'u'*40,'created_at':'2025-01-01T00:00:00Z'},
+        {'source_event_id':'a1','session_id':'producer','role':'assistant','text':'a'*40,'created_at':'2025-01-01T00:01:00Z'},
+        {'source_event_id':'u2','session_id':'producer','role':'user','text':'v'*40,'created_at':'2025-01-01T00:02:00Z'},
+        {'source_event_id':'a2','session_id':'producer','role':'assistant','text':'b'*40,'created_at':'2025-01-01T00:03:00Z'},
+    ],source='test')
+    p.initialize(settings.database)
+    batch=p.new_batch(settings.database,True)
+    data=json.loads(batch['input_json'])
+    data['input_policy']['max_input_chars']=1000
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
+    request=p.request_for(settings.database,batch,'track_router')
+    output=output_for('track_router',request)
+    with Store(settings.database) as store:
+        store.conn.execute('INSERT INTO pipeline_jobs(id,batch_id,role,request_json,output_json) VALUES (?,?,?,?,?)',
+            (batch['id']+':track_router:0',batch['id'],'track_router:0',encode(request),encode(output)))
+        assignment=output_for('track_router',request)['message_assignments'][0]
+        normalized,_,_=p.normalize_event_track_message_output(
+            {'message_assignments':[assignment],
+             'track_updates':[output['track_updates'][0]]},
+            request['messages'][:1],request['active_tracks'],
+            session_id=data['scope'],next_track_ordinal=request['next_track_ordinal'])
+        store.conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)',(1,encode(normalized[0])))
+        store.conn.execute('INSERT OR REPLACE INTO pipeline_route_provenance VALUES (?,?,?)',
+                           (1,'route:newer',encode(normalized[0])))
+    save_settings(settings.database,{'pipeline':{'max_input_chars':100}})
+    replacement=p.new_batch(settings.database,True)
+    assert replacement and replacement['id']!=batch['id']
+    with Store(settings.database,read_only=True) as store:
+        producer=store.conn.execute('SELECT batch_id FROM pipeline_route_provenance WHERE raw_id=1').fetchone()
+        assert producer and producer['batch_id']=='route:newer'
+        assert store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=1').fetchone() is not None
+
+
 def test_unchanged_input_budget_keeps_valid_batch_with_parked_following_unit(settings):
     from serein.compat.raw_archive import raw_archive
     raw_archive(settings).ingest([
