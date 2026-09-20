@@ -113,10 +113,16 @@ def new_batch(database,include_recent,clock=None):
                 frame_ids=tuple(m['id'] for m in request['messages'])
                 route_ids=[a['source_message_id'] for a in assignments]
                 if frame_ids not in reusable_frames:
-                    marks=','.join('?' for _ in route_ids)
-                    if marks:
-                        store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id IN ('+marks+')',route_ids)
-                        store.conn.execute('DELETE FROM pipeline_route_provenance WHERE raw_id IN ('+marks+')',route_ids)
+                    for raw_id in route_ids:
+                        producer=store.conn.execute(
+                            'SELECT batch_id FROM pipeline_route_provenance WHERE raw_id=?',(raw_id,)
+                        ).fetchone()
+                        # Do not erase a newer/different explicit producer merely
+                        # because this older pending frame is being retired.
+                        if producer is not None and producer['batch_id']!=old['id']:
+                            continue
+                        store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id=?',(raw_id,))
+                        store.conn.execute('DELETE FROM pipeline_route_provenance WHERE raw_id=?',(raw_id,))
                     continue
                 for card in cards:store.conn.execute('INSERT OR IGNORE INTO pipeline_tracks VALUES (?,?,?)',(card['track_id'],old_data['scope'],encode(card)))
                 record_routes(store.conn,old['id'],assignments)
