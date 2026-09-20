@@ -98,13 +98,28 @@ def new_batch(database,include_recent,clock=None):
             if not ((current_limit<frozen_limit and len(rechunked)>1) or
                     (current_limit>=frozen_limit and stable_chunks>1)):
                 return dict(old)
-            # Keep accepted Router output before retiring an oversized unfinished batch.
+            # Preserve accepted Router jobs, but publish route cache only when a
+            # frozen Router frame still matches one complete chunk under the new
+            # transport budget. A frame spanning multiple replacement chunks
+            # cannot safely supply a prefix Track card because its prose may
+            # include future material. Clear that stale cache and let the fresh
+            # batch reroute instead.
+            reusable_frames={tuple(m['id'] for m in block) for block in rechunked}
+            from .pipeline_recovery import record_routes
             for row in store.conn.execute("SELECT request_json,output_json FROM pipeline_jobs WHERE batch_id=? AND role LIKE 'track_router%' AND output_json IS NOT NULL ORDER BY rowid",(old['id'],)):
                 request=json.loads(row['request_json'])
                 assignments,cards,_=normalize_event_track_message_output(json.loads(row['output_json']),request['messages'],request['active_tracks'],
                     session_id=old_data['scope'],next_track_ordinal=request.get('next_track_ordinal',track_state.next_ordinal(old_data['scope'],request['active_tracks'])))
+                frame_ids=tuple(m['id'] for m in request['messages'])
+                route_ids=[a['source_message_id'] for a in assignments]
+                if frame_ids not in reusable_frames:
+                    marks=','.join('?' for _ in route_ids)
+                    if marks:
+                        store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id IN ('+marks+')',route_ids)
+                        store.conn.execute('DELETE FROM pipeline_route_provenance WHERE raw_id IN ('+marks+')',route_ids)
+                    continue
                 for card in cards:store.conn.execute('INSERT OR IGNORE INTO pipeline_tracks VALUES (?,?,?)',(card['track_id'],old_data['scope'],encode(card)))
-                for a in assignments:store.conn.execute('INSERT OR IGNORE INTO pipeline_routes VALUES (?,?)',(a['source_message_id'],encode(a)))
+                record_routes(store.conn,old['id'],assignments)
             store.conn.execute("UPDATE pipeline_batches SET status='superseded_input_budget' WHERE id=?",(old['id'],))
         complete_upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
