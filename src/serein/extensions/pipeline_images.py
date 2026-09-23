@@ -8,7 +8,9 @@ import re
 import http.client
 import ssl
 import time
+from copy import deepcopy
 from urllib.parse import urljoin, urlsplit
+from ..core.store import Store
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_TOTAL_BYTES = 40 * 1024 * 1024
@@ -101,21 +103,71 @@ def image_bytes(url):
 
 
 def freeze_images(images, previous=()):
-    cache = {(item['source_message_id'], item['position'], item['original_url']): item for item in previous}
+    cache = {(item['source_message_id'], item['position']): item for item in previous}
     result = []; total = 0
     for image in images:
-        key = (image['source_message_id'], image['position'], image['url'])
+        key = (image['source_message_id'], image['position'])
         old = cache.get(key)
-        body, mime = image_bytes(old['url'] if old else image['url'])
+        body, mime = image_bytes(image['url'])
         sha = hashlib.sha256(body).hexdigest()
-        if old and old['sha256'] != sha:
+        if old and old.get('sha256') != sha:
             raise ValueError('冻结图片摘要不匹配，请重新领取任务')
         total += len(body)
         if len(result) >= 24 or total > MAX_TOTAL_BYTES:
             raise ValueError('本批图片超过 24 张或 40 MB，请减小输入批次')
-        result.append({**image, 'original_url': image['url'], 'sha256': sha,
+        result.append({**image, 'sha256': sha,
                        'url': 'data:' + mime + ';base64,' + base64.b64encode(body).decode()})
     return result
+
+
+def freeze_task_images(database,batch_id,images,previous=()):
+    """Freeze canonical bytes once outside JSON, then hydrate only live requests."""
+    previous_by_key={(item['source_message_id'],item['position']):item for item in previous}
+    with Store(database,read_only=True) as store:
+        cached={(row['source_message_id'],row['position']):dict(row) for row in store.conn.execute(
+            'SELECT * FROM pipeline_media WHERE batch_id=?',(batch_id,))}
+    frozen=[];new=[];total=0
+    for image in images:
+        key=(image['source_message_id'],image['position']);old=previous_by_key.get(key);row=cached.get(key)
+        if row:
+            body=row['body'];mime=row['mime_type'];sha=row['sha256']
+        else:
+            body,mime=image_bytes(image['url']);sha=hashlib.sha256(body).hexdigest()
+            new.append((batch_id,key[0],key[1],sha,mime,body))
+        if old and old.get('sha256')!=sha:
+            raise ValueError('冻结图片摘要不匹配，请重新领取任务')
+        total+=len(body)
+        if len(frozen)>=24 or total>MAX_TOTAL_BYTES:
+            raise ValueError('本批图片超过 24 张或 40 MB，请减小输入批次')
+        frozen.append({**image,'sha256':sha,
+                       'url':'data:'+mime+';base64,'+base64.b64encode(body).decode()})
+    if new:
+        with Store(database) as store,store.transaction(immediate=True):
+            store.conn.executemany('INSERT OR IGNORE INTO pipeline_media VALUES (?,?,?,?,?,?)',new)
+    return frozen
+
+
+def persistable_request(request):
+    """Keep image receipts in job JSON; canonical bytes live once in pipeline_media."""
+    value=deepcopy(request)
+    for image in value.get('images',[]):
+        image['url']='[frozen task image]'
+    return value
+
+
+def hydrate_request_images(database,batch_id,request):
+    images=request.get('images') or []
+    pending=[image for image in images if image.get('url')=='[frozen task image]']
+    if not pending:return request
+    with Store(database,read_only=True) as store:
+        cached={(row['source_message_id'],row['position']):dict(row) for row in store.conn.execute(
+            'SELECT * FROM pipeline_media WHERE batch_id=?',(batch_id,))}
+    for image in pending:
+        key=(image['source_message_id'],image['position']);row=cached.get(key)
+        if row is None or row['sha256']!=image.get('sha256'):
+            raise ValueError('冻结图片材料缺失或摘要不匹配，请重建任务')
+        image['url']='data:'+row['mime_type']+';base64,'+base64.b64encode(row['body']).decode()
+    return request
 
 
 def verify_images(images):
@@ -154,7 +206,7 @@ def decision(output):
 
 def verify_transcriptions(transcriptions, images):
     """Require exact coverage, unchanged bytes and unchanged evidence roles."""
-    verify_images(images)
+    if any(item.get('url') for item in images):verify_images(images)
     actual = {(item['source_message_id'], item['position']): item for item in images}
     seen = set()
     for row in transcriptions:
@@ -168,21 +220,68 @@ def verify_transcriptions(transcriptions, images):
         raise ValueError('Writer 转录必须覆盖全部绑定图片')
 
 
+def _strip_task_media(value,key=''):
+    if key in ('image_transcriptions','curator_image_transcriptions'):return value
+    if isinstance(value,dict):return {name:_strip_task_media(item,name) for name,item in value.items()}
+    if isinstance(value,list):return [_strip_task_media(item,key) for item in value]
+    if isinstance(value,str):
+        if key=='content_base64' or value.startswith('data:image/'):
+            return '[expired task image]'
+        return re.sub(r'data:image/[^;\s]+;base64,[A-Za-z0-9+/=]+','[expired task image]',value)
+    return value
+
+
+def compact_batch_snapshot(data):
+    """Keep the exact Router proof while dropping completed downstream material."""
+    keys=('contract','scope','source','day','routing_messages','routing_result',
+          'last_routing_repair','rebuild_of')
+    compact={key:data[key] for key in keys if key in data}
+    compact['task_snapshot_compacted']=True
+    return _strip_task_media(compact)
+
+
+def compact_job_request(value):
+    """Retain Router replay inputs; downstream jobs keep only an audit receipt."""
+    request=json.loads(value) if isinstance(value,str) else value
+    if str(request.get('role','')).startswith('track_router') or request.get('role')=='track_router':
+        return _strip_task_media(request)
+    raw=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+    return {'role':request.get('role',''),'batch_id':request.get('batch_id',''),
+            'contract':request.get('contract',''),'execution':request.get('execution',{}),
+            'task_snapshot_compacted':True,'request_sha256':hashlib.sha256(raw.encode()).hexdigest(),
+            'prompt_chars':len(request.get('prompt',''))+len(request.get('rules',''))}
+
+
+def compact_completed_snapshots(store):
+    """One-time recovery for historical done batches with materialized task copies."""
+    rows=store.conn.execute("SELECT id,input_json,result_json FROM pipeline_batches WHERE status='done' "
+        "AND COALESCE(json_extract(result_json,'$.task_snapshot_compacted'),0)=0").fetchall()
+    for row in rows:
+        try:
+            data=json.loads(row['input_json']);result=json.loads(row['result_json'] or '{}')
+            if not isinstance(data,dict) or not isinstance(data.get('routing_messages'),list):continue
+            batch_json=json.dumps(compact_batch_snapshot(data),ensure_ascii=False,sort_keys=True,separators=(',',':'))
+            jobs=[]
+            for job in store.conn.execute('SELECT id,request_json FROM pipeline_jobs WHERE batch_id=?',(row['id'],)).fetchall():
+                compact=compact_job_request(job['request_json'])
+                jobs.append((json.dumps(compact,ensure_ascii=False,sort_keys=True,separators=(',',':')),job['id']))
+        except (KeyError,TypeError,ValueError,json.JSONDecodeError):
+            continue
+        result['task_snapshot_compacted']=True
+        for request_json,job_id in jobs:
+            store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',(request_json,job_id))
+        store.conn.execute('DELETE FROM pipeline_media WHERE batch_id=?',(row['id'],))
+        store.conn.execute('UPDATE pipeline_batches SET input_json=?,result_json=? WHERE id=?',
+            (batch_json,json.dumps(result,ensure_ascii=False,sort_keys=True,separators=(',',':')),row['id']))
+
+
 def expire_completed_media(store):
     """Only disposable task copies expire. Canonical raw attachments remain intact."""
-    def strip(value,key=''):
-        if key in ('image_transcriptions','curator_image_transcriptions'):return value
-        if isinstance(value,dict):return {k:strip(v,k) for k,v in value.items()}
-        if isinstance(value,list):return [strip(v,key) for v in value]
-        if isinstance(value,str):
-            if key=='content_base64':return '[expired task image]'
-            return re.sub(r'data:image/[^;\s]+;base64,[A-Za-z0-9+/=]+','[expired task image]',value)
-        return value
     rows=store.conn.execute("SELECT id,input_json,result_json FROM pipeline_batches WHERE status='done' AND json_extract(result_json,'$.media_cache_expired') IS NULL AND datetime(json_extract(result_json,'$.completed_at'))<datetime('now','-7 days')").fetchall()
     for row in rows:
         result=json.loads(row['result_json']);result['media_cache_expired']=True
         store.conn.execute('UPDATE pipeline_batches SET input_json=?,result_json=? WHERE id=?',
-            (json.dumps(strip(json.loads(row['input_json'])),ensure_ascii=False),json.dumps(result),row['id']))
+            (json.dumps(_strip_task_media(json.loads(row['input_json'])),ensure_ascii=False),json.dumps(result),row['id']))
         for job in store.conn.execute('SELECT id,request_json FROM pipeline_jobs WHERE batch_id=?',(row['id'],)).fetchall():
             store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',
-                (json.dumps(strip(json.loads(job['request_json'])),ensure_ascii=False),job['id']))
+                (json.dumps(_strip_task_media(json.loads(job['request_json'])),ensure_ascii=False),job['id']))
