@@ -10,7 +10,10 @@ from ..compat.events import Events, reference_blockers
 from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
 from . import pipeline_latest as latest
 from .pipeline_config import snapshot, execution
-from .pipeline_images import freeze_images, verify_images, bind_transcriptions, verify_transcriptions, decision, expire_completed_media
+from .pipeline_images import (freeze_task_images, persistable_request, hydrate_request_images,
+    verify_images, bind_transcriptions,
+    verify_transcriptions, decision, expire_completed_media,
+    compact_completed_snapshots, compact_batch_snapshot, compact_job_request)
 from . import pipeline_tracks as track_state
 
 ROLES=('track_router','event_curator','event_writer')
@@ -35,6 +38,9 @@ def initialize(database):
             CREATE TABLE IF NOT EXISTS pipeline_schedule(day TEXT PRIMARY KEY,completed INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS pipeline_attempts(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,attempt INTEGER NOT NULL,
                 created_at TEXT NOT NULL,output_text TEXT NOT NULL,error TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS pipeline_media(batch_id TEXT NOT NULL,source_message_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,sha256 TEXT NOT NULL,mime_type TEXT NOT NULL,body BLOB NOT NULL,
+                PRIMARY KEY(batch_id,source_message_id,position));
         ''')
         from .pipeline_recovery import initialize as initialize_recovery
         initialize_recovery(store.conn)
@@ -51,21 +57,53 @@ def initialize(database):
         # restart only unfinished batches; already settled originals stay settled.
         store.conn.execute("UPDATE pipeline_batches SET status='superseded_protocol' WHERE status='pending' AND json_extract(input_json,'$.contract') IS NULL")
         store.conn.execute("UPDATE pipeline_batches SET status='superseded_protocol' WHERE status='pending' AND json_extract(input_json,'$.contract')<>?",(CONTRACT,))
+        compact_completed_snapshots(store)
         expire_completed_media(store)
 
 
 def message(row):
     row=dict(row);session=str(row.get('session_id') or '')
-    row['metadata']=row.get('metadata') or json.loads(row.get('metadata_json') or '{}')
-    try:row['image_transcription']=json.loads(row.get('image_transcription_json') or 'null')
+    metadata_json=row.pop('metadata_json',None)
+    transcription_json=row.pop('image_transcription_json',None)
+    row['metadata']=row.get('metadata') or json.loads(metadata_json or '{}')
+    try:row['image_transcription']=json.loads(transcription_json or 'null')
     except (TypeError,ValueError):row['image_transcription']=None
     original=row['metadata'].get('original_message') or {}
     if original.get('attachments') and not row['metadata'].get('attachments'):
         row['metadata']={**row['metadata'],'attachments':original['attachments']}
-    row['content']=row.get('text',row.get('content',''))
+    row['content']=row.pop('text',row.get('content',''))
+    for key in ('event_hash','ingested_at','conversation_id','client','image_transcription_status','image_transcription_updated_at'):
+        row.pop(key,None)
     row['original_session_id']=row.get('original_session_id',session)
     row['session_id']=int(digest(encode([row.get('source'),session]))[:12],16)
     return row
+
+
+def task_message(row):
+    """Project a canonical raw row without copying inline image bytes into task JSON."""
+    def strip(value,key=''):
+        if isinstance(value,dict):return {name:strip(item,name) for name,item in value.items()}
+        if isinstance(value,list):return [strip(item,key) for item in value]
+        if isinstance(value,str) and (key=='content_base64' or value.startswith('data:image/')):
+            return '[task image source]'
+        return value
+    projected=message(row)
+    projected['metadata']=strip(projected.get('metadata') or {})
+    return projected
+
+
+def image_source_messages(database,messages):
+    """Hydrate attachment bytes only for the immediate image-model request."""
+    wanted={int(item['id']):item for item in messages}
+    hydrated=dict(wanted)
+    raw_ids=[key for key in wanted if key>0]
+    if raw_ids:
+        with Store(database,read_only=True) as store:
+            for offset in range(0,len(raw_ids),400):
+                chunk=raw_ids[offset:offset+400];marks=','.join('?' for _ in chunk)
+                for row in store.conn.execute('SELECT * FROM raw_events WHERE id IN ('+marks+')',chunk):
+                    hydrated[row['id']]=message(row)
+    return [hydrated[int(item['id'])] for item in messages]
 
 
 def rules(role,database):
@@ -132,7 +170,7 @@ def new_batch(database,include_recent,clock=None):
             complete_upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
         scopes=store.conn.execute('SELECT DISTINCT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+' ORDER BY r.id').fetchall()
         for source,session in scopes:
-            rows=[message(row) for row in store.conn.execute('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+' ORDER BY r.id',(source,session))]
+            rows=[task_message(row) for row in store.conn.execute('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+' ORDER BY r.id',(source,session))]
             eligible=[r for r in rows if datetime.fromisoformat(r['created_at'].replace('Z','+00:00'))<=watermark]
             chunks=blocks(eligible,policy['max_input_chars'])
             for chunk_index,eligible in enumerate(chunks):
@@ -149,8 +187,8 @@ def new_batch(database,include_recent,clock=None):
                 if not stable:continue
                 scope=digest(encode([source,session]))[:20]
                 with latest.identity_scope(identity(database)):
-                    tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],message)
-                recent=[message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,eligible[0]['id']))][::-1]
+                    tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],task_message)
+                recent=[task_message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,eligible[0]['id']))][::-1]
                 data={'contract':CONTRACT,'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
                 key='pipeline:'+digest(encode(data))
                 existing=store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(key,)).fetchone()
@@ -286,6 +324,9 @@ def save_routing_snapshot(database,batch,data,routed):
         raise RoutingRecoveryError('frozen components disagree with recovered routing result')
     data['routing_result']=routed
     data.setdefault('components',fresh)
+    if batch['status']=='needs_repair':
+        data['last_routing_repair']={'checked_at':now(),'previous_result':json.loads(batch['result_json'])}
+    encoded_data=encode(data)
     with Store(database) as store,store.transaction(immediate=True):
         if routed.get('recovered_route_sources'):
             # Historical recovery must never rewind a Track card that has moved
@@ -298,10 +339,9 @@ def save_routing_snapshot(database,batch,data,routed):
         else:
             track_state.persist(store.conn,routed['track_state_updates'],data['scope'],preserve_newer=True)
         if batch['status']=='needs_repair':
-            data['last_routing_repair']={'checked_at':now(),'previous_result':json.loads(batch['result_json'])}
             store.conn.execute("UPDATE pipeline_batches SET status='pending',result_json=NULL WHERE id=?",(batch['id'],))
-        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
-    batch['input_json']=encode(data)
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encoded_data,batch['id']))
+    batch['input_json']=encoded_data
     return data
 
 
@@ -396,7 +436,7 @@ def candidates(database,track_ids):
                 originals=[]
                 for ref in refs:
                     raw=store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND source_event_id=?',source_key(ref)).fetchone()
-                    originals.append(message(raw) if raw else message({'id':-int(digest(encode(source_key(ref)))[:12],16),'source':ref['source_system'],'source_event_id':ref['message_id'],'session_id':ref['session_id'],'role':ref['role'],'text':ref['content'],'created_at':ref['created_at']}))
+                    originals.append(task_message(raw) if raw else task_message({'id':-int(digest(encode(source_key(ref)))[:12],16),'source':ref['source_system'],'source_event_id':ref['message_id'],'session_id':ref['session_id'],'role':ref['role'],'text':ref['content'],'created_at':ref['created_at']}))
                 detail=store.conn.execute('SELECT details_json FROM pipeline_event_details WHERE event_id=?',(row['item_id'],)).fetchone()
                 details=json.loads(detail[0]) if detail else {}
                 blockers=reference_blockers(store.conn,row['item_id'])
@@ -441,6 +481,9 @@ def components(database,data,routed,*,include_materials=True):
         context={a['source_message_id']:by_id[a['source_message_id']] for a in direct}
         for base in bases:
             context.update({m['id']:m for m in base['originals']})
+        # Bound originals live once in context_messages. Candidates retain only
+        # their canonical refs/IDs and Event fields needed by Curator/settlement.
+        bases=[{key:value for key,value in base.items() if key!='originals'} for base in bases]
         result.append({
             'component_id':track_id,
             'track_ids':[track_id],
@@ -505,10 +548,13 @@ def request_for(database,batch,role,**fields):
             prompt=latest.build_event_track_message_prompt(data['day'],request['messages'],request['active_tracks'],recent_context_messages=data['recent'])
         elif role=='event_curator':
             component=fields['component']
-            images,missing=writer_images(component['context_messages'],{m['id'] for m in component['messages']})
+            image_messages=image_source_messages(database,component['context_messages'])
+            images,missing=writer_images(image_messages,{m['id'] for m in component['messages']})
             if missing:raise ValueError('绑定图片缺少原图，请补齐附件；原话仍保留')
-            component['images']=freeze_images(images,component.get('images',[]))
-            request['images']=[{**item,'evidence_role':'stable' if item['source_message_id'] in {m['id'] for m in component['messages']} else 'context_only'} for item in component['images']]
+            frozen_images=freeze_task_images(database,batch['id'],images,component.get('images',[]))
+            component['images']=[{key:value for key,value in item.items() if key not in ('url','original_url')}
+                                 for item in frozen_images]
+            request['images']=[{**item,'evidence_role':'stable' if item['source_message_id'] in {m['id'] for m in component['messages']} else 'context_only'} for item in frozen_images]
             prompt=latest.build_event_track_curator_prompt(data['day'],component)
             if fields.get('pretranscribed'):
                 request['curator_image_transcriptions']=list(component.get('curator_image_transcriptions',[]))
@@ -586,17 +632,28 @@ def submit(database,job_id,output):
 
 def _submit(database,job_id,output):
     initialize(database)
-    with Store(database) as store,store.transaction(immediate=True):
+    encoded_output=encode(output)
+    with Store(database,read_only=True) as store:
         row=store.conn.execute('SELECT j.*,b.status FROM pipeline_jobs j JOIN pipeline_batches b ON b.id=j.batch_id WHERE j.id=?',(job_id,)).fetchone()
         if row is None:raise ValueError('Unknown pipeline job')
-        if json.loads(row['request_json'])['role'] not in ROLES:
-            raise ValueError('This pipeline stage is retired; request the next task')
+        frozen_request=row['request_json'];existing_output=row['output_json'];status=row['status']
+    request=hydrate_request_images(database,row['batch_id'],json.loads(frozen_request))
+    if request['role'] not in ROLES:
+        raise ValueError('This pipeline stage is retired; request the next task')
+    if status.startswith('superseded_'):raise ValueError('任务输入已更新，请重新领取任务；原话和已完成的归线仍保留')
+    if existing_output:
+        if existing_output!=encoded_output:raise Conflict('This job already has a different result')
+        return {'status':'unchanged','job_id':job_id}
+    validate(request,output)
+    with Store(database) as store,store.transaction(immediate=True):
+        row=store.conn.execute('SELECT j.*,b.status FROM pipeline_jobs j JOIN pipeline_batches b ON b.id=j.batch_id WHERE j.id=?',(job_id,)).fetchone()
+        if row is None or row['request_json']!=frozen_request:
+            raise Conflict('Pipeline job changed while its result was being validated')
         if row['status'].startswith('superseded_'):raise ValueError('任务输入已更新，请重新领取任务；原话和已完成的归线仍保留')
         if row['output_json']:
-            if row['output_json']!=encode(output):raise Conflict('This job already has a different result')
+            if row['output_json']!=encoded_output:raise Conflict('This job already has a different result')
             return {'status':'unchanged','job_id':job_id}
-        validate(json.loads(row['request_json']),output)
-        store.conn.execute('UPDATE pipeline_jobs SET output_json=? WHERE id=?',(encode(output),job_id))
+        store.conn.execute('UPDATE pipeline_jobs SET output_json=? WHERE id=?',(encoded_output,job_id))
     return {'status':'accepted','job_id':job_id}
 
 
@@ -607,16 +664,18 @@ class AwaitAgent(Exception):
 async def job(database,batch,request,key,runner):
     from ..work_tasks import progress
     identifier=batch['id']+':'+key
+    encoded_request=encode(persistable_request(request))
     with Store(database) as store,store.transaction(immediate=True):
-        store.conn.execute('INSERT OR IGNORE INTO pipeline_jobs(id,batch_id,role,request_json) VALUES (?,?,?,?)',(identifier,batch['id'],key,encode(request)))
+        store.conn.execute('INSERT OR IGNORE INTO pipeline_jobs(id,batch_id,role,request_json) VALUES (?,?,?,?)',(identifier,batch['id'],key,encoded_request))
         row=store.conn.execute('SELECT * FROM pipeline_jobs WHERE id=?',(identifier,)).fetchone()
     incoming=request
     current_execution=request['execution']
-    request=json.loads(row['request_json'])
+    request=hydrate_request_images(database,batch['id'],json.loads(row['request_json']))
     request['execution']=current_execution
     incoming.clear();incoming.update(request)
     if not row['output_json']:
-        with Store(database) as store:store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',(encode(request),identifier))
+        encoded_request=encode(persistable_request(request))
+        with Store(database) as store:store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',(encoded_request,identifier))
     with Store(database,read_only=True) as store:
         completed=store.conn.execute("SELECT count(*) FROM pipeline_jobs WHERE batch_id=? AND output_json IS NOT NULL AND json_extract(request_json,'$.role')!='event_evidence'",(batch['id'],)).fetchone()[0]
         total=store.conn.execute("SELECT count(*) FROM pipeline_jobs WHERE batch_id=? AND json_extract(request_json,'$.role')!='event_evidence'",(batch['id'],)).fetchone()[0]
@@ -692,7 +751,8 @@ def extend_context(database,component,context_request):
         rows=store.conn.execute('SELECT r.* FROM pipeline_routes p JOIN raw_events r ON r.id=p.raw_id WHERE r.id<? AND (json_extract(p.route_json,\'$.primary_track_id\')=? OR EXISTS (SELECT 1 FROM json_each(p.route_json,\'$.context_track_ids\') WHERE value=?)) ORDER BY r.id DESC',
             (context_request['before_message_id'],context_request['track_id'],context_request['track_id'])).fetchall()
     existing={m['id']:m for m in component['context_messages']}
-    prior=[message(r) for r in reversed(rows) if message(r)['session_id'] in component['context_session_ids']]
+    projected=[task_message(r) for r in reversed(rows)]
+    prior=[item for item in projected if item['session_id'] in component['context_session_ids']]
     units=[[item] for item in sorted(prior,key=lambda item:item['id'])[-6:]]
     selected=[m for unit in units for m in unit]
     existing.update({m['id']:m for m in selected})
@@ -739,7 +799,13 @@ def settle(database,batch,data,routed,plans):
             'pending':len(data['messages'])+len(data['parked'])-len(processed),
             'skipped':sum(value=='skipped' for value in processed.values()),
             'deferred':len(deferred),
-            'protected_deferrals':[entry for _,plan,_ in plans for entry in plan['hard_skips']]}
+            'protected_deferrals':[entry for _,plan,_ in plans for entry in plan['hard_skips']],
+            'task_snapshot_compacted':True}
+    compacted_input=encode(compact_batch_snapshot(data))
+    with Store(database,read_only=True) as store:
+        compacted_jobs=[(encode(compact_job_request(row['request_json'])),row['id']) for row in
+                        store.conn.execute('SELECT id,request_json FROM pipeline_jobs WHERE batch_id=?',(batch['id'],))]
+    encoded_result=encode(result)
     def finish(conn):
         from .pipeline_recovery import record_routes
         record_routes(conn,batch['id'],assignments)
@@ -752,7 +818,11 @@ def settle(database,batch,data,routed,plans):
                 fingerprint=conn.execute('SELECT fingerprint FROM fact_events WHERE item_id=?',(key,)).fetchone()[0]
                 enqueue(conn,key,fingerprint)
         for key,outcome in processed.items():conn.execute('INSERT OR IGNORE INTO raw_processing VALUES (?,?,?)',(key,batch['id'],outcome))
-        conn.execute("UPDATE pipeline_batches SET status='done',result_json=? WHERE id=?",(encode(result),batch['id']))
+        for request_json,job_id in compacted_jobs:
+            conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',(request_json,job_id))
+        conn.execute('DELETE FROM pipeline_media WHERE batch_id=?',(batch['id'],))
+        conn.execute("UPDATE pipeline_batches SET status='done',input_json=?,result_json=? WHERE id=?",
+                     (compacted_input,encoded_result,batch['id']))
     if items:
         Events(database).settle(batch['id'],items,before_commit=finish)
     else:
@@ -884,7 +954,8 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
         for index,component in enumerate(data['components']):
             pretranscribed=await transcribe_component(database,batch,component,index,runner)
             request=request_for(database,batch,'event_curator',component=component,pretranscribed=pretranscribed)
-            with Store(database) as store:store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
+            encoded_data=encode(data)
+            with Store(database) as store:store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encoded_data,batch['id']))
             output=await job(database,batch,request,f'event_curator:{index}',runner)
             component=request['component']
             if 'context_request' in output:
@@ -952,7 +1023,7 @@ async def _flush_routes_frozen(database):
         upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
             upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
-        rows=[message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id) AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"+upload+' ORDER BY r.id')]
+        rows=[task_message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id) AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"+upload+' ORDER BY r.id')]
     sessions={}
     for row in rows:sessions.setdefault((row['source'],row['original_session_id']),[]).append(row)
     current=datetime.now(timezone.utc)
@@ -962,8 +1033,8 @@ async def _flush_routes_frozen(database):
         messages=[row for unit in units for row in unit];scope=digest(encode([source,session]))[:20]
         with Store(database) as store:
             with latest.identity_scope(identity(database)):
-                tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],message)
-            recent=[message(r) for r in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,messages[0]['id']))][::-1]
+                tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],task_message)
+            recent=[task_message(r) for r in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,messages[0]['id']))][::-1]
             data={'contract':CONTRACT,'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
             key='route:'+digest(encode(data));batch={'id':key,'input_json':encode(data)}
             store.conn.execute("INSERT OR IGNORE INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,'routing_only')",(key,scope,batch['input_json']))

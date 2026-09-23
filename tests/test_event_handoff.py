@@ -39,6 +39,10 @@ def test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources(s
         assert mode=='api','Agent mode must not call the API'
         with Store(settings.database,read_only=True) as store:
             request=json.loads(store.conn.execute('SELECT request_json FROM pipeline_jobs WHERE output_json IS NULL ORDER BY rowid DESC LIMIT 1').fetchone()[0])
+        if request.get('images'):
+            assert request['images'][0]['url']=='[frozen task image]'
+            from serein.extensions.pipeline_images import hydrate_request_images
+            request=hydrate_request_images(settings.database,request['batch_id'],request)
         if request['role']=='event_curator':assert payload['messages'][1]['content'][1]['image_url']['url']==PNG
         if request['role']=='event_writer':
             assert isinstance(payload['messages'][1]['content'],str) and PNG not in payload['messages'][1]['content']
