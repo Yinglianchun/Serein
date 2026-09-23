@@ -1,6 +1,7 @@
 """Continuation state matching the verified Bridge message-level Track router."""
 import json
 import re
+from datetime import datetime, timedelta, timezone
 from ..core.store import digest, encode
 from . import pipeline_latest as latest
 
@@ -15,46 +16,54 @@ def next_ordinal(scope, cards):
     return max(numbers, default=0) + 1
 
 
-def load_tracks(store, source, session, before_id, message):
-    # Opaque public window IDs are ordered by first visible message, not by the
-    # most recent reply to an older window. Preserve runtime/workspace boundaries.
-    visible = "role IN ('user','assistant') AND TRIM(text)<>'' AND COALESCE(json_extract(metadata_json,'$.draft'),0)=0 AND COALESCE(json_extract(metadata_json,'$.discarded'),0)=0"
-    windows = store.conn.execute('SELECT session_id,MIN(id) AS first_id FROM raw_events WHERE source=? AND '
-                                + visible + ' GROUP BY session_id ORDER BY first_id', (source,)).fetchall()
-    current = next((row for row in windows if row['session_id'] == session), None)
-    def context(row):
-        meta = json.loads(store.conn.execute('SELECT metadata_json FROM raw_events WHERE id=?', (row['first_id'],)).fetchone()[0])
-        return meta, (meta.get('runtime', ''), meta.get('workspace_root', ''))
-    previous = None
-    if current:
-        metadata, boundary = context(current)
-        candidates = [row for row in windows if row['first_id'] < current['first_id'] and context(row)[1] == boundary]
-        previous = candidates[-1]['session_id'] if candidates else None
-        if metadata.get('previous_session_id') is not None:
-            previous = next((row['session_id'] for row in candidates
-                             if str(row['session_id']) == str(metadata['previous_session_id'])), None)
-    scope = scope_for(source, session)
-    previous_scope = scope_for(source, previous) if previous is not None else scope
-    cards = []
-    routes = store.conn.execute('SELECT r.*,p.route_json FROM pipeline_routes p JOIN raw_events r ON r.id=p.raw_id '
-                                'WHERE r.source=? AND r.id<? AND r.session_id IN (?,?) ORDER BY r.id DESC',
-                                (source, before_id, session, previous if previous is not None else session)).fetchall()
-    for row in store.conn.execute('SELECT card_json,scope FROM pipeline_tracks WHERE scope IN (?,?) ORDER BY id', (scope, previous_scope)):
-        card = json.loads(row['card_json'])
-        card.setdefault('last_session_id', row['scope'])
-        match = re.fullmatch(r'session_(.+)_track_[0-9]+', card['track_id'])
-        card.setdefault('origin_session_id', match[1] if match else row['scope'])
-        anchors = list(card.get('recent_source_message_ids') or [])
-        if not anchors:
-            primary = [r['id'] for r in routes if json.loads(r['route_json'])['primary_track_id'] == card['track_id']]
-            context_ids = [r['id'] for r in routes if card['track_id'] in json.loads(r['route_json'])['context_track_ids']]
-            anchors = (primary or context_ids)[:1]
-        originals = [message(raw) for key in anchors if (raw := next((r for r in routes if r['id'] == key), None))]
-        card['recent_source_message_ids'] = [m['id'] for m in originals]
-        card['recent_turns'] = latest.transcript_payload(originals)
+def load_tracks(store, source, session, before_id, message, *, lookback_days=3):
+    """Show tracks with proven routed activity in the preceding N days.
+
+    Public API clients need not supply a window identity. The current raw
+    message supplies the clock; persisted route receipts supply activity.
+    """
+    if type(lookback_days) is not int or not 1<=lookback_days<=365:
+        raise ValueError('Track lookback must be an integer between 1 and 365 days')
+    current=store.conn.execute('SELECT created_at,metadata_json FROM raw_events WHERE id=? AND source=?',
+                               (before_id,source)).fetchone()
+    if current is None:raise ValueError('Track routing anchor is missing')
+    reference=datetime.fromisoformat(current['created_at'].replace('Z','+00:00'))
+    if reference.tzinfo is None:reference=reference.replace(tzinfo=timezone.utc)
+    reference=reference.astimezone(timezone.utc)
+    lower=reference-timedelta(days=lookback_days)
+    metadata=json.loads(current['metadata_json'] or '{}')
+    boundary=(metadata.get('runtime',''),metadata.get('workspace_root',''))
+    anchors={}
+    rows=store.conn.execute('SELECT r.*,p.route_json FROM pipeline_routes p JOIN raw_events r ON r.id=p.raw_id '
+        'WHERE r.source=? AND r.id<? AND julianday(r.created_at)>=julianday(?) '
+        'AND julianday(r.created_at)<=julianday(?) ORDER BY r.id DESC',
+        (source,before_id,lower.isoformat(),reference.isoformat()))
+    for row in rows:
+        stamp=datetime.fromisoformat(row['created_at'].replace('Z','+00:00'))
+        if stamp.tzinfo is None:stamp=stamp.replace(tzinfo=timezone.utc)
+        if not lower<=stamp.astimezone(timezone.utc)<=reference:continue
+        meta=json.loads(row['metadata_json'] or '{}')
+        if (meta.get('runtime',''),meta.get('workspace_root',''))!=boundary:continue
+        route=json.loads(row['route_json'])
+        for track_id in [route['primary_track_id'],*route['context_track_ids']]:
+            previous=anchors.get(track_id)
+            if previous is None or (stamp,row['id'])>(previous[0],previous[1]['id']):
+                anchors[track_id]=(stamp,row)
+    scope=scope_for(source,session)
+    cards=[]
+    for row in store.conn.execute('SELECT id,card_json,scope FROM pipeline_tracks ORDER BY id'):
+        anchor=anchors.get(row['id'])
+        if anchor is None:continue
+        card=json.loads(row['card_json'])
+        card.setdefault('last_session_id',row['scope'])
+        match=re.fullmatch(r'session_(.+)_track_[0-9]+',card['track_id'])
+        card.setdefault('origin_session_id',match[1] if match else row['scope'])
+        original=message(anchor[1])
+        card['recent_source_message_ids']=[original['id']]
+        card['recent_turns']=latest.transcript_payload([original])
         cards.append(card)
-    all_ids = [{'track_id': row[0]} for row in store.conn.execute('SELECT id FROM pipeline_tracks')]
-    return cards, next_ordinal(scope, all_ids)
+    all_ids=[{'track_id':row[0]} for row in store.conn.execute('SELECT id FROM pipeline_tracks')]
+    return cards,next_ordinal(scope,all_ids)
 
 
 def parked(cards):

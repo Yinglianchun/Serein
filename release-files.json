@@ -516,5 +516,7 @@
   "tests/test_event_writer_concurrency.py",
   "web/src/storage/recallObservationFeed.js",
   "web/src/hooks/useRecallObservationFeed.js",
-  "web/src/components/recall-observation-live.css"
+  "web/src/components/recall-observation-live.css",
+  "docs/base-event-lookback.md",
+  "tests/test_pipeline_base_window.py"
 ]

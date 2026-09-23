@@ -19,6 +19,7 @@ from . import pipeline_tracks as track_state
 ROLES=('track_router','event_curator','event_writer')
 TZ=timezone(timedelta(hours=8))
 CONTRACT='public-event-message-tracks-v5'
+EVENT_CURATOR_MAX_ACTIVE_LEAVES_PER_TRACK=8
 
 
 class RoutingRecoveryError(ValueError):
@@ -187,7 +188,8 @@ def new_batch(database,include_recent,clock=None):
                 if not stable:continue
                 scope=digest(encode([source,session]))[:20]
                 with latest.identity_scope(identity(database)):
-                    tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],task_message)
+                    tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],task_message,
+                                                           lookback_days=policy.get('track_lookback_days',3))
                 recent=[task_message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,eligible[0]['id']))][::-1]
                 data={'contract':CONTRACT,'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
                 key='pipeline:'+digest(encode(data))
@@ -427,11 +429,22 @@ async def route_batch(database,batch,data,runner):
 def source_key(ref):return (ref['source_system'],ref['session_id'],ref['message_id'])
 
 
-def candidates(database,track_ids):
+def candidates(database,track_ids,*,overflow_out=None):
+    """Load every active leaf for a Track, or fail closed before reading sources."""
     result=[]
     with Store(database,read_only=True) as store:
         for track in track_ids:
-            for row in store.conn.execute("SELECT e.* FROM pipeline_track_events p JOIN fact_events e ON e.item_id=p.event_id WHERE p.track_id=? AND e.status='active'",(track,)):
+            rows=store.conn.execute("SELECT e.* FROM pipeline_track_events p JOIN fact_events e ON e.item_id=p.event_id "
+                "WHERE p.track_id=? AND e.status='active' ORDER BY julianday(e.created_at),e.item_id",(track,)).fetchall()
+            if len(rows)>EVENT_CURATOR_MAX_ACTIVE_LEAVES_PER_TRACK:
+                overflow={'track_id':track,'eligible_active_leaf_count':len(rows),
+                          'limit':EVENT_CURATOR_MAX_ACTIVE_LEAVES_PER_TRACK,
+                          'event_ids':[row['item_id'] for row in rows]}
+                if overflow_out is None:
+                    raise ValueError('Track component exceeds the bounded active Event leaf limit')
+                overflow_out.append(overflow)
+                continue
+            for row in rows:
                 refs=[dict(ref) for ref in store.conn.execute('SELECT * FROM fact_event_sources WHERE item_id=? ORDER BY id',(row['item_id'],))]
                 originals=[]
                 for ref in refs:
@@ -477,7 +490,8 @@ def components(database,data,routed,*,include_materials=True):
         }
         component_memberships=[unit for unit in memberships if int(unit['unit_root_message_id']) in roots]
         component_edges=[edge for edge in edges if int(edge['unit_root_message_id']) in roots]
-        bases=candidates(database,[track_id]) if include_materials else []
+        overflow=[]
+        bases=candidates(database,[track_id],overflow_out=overflow) if include_materials else []
         context={a['source_message_id']:by_id[a['source_message_id']] for a in direct}
         for base in bases:
             context.update({m['id']:m for m in base['originals']})
@@ -494,9 +508,18 @@ def components(database,data,routed,*,include_materials=True):
             'memberships':component_memberships,
             'context_edges':component_edges,
             'base_event_candidates':bases,
+            'base_event_candidate_overflow':overflow,
             'context_session_ids':list({m['session_id'] for m in context.values()}),
         })
     return result
+
+
+def overflow_plan(component):
+    """Defer an overflowing Track without invoking Curator or Writer."""
+    stable_ids=sorted({int(item['id']) for item in component.get('messages') or []})
+    if not stable_ids:raise ValueError('Overflowing Track component has no stable sources to defer')
+    return {'events':[],'skip_source_message_ids':[],'defer_source_message_ids':stable_ids,
+            'hard_skips':[],'host_deferrals':list(component.get('base_event_candidate_overflow') or [])}
 
 
 def routing_units(messages,assignments):
@@ -800,6 +823,7 @@ def settle(database,batch,data,routed,plans):
             'skipped':sum(value=='skipped' for value in processed.values()),
             'deferred':len(deferred),
             'protected_deferrals':[entry for _,plan,_ in plans for entry in plan['hard_skips']],
+            'candidate_overflow_deferrals':[entry for _,plan,_ in plans for entry in plan.get('host_deferrals',[])],
             'task_snapshot_compacted':True}
     compacted_input=encode(compact_batch_snapshot(data))
     with Store(database,read_only=True) as store:
@@ -952,6 +976,9 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
                     components(database,data,routed,include_materials=False)):
                 raise RoutingRecoveryError('frozen components disagree with routing snapshot')
         for index,component in enumerate(data['components']):
+            if component.get('base_event_candidate_overflow'):
+                plans.append((component,overflow_plan(component),[]))
+                continue
             pretranscribed=await transcribe_component(database,batch,component,index,runner)
             request=request_for(database,batch,'event_curator',component=component,pretranscribed=pretranscribed)
             encoded_data=encode(data)
@@ -1033,7 +1060,8 @@ async def _flush_routes_frozen(database):
         messages=[row for unit in units for row in unit];scope=digest(encode([source,session]))[:20]
         with Store(database) as store:
             with latest.identity_scope(identity(database)):
-                tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],task_message)
+                tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],task_message,
+                                                       lookback_days=config['policy'].get('track_lookback_days',3))
             recent=[task_message(r) for r in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,messages[0]['id']))][::-1]
             data={'contract':CONTRACT,'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
             key='route:'+digest(encode(data));batch={'id':key,'input_json':encode(data)}

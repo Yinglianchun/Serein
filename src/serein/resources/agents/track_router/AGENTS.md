@@ -10,7 +10,7 @@
 - 同一持续建设里仍服务同一 throughline 的材料必须复用该 Track；局部目标、新 bug 或验证不是新建理由。只有原建设明确结束，或材料已转入另一项独立建设，才新建 Track。
 - 只有预期跨批次持续建设同一个产品或系统时，将 event_policy 设为 rolling_engineering；其余设为 default。已有 rolling_engineering 只能继承，不能降级。
 - A→B→A 时，最后的 A 复用原 Track。只有互动中心真正换成另一主题或另一段独立经历，才新建 Track。
-- active Track 暂时换题或沉默后可以 parked；再次续接时恢复 active。时间不能删除 Track。
+- active Track 暂时换题或沉默后可以 parked；再次续接时恢复 active。配置的回看天数只限制本批可见的旧 Track，时间不会删除持久卡片；看不到窗口外的旧 Track 时可以新建。
 
 ## Bridge and routine
 
@@ -22,7 +22,7 @@
 
 ## Reading boundary
 
-- Track 卡和最近原文只用于补对象、被回答内容和代词指向，不得把主题相似当作续接证据。
+- Track 卡只来自当前原话时间之前、配置回看范围内的已保存归线记录，不依赖 API 客户端是否提供窗口身份；最近原文只用于补对象、被回答内容和代词指向，不得把主题相似当作续接证据。
 - bounded_recent_context_json 最多包含当前 session 在本批之前的六条可见原文，只用于补对象、被回答内容和代词指向。
 - 不请求额外上下文，不做 Event admission 或 Boundary。
 - 必须 exact-cover 输入消息，并严格遵守任务给出的 JSON schema。

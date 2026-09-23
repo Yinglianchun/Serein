@@ -11,6 +11,7 @@ export function PipelineSettings({onOpenSummary}) {
   const running=['queued','running'].includes(work?.status);
   const needsRepair=work?.status==='needs_repair'||work?.result?.status==='needs_repair';
   const failure=work?.error||(needsRepair?work?.result?.reason:'');
+  const candidateOverflows=work?.result?.candidate_overflow_deferrals||[];
   const stages={idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复',rebuilt:'计划已重建'};
   async function call(action,body) {
     const response=await fetch('/__serein/pipeline/'+action,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -83,6 +84,7 @@ export function PipelineSettings({onOpenSummary}) {
       {work.result?.note&&<p>{work.result.note}</p>}
       {work.result?.pending>0&&<p>本批仍有 {work.result.pending} 条原话等待后续处理。</p>}
       {work.result?.deferred>0&&<p>暂缓 {work.result.deferred} 条原话；其中 {work.result.protected_deferrals?.length||0} 条事件提案涉及已有内容保护。可对照原话与已有事件人工处理。</p>}
+      {candidateOverflows.map(item=><p key={item.track_id} className="import-error">Track <code>{item.track_id}</code> 有 {item.eligible_active_leaf_count} 条 active Event leaves，超过上限 {item.limit}；本批未调用 Curator 或 Writer。请先归档误归线或不再需要的 Event，或人工安全合并相关 leaves。</p>)}
       {work.result?.skipped>0&&<p>本批跳过 {work.result.skipped} 条原话，原始记录仍保留。</p>}
       {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
       {needsRepair&&<p>批次：<code>{work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。不会跳过原话或删除已保存的 Event。</p>}
