@@ -79,7 +79,9 @@ def shared_proposals():
     component={'messages':messages,'context_messages':messages,'track_ids':list('abcd'),
                'memberships':units,'context_edges':[{'unit_root_message_id':2,'track_id':'b'},{'unit_root_message_id':4,'track_id':'c'}],
                'base_event_candidates':[{'event_id':'protected','primary_track_id':'a','source_message_ids':[90],'session_ids':[1],'manual':True}]}
-    proposals={'events':[{'action':'extend' if t=='a' else 'create','base_event_ids':['protected'] if t=='a' else [],'primary_track_id':t,'owned_unit_roots':ids} for t,ids in zip('abcd',([1,2],[2,3,4],[4,5],[6,7]))],'skip_unit_roots':[],'defer_unit_roots':[]}
+    proposals={'events':[{'action':'extend' if t=='a' else 'create','base_event_ids':['protected'] if t=='a' else [],'primary_track_id':t,'owned_unit_roots':ids} for t,ids in zip('abcd',([1,2],[2,3,4],[4,5],[6,7]))],'skip_unit_roots':[],'defer_unit_roots':[],
+               'decision_review':{'events':[{'event_index':i,'reason':f'Synthetic Track {i} activity'} for i in range(4)],
+                                  'boundaries':[],'dispositions':[]}}
     return component,proposals
 
 
@@ -120,6 +122,7 @@ def test_images_are_frozen_and_transcriptions_cannot_claim_provenance():
 def test_writer_structure_without_lexical_style_rejection():
     value=output_for('event_writer',{'messages':[{'content':'Synthetic'}]})
     value['event_draft']='我笑称这是一场小小的试验。她说不确定，我说可以再试，她提醒我先记录条件。'
+    value['sentence_evidence'][0]['sentence']=value['event_draft']
     assert 'result_or_unfinished' not in value
     assert latest.validate_event_writer_result(value)==[]
     value['self_review']['result_preserved']=False

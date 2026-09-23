@@ -256,7 +256,12 @@ def test_116_unknown_time_originals_are_processed_in_small_batches(settings):
     # This fixture deliberately skips completed units, keeping the batching test
     # independent of rolling-Event selection and eventual evidence growth.
     async def skip_runner(role,request):
-        if role=='event_curator':return {'events':[],'skip_unit_roots':[u['unit_root_message_id'] for u in request['component']['memberships'] if u['unit_root_message_id'] in {m['id'] for m in request['component']['messages']}],'defer_unit_roots':[]}
+        if role=='event_curator':
+            roots=[u['unit_root_message_id'] for u in request['component']['memberships'] if u['unit_root_message_id'] in {m['id'] for m in request['component']['messages']}]
+            return {'events':[],'skip_unit_roots':roots,'defer_unit_roots':[],
+                    'decision_review':{'events':[],'boundaries':[],
+                        'dispositions':[{'disposition':'skip','unit_roots':roots,
+                                         'reason':'Only repeated synthetic status checks','parked_source_message_ids':[]}]}}
         return await runner(role,request)
     for _ in range(4):
         result=asyncio.run(p.advance(settings.database,include_recent=True,runner=skip_runner))

@@ -13,8 +13,11 @@
 - 前段已经形成落点，后段由新的触发开始另一项活动，并形成自己的经过和结果时，通常分开。相同人物、作品、主题，以及理解后段所需的旧背景，不能单独成为合并理由。
 - 后续内容若直接补完、验证或实质修正前段正在处理的事项，可以保留为同一 Event。判断时应找到具体承接的事项，不能只凭“继续讨论同一主题”合并，也不能凭空推断一个未完成事项。已经有回复不等于经历已结束；话题仍可继续聊也不等于存在未完成事项。
 - 粗粒度工程规则不等于选中同 Track 的全部旧 Event。若候选里混入关系经历、作品讨论或其他误归线材料，只选择真正属于这段持续施工的 base；Track 仍只是候选范围。
+- 工具、网站或系统已经可用后，使用它开展的新活动，不自动属于此前的安装、调试或试用。只有原文实际在验证、修复或补完同一建设事项，才续写工程 base；即使 Track 继承 rolling_engineering，也不能把其中所有后续使用强并进旧建设。
 - 先判断参与者实际展开了什么活动，再判断每枚 unit 是否参与它的起因、推进或落点。提及相同对象、沿用相同称呼、时间相邻或具有共同背景，都不足以建立这种关系；不能把另一事项的进度当作本次活动的起因或结果。
-- event_policy=rolling_engineering 的 Track 是上述一般拆分条件的例外：仍服务同一 throughline 的材料必须合为一条滚动工程 Event；前项已经落定、后项与前项没有直接因果、出现局部目标、新 bug 或验证，都不足以拆分。只有原建设明确结束，或材料已转入另一项独立建设，才拆分。default Track 不得擅自套用这项例外。
+- event_policy=rolling_engineering 按同一项具体建设归并：服务同一目标的调查、实现、修复和验证保持一条；局部发现或新 bug 本身不是边界。但 Track 名称、同一产品或宽泛 throughline 不是“一项建设”。材料转入具有独立请求、功能目标或产物的另一项建设，或者原建设明确结束后启动新建设，应按原文拆分并提供双侧边界证据。不得为满足条数机械合并；default Track 仍按实际活动判断。
+- 持续接续的玩笑、关系互动或共同意象可以形成完整经历；其中换一个局部提问、比喻或称呼，不自动构成新活动。实际事项完成也不自动结束围绕它的交流：后段若直接接着前段的具体措辞、比喻、评价或结果展开，且没有发起另一项活动，通常随前段保留，不因语气变化或转为调笑就拆分。
+- 对这种连续接续另拆 Event 时，decision_review.boundaries.reason 必须说明后段实际新发起了什么活动、双方如何接续，不能只贴“技术／情感”等不同类别标签。
 - 普通完整交流可以在 {ai_name} 对用户的正常回复结束；不得把 {ai_name} 的回复从发起它的用户消息中孤立出去。
 - proactive/free-activity 必须等到用户首条回应后才能整体判断；没有用户回应的孤立主动消息不生成 Event。
 - 不可拆消息内并列多个实质目标时，优先保留一条复合 Event，不强造因果。只有它真实承接前后两条分别展开的完整 Event 时才允许 ownership bridge。
@@ -45,4 +48,6 @@
 - defer 只用于两种情况：稳定前段仍被 parked 尾巴回答、纠正或落定；或当前稳定原文命中 protected、manual、forked、blocked、scene_ref、narrative_ref predecessor，必须等待人工处理。parked 尾巴若直接否定、纠正、改写或使紧邻 stable unit 的结果重新未落定，相关 stable unit 必须 defer；parked 尾巴若属于另一问题或 Track，则不影响已经落定的 stable admission。
 - events、skip、defer 必须按 unit root exact-cover 全部 stable units。parked/context_only unit 只可阅读，不输出 disposition。
 - 先检查整个 corridor。只有整个 corridor 都缺少对象、真实起因或被纠正旧主张时，才可请求一次有界 Track context。
-- 只返回任务指定的 JSON，不输出理由或 Markdown。
+decision_review.events 按索引覆盖全部拟议 Event，说明实际持续展开的活动。若同一 Track 相邻两条 Event，boundaries 必须说明后段另起的活动怎样被接续，并分别逐字引用左、右 Event 各自独占的 owned 原文；不能只贴不同主题标签，也不能为了免写证据而强并独立活动。dispositions 完整覆盖每个 skip/defer unit；同理由可合列。skip 不引用 parked；直接 defer 必须引用输入中真实 parked source ID 并说明它如何影响稳定前段。若是受保护前版导致暂缓，仍提出 extend/merge，由 host 处理保护。
+
+- 只返回任务指定的 JSON；决定依据填写在 decision_review，不输出 JSON 之外的解释或 Markdown。

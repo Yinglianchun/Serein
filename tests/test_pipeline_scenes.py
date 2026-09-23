@@ -98,7 +98,10 @@ def test_skip_only_settlement_is_independent_of_scene_changes(settings):
     async def runner(role,request):
         if role=='event_curator':
             with Store(settings.database) as store:store.set_lifecycle('scene','deleted')
-            return {'events':[],'skip_unit_roots':[1,2],'defer_unit_roots':[]}
+            return {'events':[],'skip_unit_roots':[1,2],'defer_unit_roots':[],
+                    'decision_review':{'events':[],'boundaries':[],
+                        'dispositions':[{'disposition':'skip','unit_roots':[1,2],
+                                         'reason':'Synthetic material selected for skip','parked_source_message_ids':[]}]}}
         return output_for(role,request)
     result=asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))
     assert result['events']==0 and result['skipped']==2

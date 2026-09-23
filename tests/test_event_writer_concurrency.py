@@ -22,7 +22,14 @@ def split_curator_output(request):
          'owned_unit_roots':roots[:2]},
         {'action':'create','base_event_ids':[],'primary_track_id':track,
          'owned_unit_roots':roots[2:]},
-    ],'skip_unit_roots':[],'defer_unit_roots':[]}
+    ],'skip_unit_roots':[],'defer_unit_roots':[],
+       'decision_review':{'events':[{'event_index':0,'reason':'First plan and reply'},
+                                    {'event_index':1,'reason':'Second plan and reply'}],
+                          'boundaries':[{'left_event_index':0,'right_event_index':1,
+                                         'reason':'Second plan starts another activity',
+                                         'evidence':[{'source_message_id':roots[0],'quote':'First plan'},
+                                                     {'source_message_id':roots[2],'quote':'Second plan'}]}],
+                          'dispositions':[]}}
 
 
 def base_output(role,request):

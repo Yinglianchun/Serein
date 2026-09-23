@@ -18,7 +18,7 @@ from . import pipeline_tracks as track_state
 
 ROLES=('track_router','event_curator','event_writer')
 TZ=timezone(timedelta(hours=8))
-CONTRACT='public-event-message-tracks-v5'
+CONTRACT='public-event-message-tracks-v7'
 EVENT_CURATOR_MAX_ACTIVE_LEAVES_PER_TRACK=8
 
 
@@ -631,10 +631,19 @@ def validate(request,output):
                 if request.get('context_read') or set(output)!={'context_request'} or not isinstance(c,dict) or c.get('track_id') not in component['track_ids'] or c.get('before_message_id')!=min(m['id'] for m in component['messages']) or c.get('reason') not in ('missing_subject','missing_origin','missing_prior_claim'):
                     raise ValueError('Only one bounded component context request is allowed')
             else:
-                bind_transcriptions(output,request.get('images',[]))
-                latest.normalize_event_curator_output(decision(output),request['component'])
+                bound=bind_transcriptions(output,request.get('images',[]))
+                component={**request['component']}
+                if bound:
+                    component['curator_image_transcriptions']=bound
+                latest.normalize_event_curator_output(decision(output),component)
         else:
-            errors=latest.validate_event_writer_result(output)
+            transcriptions:dict[int,list[str]]={}
+            for item in request.get('curator_image_transcriptions') or []:
+                if item.get('evidence_role')=='owned' and type(item.get('source_message_id')) is int:
+                    transcriptions.setdefault(item['source_message_id'],[]).append(str(item.get('text') or ''))
+            owned=[{**item,'evidence_texts':transcriptions.get(item.get('id'),[])}
+                   for item in request.get('messages') or []]
+            errors=latest.validate_event_writer_result(output,owned)
             if errors:raise ValueError('; '.join(errors))
 
 
@@ -808,7 +817,10 @@ def settle(database,batch,data,routed,plans):
             if bases:
                 item.update(supersedes_item_ids=[b['event_id'] for b in bases],expected_predecessors=[{'item_id':b['event_id'],'fingerprint':b['fingerprint'],
                     'source_keys':[dict(zip(('source_system','session_id','message_id'),source_key(ref))) for ref in b['source_refs']]} for b in bases])
-            items.append(item);details.append({'track_id':event['primary_track_id'],'writer':written,'curator_image_transcriptions':written.get('curator_image_transcriptions',[]),'source_activity_roles':{str(b['source_message_id']):b['activity_role'] for b in event['source_bindings']}})
+            items.append(item);details.append({'track_id':event['primary_track_id'],'writer':written,
+                'curator_decision_review':plan.get('decision_review'),
+                'curator_image_transcriptions':written.get('curator_image_transcriptions',[]),
+                'source_activity_roles':{str(b['source_message_id']):b['activity_role'] for b in event['source_bindings']}})
             settled.update(key for key in event['source_message_ids'] if key in all_new)
     # A shared bridge unit may be visible in two bounded Track corridors. Host
     # settlement is global per raw source, so corridor outcomes need a stable

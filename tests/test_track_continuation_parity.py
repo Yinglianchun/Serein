@@ -149,12 +149,14 @@ def test_individual_message_routes_and_bridge_ownership(settings):
     assert first_component['context_edges'] == expected_edge
     assert second_component['context_edges'] == expected_edge
 
+    review={'events':[{'event_index':0,'reason':'Synthetic owned activity'}],
+            'boundaries':[],'dispositions':[]}
     first_plan = {'events': [{'action': 'create', 'primary_track_id': first,
                               'base_event_ids': [], 'owned_unit_roots': [1, 3]}],
-                  'skip_unit_roots': [], 'defer_unit_roots': []}
+                  'skip_unit_roots': [], 'defer_unit_roots': [],'decision_review':review}
     second_plan = {'events': [{'action': 'create', 'primary_track_id': second,
                                'base_event_ids': [], 'owned_unit_roots': [2, 3, 4]}],
-                   'skip_unit_roots': [], 'defer_unit_roots': []}
+                   'skip_unit_roots': [], 'defer_unit_roots': [],'decision_review':review}
     normalized_first = latest.normalize_event_curator_output(first_plan, first_component)
     normalized_second = latest.normalize_event_curator_output(second_plan, second_component)
     assert normalized_first['events'][0]['source_message_ids'] == [1, 3]
@@ -207,6 +209,8 @@ def test_bridge_deferral_on_one_corridor_blocks_global_source_settlement(setting
         'events': [{'action': 'create', 'primary_track_id': first,
                     'base_event_ids': [], 'owned_unit_roots': [1, 3]}],
         'skip_unit_roots': [], 'defer_unit_roots': [],
+        'decision_review': {'events':[{'event_index':0,'reason':'Synthetic owned activity'}],
+                            'boundaries':[],'dispositions':[]},
     }, first_component)
 
     second_component['base_event_candidates'] = [{
@@ -222,6 +226,9 @@ def test_bridge_deferral_on_one_corridor_blocks_global_source_settlement(setting
         'events': [{'action': 'extend', 'primary_track_id': second,
                     'base_event_ids': ['protected-base'], 'owned_unit_roots': [3]}],
         'skip_unit_roots': [4], 'defer_unit_roots': [],
+        'decision_review': {'events':[{'event_index':0,'reason':'Synthetic protected continuation'}],
+                            'boundaries':[],'dispositions':[{'disposition':'skip','unit_roots':[4],
+                                'reason':'Synthetic unrelated unit','parked_source_message_ids':[]}]},
     }, second_component)
     assert second_plan['events'] == []
     assert set(second_plan['defer_source_message_ids']) == {2, 3}
@@ -248,11 +255,16 @@ def test_bridge_settlement_beats_other_corridor_skip(settings):
         'events': [{'action': 'create', 'primary_track_id': first,
                     'base_event_ids': [], 'owned_unit_roots': [1, 3]}],
         'skip_unit_roots': [], 'defer_unit_roots': [],
+        'decision_review': {'events':[{'event_index':0,'reason':'Synthetic owned activity'}],
+                            'boundaries':[],'dispositions':[]},
     }, first_component)
     second_plan = latest.normalize_event_curator_output({
         'events': [{'action': 'create', 'primary_track_id': second,
                     'base_event_ids': [], 'owned_unit_roots': [2, 4]}],
         'skip_unit_roots': [3], 'defer_unit_roots': [],
+        'decision_review': {'events':[{'event_index':0,'reason':'Synthetic owned activity'}],
+                            'boundaries':[],'dispositions':[{'disposition':'skip','unit_roots':[3],
+                                'reason':'Synthetic bridge skipped here','parked_source_message_ids':[]}]},
     }, second_component)
     written = {'title': 'Synthetic', 'event_draft': 'Synthetic Event',
                'recallable': True, 'evidence_sufficient': True}

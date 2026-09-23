@@ -102,11 +102,19 @@ def output_for(role,request):
         component=request['component'];bases=[item['event_id'] for item in component['base_event_candidates']]
         return {'events':[{'action':'merge' if len(bases)>1 else 'extend' if bases else 'create',
             'owned_unit_roots':[u['unit_root_message_id'] for u in component['memberships'] if u['unit_root_message_id'] in {m['id'] for m in component['messages']}], 'base_event_ids':bases,
-            'primary_track_id':component['track_ids'][0]}],'skip_unit_roots':[],'defer_unit_roots':[], **({'image_transcriptions':[{'input_image':i,'text':'Visible book title','unreadable':False} for i,_ in enumerate(request['images'],1)]} if request.get('images') else {})}
+            'primary_track_id':component['track_ids'][0]}],'skip_unit_roots':[],'defer_unit_roots':[],
+            'decision_review':{'events':[{'event_index':0,'reason':'继续讨论读书会的安排'}],'boundaries':[],'dispositions':[]},
+            **({'image_transcriptions':[{'input_image':i,'text':'Visible book title','unreadable':False} for i,_ in enumerate(request['images'],1)]} if request.get('images') else {})}
     if role=='event_writer':
         from serein.extensions.pipeline_latest import _SELF_REVIEW_KEYS
-        return {'title':'Book club','event_draft':'We agreed to '+request['messages'][0]['content'],
+        source=request['messages'][0]
+        span={'source_message_id':source.get('id',1),'quote':source['content']}
+        sentence='We agreed to '+source['content']
+        return {'title':'Book club','event_draft':sentence,
             'recallable':True,'evidence_sufficient':True,'kept_details':['Book club plan'],'discarded_details':[],
+            'claim_groups':[{'claim_group_id':'g1','claim_type':'fact','owner':'双方','render_mode':'direct',
+                             'focus_role':'core','summary':sentence,'source_spans':[span]}],
+            'sentence_evidence':[{'sentence_index':0,'sentence':sentence,'claim_group_ids':['g1'],'source_spans':[span]}],
             'self_review':{key:True for key in _SELF_REVIEW_KEYS}}
     raise AssertionError('Unexpected or retired pipeline stage: '+role)
 
@@ -159,6 +167,7 @@ def test_pipeline_model_api_selection_uses_names_and_insufficient_writer_stays_p
         result=output_for(role,request)
         if role=='event_writer':
             result.update(evidence_sufficient=False,recallable=False,title='',event_draft='',kept_details=[])
+            result['claim_groups']=[];result['sentence_evidence']=[]
             result['self_review']['owned_evidence_sufficient']=False
         return {'choices':[{'message':{'content':json.dumps(result)}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
