@@ -124,11 +124,26 @@ def test_writer_source_timestamps_are_explicit_shanghai_time():
 def test_router_and_curator_keep_developing_activity_over_keyword_or_tone():
     router = latest.materialize_agent_rules('track_router')
     curator = latest.materialize_agent_rules('event_curator')
+    assert '不是作品、项目、关系或生活领域的长期 Arc' in router
+    assert '只共享人物、关系、作品、产品、项目或技术栈，不构成续接' in router
+    assert '用一句短语标识这一次具体对象或事项' in router
+    assert '只可纠正对象、去掉阶段性措辞或收窄' in router
+    assert '不得为了容纳另一项活动而扩大' in router
+    assert '《作品》更新第 N 话' in router
+    assert '下一批判断直接续接的最小线索' in router
+    assert '另一话更新而开启一次新的完整观看' in router
     assert '不按醒目的称呼、作品名或重复关键词投票归线' in router
     assert '从事实转成玩笑或幻想' in router
     assert '正常使用，不自动续接它的安装、调试 Track' in router
     assert '不因语气变化或转为调笑就拆分' in curator
     assert '不能只贴“技术／情感”等不同类别标签' in curator
+
+
+def test_router_prompt_requests_concrete_track_scope():
+    prompt = latest.build_event_track_message_prompt('2026-09-23', [], [])
+    assert '"subject":"具体对象或事项"' in prompt
+    assert '"throughline":"这段经历的最小续接线索"' in prompt
+    assert '仅仅属于同一产品或系统不够' in prompt
 
 
 def test_model_counting_tolerance_settles_without_truncation(settings):
