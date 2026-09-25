@@ -17,6 +17,7 @@ import {
 } from "../storage/narrativeStore.js";
 import { bookAppearance, chronologicalSources } from "../storage/narrativeAppearance.js";
 import { NarrativeCreateDialog } from "../components/NarrativeCreateDialog.jsx";
+import { LinkCandidatePicker } from "../components/ResumeMemoryPicker.jsx";
 
 const transitionTo = (update) => {
   if (!document.startViewTransition) {
@@ -48,6 +49,7 @@ export function NarrativePage() {
   const [materialIds, setMaterialIds] = useState(null);
   const [materialType, setMaterialType] = useState("event_ids");
   const [materialIdInput, setMaterialIdInput] = useState("");
+  const [materialLabels, setMaterialLabels] = useState({});
   const [previewSeal, setPreviewSeal] = useState(null);
   const selectedRoll = useMemo(
     () => narrativeRolls.find((roll) => roll.id === selectedRollId) ?? null,
@@ -103,6 +105,8 @@ export function NarrativePage() {
   };
 
   const openEditor = () => {
+    setMaterialIdInput("");
+    setMaterialLabels({});
     setPreviewBody(selectedRoll?.body || selectedRoll?.paragraphs?.join("\n\n") || "");
     setPreviewDiff("");
     setPreviewMode("");
@@ -277,14 +281,19 @@ export function NarrativePage() {
     setSaveMessage("");
   };
 
-  const addMaterial = () => {
-    const raw = materialIdInput.trim();
+  const addMaterial = (candidate = null) => {
+    if (!selectedRoll || saving || previewing || writingNew || uploading) return;
+    const kind = materialType.replace(/_ids$/, "");
+    if (candidate && candidate.kind !== kind) return;
+    const raw = candidate ? String(candidate.id).trim() : materialIdInput.trim();
     if (!raw) return;
     const value = ["diary_ids", "darkroom_ids"].includes(materialType) ? Number(raw) : raw;
-    if (["diary_ids", "darkroom_ids"].includes(materialType) && (!Number.isInteger(value) || value <= 0)) {
+    if (["diary_ids", "darkroom_ids"].includes(materialType) && (!Number.isSafeInteger(value) || value <= 0)) {
       setPreviewError("Diary / Darkroom ID 必须是正整数。");
       return;
     }
+    if (candidate) setMaterialLabels(current => ({ ...current,
+      [JSON.stringify([selectedRoll.id, kind, String(value)])]: candidate }));
     setMaterialIds((current) => {
       const base = current || selectedRoll.materialIds;
       const values = base?.[materialType] || [];
@@ -347,11 +356,11 @@ export function NarrativePage() {
     return chronologicalSources(Object.entries(labels).flatMap(([key, typeLabel]) => (
       (materialIds[key] || []).map((id) => {
         const type = Object.keys(keys).find((candidate) => keys[candidate] === key);
-        const source = sourceByKey.get(`${type}:${id}`);
+        const source = materialLabels[JSON.stringify([selectedRoll.id, type, String(id)])] || sourceByKey.get(`${type}:${id}`);
         return { key, id, typeLabel, date: source?.date || "", title: source?.title || String(id) };
       })
     )));
-  }, [materialIds, selectedRoll]);
+  }, [materialIds, selectedRoll, materialLabels]);
 
   return (
     <div className={`narrative-experience${selectedRoll ? " is-reading" : ""}`}>
@@ -536,24 +545,27 @@ export function NarrativePage() {
                       {editableMaterials.map((source) => (
                         <li key={`editor:${source.key}:${source.id}`}>
                           <em>{source.typeLabel}</em>
-                          <span>{source.title}</span>
-                          <button type="button" onClick={() => removeMaterial(source.key, source.id)}>移除</button>
+                          <span>{source.title}<small style={{display:"block",overflowWrap:"anywhere"}}>{source.date ? `${source.date} · ` : ""}ID：{source.id}</small></span>
+                          <button type="button" disabled={saving || previewing || writingNew || uploading} onClick={() => removeMaterial(source.key, source.id)}>移除</button>
                         </li>
                       ))}
                     </ol>
                     <div className="narrative-editor__material-add">
-                      <select value={materialType} onChange={(event) => setMaterialType(event.target.value)} aria-label="材料类型">
+                      <select value={materialType} disabled={saving || previewing || writingNew || uploading} onChange={(event) => { setMaterialType(event.target.value); setMaterialIdInput(""); }} aria-label="材料类型">
                         <option value="event_ids">Event</option>
                         <option value="scene_ids">Scene</option>
                         <option value="diary_ids">日记</option>
                         <option value="darkroom_ids">暗房</option>
                         <option value="upload_ids">已上传文件</option>
                       </select>
-                      <input value={materialIdInput} onChange={(event) => setMaterialIdInput(event.target.value)} placeholder="输入精确 ID" aria-label="新增材料 ID" />
-                      <button type="button" onClick={addMaterial}>加入拟绑定</button>
+                      <LinkCandidatePicker key={`${selectedRoll.id}:${materialType}`} kind={materialType.replace(/_ids$/, "")}
+                        label="查找叙事卷材料" disabled={saving || previewing || writingNew || uploading}
+                        blockedIds={(materialIds || selectedRoll.materialIds)?.[materialType] || []} onSelect={addMaterial} />
+                      <input value={materialIdInput} disabled={saving || previewing || writingNew || uploading} onChange={(event) => setMaterialIdInput(event.target.value)} placeholder="也可输入精确 ID" aria-label="新增材料 ID" />
+                      <button type="button" disabled={saving || previewing || writingNew || uploading || !materialIdInput.trim()} onClick={() => addMaterial()}>按 ID 加入拟绑定</button>
                     </div>
                     <label className="narrative-editor__material-upload">
-                      <input type="file" onChange={uploadLocalMaterial} disabled={uploading} />
+                      <input type="file" onChange={uploadLocalMaterial} disabled={uploading || saving || previewing || writingNew} />
                       <span>{uploading ? "正在上传…" : "从本地上传材料"}</span>
                       <small>保留原文件；文字类文件会同时提供给 Writer 阅读，单个不超过 10 MB。</small>
                     </label>

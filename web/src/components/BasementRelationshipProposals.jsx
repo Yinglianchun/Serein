@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowClockwise, ArrowCounterClockwise, Check, LinkSimple, Plus, Trash, WarningCircle, X } from "@phosphor-icons/react";
 import { MarkdownProjection } from "./MarkdownProjection.jsx";
+import { LinkCandidatePicker } from "./ResumeMemoryPicker.jsx";
 
 const statusLabels = {
   pending: "待判断",
@@ -48,6 +49,15 @@ export function BasementRelationshipProposals() {
   const [edgeActionId, setEdgeActionId] = useState("");
   const [composerOpen, setComposerOpen] = useState(false);
   const [draft, setDraft] = useState(emptyDraft);
+  const [sceneChoices, setSceneChoices] = useState({});
+
+  const chooseScene = (side, id, candidate = null) => {
+    const field = side === "source" ? "sourceSceneId" : "targetSceneId";
+    const evidence = side === "source" ? "sourceEvidence" : "targetEvidence";
+    setDraft(current => ({ ...current, [field]: id,
+      [evidence]: current[field] === id ? current[evidence] : "" }));
+    setSceneChoices(current => ({ ...current, [side]: candidate }));
+  };
 
   const load = async (nextFilter = filter) => {
     setState({ status: "loading", payload: null, error: "" });
@@ -126,7 +136,7 @@ export function BasementRelationshipProposals() {
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload?.message || payload?.error || "没有读到这张 Scene");
-      setScenePreview({
+      setScenePreview(current => current?.id === sceneId ? {
         id: payload.id || sceneId,
         title: payload.metadata?.name || fallback.name || sceneId,
         date: payload.metadata?.date || fallback.date || "",
@@ -134,7 +144,7 @@ export function BasementRelationshipProposals() {
         domain: payload.domain_label || payload.canonical_domain || "",
         status: "done",
         error: "",
-      });
+      } : current);
     } catch (error) {
       setScenePreview((current) => current?.id === sceneId ? {
         ...current,
@@ -168,6 +178,10 @@ export function BasementRelationshipProposals() {
 
   const submitManualProposal = async (event) => {
     event.preventDefault();
+    if (draft.sourceSceneId.trim() === draft.targetSceneId.trim()) {
+      window.alert("起点和终点不能是同一张 Scene。");
+      return;
+    }
     setEdgeActionId(draft.supersedesEdgeId || "manual-proposal");
     try {
       const response = await fetch("/__serein/memory/create-scene-edge-proposal", {
@@ -228,6 +242,10 @@ export function BasementRelationshipProposals() {
   };
 
   const beginRelink = (edge) => {
+    setSceneChoices({
+      source: { id: edge.source, title: edge.source_title || edge.source },
+      target: { id: edge.target, title: edge.target_title || edge.target },
+    });
     setDraft({
       ...emptyDraft(),
       sourceSceneId: edge.source,
@@ -301,8 +319,19 @@ export function BasementRelationshipProposals() {
             <button type="button" onClick={() => { setComposerOpen(false); setDraft(emptyDraft()); }}><X size={15} />取消</button>
           </header>
           <div className="relationship-manual-form__grid">
-            <label>起点 Scene ID<input value={draft.sourceSceneId} onChange={(event) => setDraft((current) => ({ ...current, sourceSceneId: event.target.value }))} required /></label>
-            <label>终点 Scene ID<input value={draft.targetSceneId} onChange={(event) => setDraft((current) => ({ ...current, targetSceneId: event.target.value }))} required /></label>
+            {[["source", "起点", "sourceSceneId", "targetSceneId"], ["target", "终点", "targetSceneId", "sourceSceneId"]].map(([side, label, field, other]) => (
+              <div key={side} style={{display:"grid",gap:8,minWidth:0,alignContent:"start"}}>
+                <LinkCandidatePicker kind="scene" label={`查找${label} Scene`} disabled={Boolean(edgeActionId)}
+                  blockedIds={[draft[other].trim()]} blockedLabel="已选作另一端"
+                  onSelect={item => chooseScene(side, item.id, item)} />
+                {sceneChoices[side]?.id === draft[field] && <small>已选：{sceneChoices[side].title}{sceneChoices[side].date ? ` · ${sceneChoices[side].date}` : ""}</small>}
+                <label>{label} Scene ID<input value={draft[field]} disabled={Boolean(edgeActionId)} placeholder="查找选择后自动填写，也可直接输入 ID"
+                  onChange={event => chooseScene(side, event.target.value)} required /></label>
+                {draft[field].trim() && <button type="button" onClick={() => openScenePreview(draft[field].trim(), {
+                  name: sceneChoices[side]?.id === draft[field] ? sceneChoices[side].title : "",
+                })}>读取{label}全文 / 核对证据</button>}
+              </div>
+            ))}
             <label>关系
               <select value={draft.relationType} onChange={(event) => setDraft((current) => ({ ...current, relationType: event.target.value }))}>
                 <option value="continues">延续</option>
