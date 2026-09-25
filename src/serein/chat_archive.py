@@ -3,6 +3,7 @@ import re
 
 from .chat_context import ClientContext
 from .compat.raw_archive import raw_archive
+from .compat.germany.raw_text import strip_worldbook_context
 from .core.store import digest, encode, now
 
 
@@ -11,6 +12,8 @@ def original(message):
     text = context._coerce_message_text(message.get('content'))
     # Clients can echo a previously prepared user message on tool continuations.
     text = re.sub(r'<serein_live_context>.*?</serein_live_context>\s*(?:Current user message:\s*)?', '', text, flags=re.S)
+    # Clean before turn identity is hashed, not only when the row is inserted.
+    text = strip_worldbook_context(text)
     text = context._strip_external_context_from_user_text(text).strip()
     images = []
     content = message.get('content')
@@ -34,6 +37,10 @@ def prepare_turn(window_id, incoming):
             continue
         item = original(message)
         if not item['text']:
+            # A context-only user turn must not reuse an older dialogue anchor.
+            # Native tool-result user messages still continue the original turn.
+            if item['role'] == 'user' and not ClientContext._message_has_tool_protocol(message):
+                anchor = None
             continue
         history = digest(encode([history, item]))
         if item['role'] == 'user':

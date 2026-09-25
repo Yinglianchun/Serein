@@ -28,3 +28,15 @@ choosing the first upstream. This configuration does not provide key rotation or
   incomplete/failed streams do not become successful delivery receipts.
 - The public host uses a five-response recent-card window. The core still checks
   cooldown after selecting the final cards and never substitutes a third-place candidate.
+
+## Worldbook and raw dialogue
+
+完整的 `<worldbook>…</worldbook>` 是客户端背景设定，不是用户本轮原话。
+召回查询和新增原话归档都会排除整个区块（包括多个 entry、多段、多行、大小写与带属性的标签），
+保留区块外的对话文字和图片附件。归档在生成本轮去重标识之前清理世界书，直接 raw ingest
+也执行同样的过滤；只有世界书而没有正文或图片的当前用户消息不会创建新的原话或冒用历史轮次。
+工具续接仍沿用原有轮次。世界书之外的独立 `<entry>` 和未闭合的标签不按完整世界书删除。
+
+此过滤只作用于原话/查询投影，不删除转发给聊天模型的世界书，也不依赖 Operit 重写开关。
+升级不会批量改写已有原话、Event、归线缓存或已冻结的整理任务。已污染的历史材料和由其生成的
+Event 需要另行核查，不能仅靠更新代码或点击“继续整理”保证自动清理。

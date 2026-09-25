@@ -16,8 +16,18 @@ SELF_CLOSING_ATTACHMENT_RE = re.compile('<attachment\\b[^>]*/>', re.IGNORECASE)
 WORKSPACE_ATTACHMENT_RE = re.compile('<workspace_attachment>[\\s\\S]*?</workspace_attachment>', re.IGNORECASE)
 CLIENT_CONTEXT_BLOCK_TITLES = {'当前时间', '当前电量', '当前天气', '当前位置', '当前屏幕应用', '应用使用时长', '最近通知', '相关记忆', '屏幕文本'}
 
+# Match the complete Operit envelope, not individual entries or arbitrary XML.
+WORLDBOOK_RE = re.compile(r"<worldbook\b[^>]*>[\s\S]*?</worldbook\s*>", re.IGNORECASE)
+
+
+def strip_worldbook_context(text: str) -> str:
+    """Project speech for recall/archive; never mutate the upstream message."""
+    return WORLDBOOK_RE.sub("\n", str(text or ""))
+
+
 def strip_raw_client_context(text: str) -> str:
-    cleaned = WORKSPACE_ATTACHMENT_RE.sub('', str(text or ''))
+    cleaned = strip_worldbook_context(text)
+    cleaned = WORKSPACE_ATTACHMENT_RE.sub('', cleaned)
     cleaned = CLIENT_ATTACHMENT_RE.sub('', cleaned)
     cleaned = SELF_CLOSING_ATTACHMENT_RE.sub('', cleaned)
     cleaned = _strip_client_context_blocks(cleaned)
