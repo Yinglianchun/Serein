@@ -327,7 +327,7 @@ class ClientContext:
             if cleaned == previous:
                 return cleaned
 
-    def _strip_external_context_blocks(self, text: str) -> str:
+    def _strip_external_context_blocks(self, text: str, protected_markers: tuple[str, ...] = ()) -> str:
         kept: list[str] = []
         skipping = False
         for line in str(text or "").splitlines():
@@ -338,7 +338,11 @@ class ClientContext:
             if title:
                 skipping = title in EXTERNAL_CONTEXT_BLOCK_TITLES
                 if skipping:
+                    kept.extend(marker for marker in protected_markers if marker in line)
                     continue
+            if skipping and protected_markers:
+                kept.extend(marker for marker in protected_markers if marker in line)
+                continue
             if not skipping:
                 kept.append(line)
         return "\n".join(kept).strip()
@@ -874,10 +878,16 @@ class ClientContext:
 
         stable_parts: list[str] = []
         activity_parts: list[str] = []
+        ordinary_attachments: list[tuple[str, str]] = []
 
         def collect_from_attachment(match: re.Match) -> str:
+            block = match.group(0)
+            if not self._text_contains_operit_context(block.split(">", 1)[0]):
+                marker = f"\x00serein_ordinary_attachment_{len(ordinary_attachments)}\x00"
+                ordinary_attachments.append((marker, block))
+                return marker
             stable, activity = self._operit_context_sections_from_text(
-                self._inner_text_from_tag_block(match.group(0), "attachment"),
+                self._inner_text_from_tag_block(block, "attachment"),
             )
             stable_parts.extend(stable)
             activity_parts.extend(activity)
@@ -891,11 +901,22 @@ class ClientContext:
 
         without_workspace = WORKSPACE_ATTACHMENT_RE.sub(collect_from_workspace, raw)
         without_attachments = EXTERNAL_CONTEXT_ATTACHMENT_RE.sub(collect_from_attachment, without_workspace)
-        without_attachments = SELF_CLOSING_ATTACHMENT_RE.sub("", without_attachments)
-        stable, activity = self._operit_context_sections_from_text(without_attachments)
+        without_attachments = SELF_CLOSING_ATTACHMENT_RE.sub(
+            lambda match: "" if self._text_contains_operit_context(match.group(0)) else match.group(0),
+            without_attachments,
+        )
+        section_text = without_attachments
+        for marker, _ in ordinary_attachments:
+            section_text = section_text.replace(marker, "")
+        stable, activity = self._operit_context_sections_from_text(section_text)
         stable_parts.extend(stable)
         activity_parts.extend(activity)
-        cleaned = self._strip_external_context_from_user_text(raw)
+        cleaned = self._strip_external_context_blocks(
+            self._strip_leading_auto_context_markers(without_attachments),
+            tuple(marker for marker, _ in ordinary_attachments),
+        )
+        for marker, block in ordinary_attachments:
+            cleaned = cleaned.replace(marker, block)
         return cleaned, stable_parts, activity_parts, True
 
     @staticmethod

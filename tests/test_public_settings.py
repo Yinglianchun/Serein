@@ -241,6 +241,47 @@ def test_query_prefixes_and_operit_context_are_not_user_speech():
     assert context._extract_current_turn_user_query([{'role':'user','content':text},{'role':'tool','content':'result','tool_call_id':'tool-a'}])==''
 
 
+def test_operit_rewrite_preserves_ordinary_text_attachments():
+    context = ClientContext()
+    ordinary = '<attachment type="pasted_text">ordinary proof 【当前天气】 belongs to the pasted text</attachment>'
+    auto = '<attachment type="message_insert_extra_bundle">【当前天气】Sunny\n【固定规则】Answer briefly</attachment>'
+    for content in (f'Question\n{auto}\n{ordinary}', f'Question\n{ordinary}\n{auto}'):
+        rewritten, stable, activity, debug = context._rewrite_operit_context_for_forward(
+            [{'role':'user','content':content}])
+        assert debug['applied'] is True
+        assert ordinary in rewritten[-1]['content']
+        assert auto not in rewritten[-1]['content']
+        assert 'Answer briefly' in stable and 'Sunny' in activity
+        assert 'ordinary proof' not in stable + activity
+    rewritten, stable, activity, debug = context._rewrite_operit_context_for_forward(
+        [{'role':'user','content':f'Question\n{ordinary}'}])
+    assert rewritten[-1]['content'] == f'Question\n{ordinary}'
+    assert not stable and not activity and debug['applied'] is False
+    multiline = '<attachment type="pasted_text">\n【当前天气】This is quoted evidence\nKeep this line\n</attachment>'
+    rewritten, _, activity, _ = context._rewrite_operit_context_for_forward(
+        [{'role':'user','content':f'Question\n{auto}\n【当前天气】Cloudy\n{multiline}'}])
+    assert multiline in rewritten[-1]['content']
+    assert 'This is quoted evidence' not in activity
+
+
+def test_mixed_operit_and_ordinary_attachments_reach_upstream(deployment, monkeypatch):
+    _, client = deployment
+    configure(client).raise_for_status()
+    forwarded = []
+    async def complete(model, payload, **options):
+        forwarded.append(payload['messages'])
+        return {'choices':[{'message':{'role':'assistant','content':'Synthetic reply'}}]}
+    monkeypatch.setattr('serein.api.chat.complete', complete)
+    ordinary = '<attachment type="pasted_text">Synthetic pasted evidence</attachment>'
+    auto = '<attachment type="message_insert_extra_bundle">【当前天气】Sunny</attachment>'
+    response = client.post('/v1/chat/completions', json={
+        'messages':[{'role':'user','content':f'Question\n{auto}\n{ordinary}'}]})
+    assert response.status_code == 200, response.text
+    assert ordinary in forwarded[0][-1]['content']
+    assert auto not in forwarded[0][-1]['content']
+    assert 'Sunny' in forwarded[0][-1]['content']
+
+
 @pytest.mark.parametrize('content,expected', [
     ('<worldbook><entry name="A">Old topic</entry><entry name="B">Other topic</entry></worldbook>Current question', 'Current question'),
     ('Before<worldbook>\n<entry name="A">First\nSecond</entry>\n<entry name="B">Third</entry>\n</worldbook>After', 'Before\nAfter'),
