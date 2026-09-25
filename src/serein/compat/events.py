@@ -17,6 +17,7 @@ from .germany.fact_events import FactEventStore, FactEventSettlementBlockedError
 
 _settling = ContextVar('event_settlement', default=False)
 _settlement_check = ContextVar('event_settlement_check', default=None)
+_append_only_predecessors = ContextVar('append_only_predecessors', default=frozenset())
 
 
 class EventConnection(sqlite3.Connection):
@@ -91,9 +92,15 @@ class Events(FactEventStore):
     def settle(self, operation_id, raw_items, *, before_commit=None):
         check_marker = _settlement_check.set(before_commit)
         marker = _settling.set(True)
+        append_marker = _append_only_predecessors.set(frozenset(
+            predecessor for item in (raw_items if isinstance(raw_items, list) else [])
+            if isinstance(item, dict) and item.get('append_only') is True
+            for predecessor in (item.get('supersedes_item_ids')
+                                if isinstance(item.get('supersedes_item_ids'), list) else [])))
         try:
             return super().settle(operation_id, raw_items)
         finally:
+            _append_only_predecessors.reset(append_marker)
             _settling.reset(marker)
             _settlement_check.reset(check_marker)
 
@@ -129,6 +136,24 @@ def reference_blockers(conn, key):
     return reasons
 
 
+def _protected_append_preserves(conn, predecessor_id):
+    """Allow a referenced old version to remain untouched when its successor appends."""
+    if predecessor_id not in _append_only_predecessors.get():
+        return False
+    predecessor = conn.execute('SELECT title,body,recallable FROM fact_events WHERE item_id=?',
+                               (predecessor_id,)).fetchone()
+    successors = conn.execute('SELECT e.title,e.body,e.recallable,e.status FROM fact_event_replacement_edges r '
+                              'JOIN fact_events e ON e.item_id=r.successor_id WHERE r.predecessor_id=?',
+                              (predecessor_id,)).fetchall()
+    if predecessor is None or len(successors) != 1:
+        return False
+    successor = successors[0]
+    return (successor['status'] == 'active' and successor['title'] == predecessor['title']
+            and successor['recallable'] == predecessor['recallable']
+            and str(successor['body']).startswith(str(predecessor['body']) + '\n\n')
+            and bool(str(successor['body'])[len(str(predecessor['body'])) + 2:].strip()))
+
+
 def project_events(conn):
     conn.execute("INSERT OR IGNORE INTO event_settlement_receipts "
         "SELECT operation_id,request_sha256,result_json,created_at,'germany_event' FROM fact_event_settlement_operations")
@@ -158,7 +183,7 @@ def project_events(conn):
             or old['manual_surface'] != row['recallable'])
         if _settling.get() and old and old['lifecycle']=='active' and lifecycle=='superseded':
             blockers = reference_blockers(conn, key)
-            if blockers:
+            if blockers and not _protected_append_preserves(conn, key):
                 raise FactEventSettlementBlockedError(','.join(blockers))
         if old is None:
             store.create(key, 'event', row['title'], row['body'], metadata=meta,

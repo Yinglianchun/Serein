@@ -48,7 +48,7 @@ def test_three_stage_image_chain_preserves_bytes_transcription_and_raw_sources(s
             assert isinstance(payload['messages'][1]['content'],str) and PNG not in payload['messages'][1]['content']
         result=check(request)
         if request['role']=='event_writer' and seen.count('event_writer')==1:
-            result['self_review']['result_preserved']=False
+            result['sentence_evidence'][0]['source_spans'][0]['quote']='not in original'
         return {'choices':[{'message':{'content':json.dumps(result)}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     result=asyncio.run(p.advance(settings.database,include_recent=True))
@@ -126,7 +126,7 @@ def test_writer_structure_without_lexical_style_rejection():
     assert 'result_or_unfinished' not in value
     assert latest.validate_event_writer_result(value)==[]
     value['self_review']['result_preserved']=False
-    assert latest.validate_event_writer_result(value)
+    assert latest.validate_event_writer_result(value)==[]
 
 
 def test_api_configuration_conflicts_and_execution_freezes_all_stage_models(settings,monkeypatch):

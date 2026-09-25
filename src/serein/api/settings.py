@@ -188,6 +188,10 @@ class PipelinePatch(BaseModel):
     timeout_seconds: int | None = Field(default=None,ge=30,le=1800)
     event_writer_concurrency: int | None = Field(default=None,ge=1,le=8,strict=True)
     track_lookback_days: int | None = Field(default=None,ge=1,le=365,strict=True)
+    joint_review_enabled: bool | None = None
+    material_review_enabled: bool | None = None
+    round_gate_enabled: bool | None = None
+    append_protected_enabled: bool | None = None
 
 
 class RecallPatch(BaseModel):

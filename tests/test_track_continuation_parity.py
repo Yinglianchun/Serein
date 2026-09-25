@@ -136,7 +136,9 @@ def test_individual_message_routes_and_bridge_ownership(settings):
     first = assignments[0]['primary_track_id']
     second = assignments[1]['primary_track_id']
     assert first != second
-    components = {item['track_ids'][0]: item for item in data['components']}
+    assert len(data['components']) == 2
+    components = {item['track_ids'][0]: item for item in p.components(
+        settings.database, {**data, 'joint_review': False}, data['routing_result'])}
     assert set(components) == {first, second}
 
     first_component = components[first]
@@ -199,8 +201,33 @@ def _two_track_bridge_batch(settings):
     assignments = data['routing_result']['assignments']
     first = assignments[0]['primary_track_id']
     second = assignments[1]['primary_track_id']
-    components = {item['track_ids'][0]: item for item in data['components']}
+    components = {item['track_ids'][0]: item for item in p.components(
+        settings.database, {**data, 'joint_review': False}, data['routing_result'])}
     return batch, data, first, second, components[first], components[second]
+
+
+def test_joint_curator_requires_declared_bridge_evidence(settings):
+    save_settings(settings.database, {'pipeline': {'joint_review_enabled': True}})
+    batch, data, first, second, _, _ = _two_track_bridge_batch(settings)
+    component = data['components'][0]
+    assert set(component['track_ids']) == {first, second}
+    proposal = {'events': [{'action': 'create', 'primary_track_id': first,
+                            'base_event_ids': [], 'owned_unit_roots': [1, 2, 3, 4]}],
+                'skip_unit_roots': [], 'defer_unit_roots': [],
+                'decision_review': {'events': [{'event_index': 0, 'reason': 'One continued map check'}],
+                                    'boundaries': [], 'dispositions': [],
+                                    'continuations': [{'event_index': 0, 'left_track_id': first,
+                                                       'right_track_id': second, 'bridge_unit_root': 3,
+                                                       'reason': 'The second check continues the first',
+                                                       'evidence': [
+                                                           {'source_message_id': 3, 'quote': 'Synthetic turn 3'},
+                                                           {'source_message_id': 2, 'quote': 'Synthetic turn 2'}]}]}}
+    plan = latest.normalize_event_curator_output(proposal, component)
+    assert len(plan['events']) == 1
+    assert set(plan['events'][0]['source_message_ids']) == {1, 2, 3, 4}
+    proposal['decision_review']['continuations'][0]['evidence'][1]['quote'] = 'missing quote'
+    with pytest.raises(ValueError, match='verbatim'):
+        latest.normalize_event_curator_output(proposal, component)
 
 
 def test_bridge_deferral_on_one_corridor_blocks_global_source_settlement(settings):
@@ -247,6 +274,35 @@ def test_bridge_deferral_on_one_corridor_blocks_global_source_settlement(setting
         assert store.conn.execute("SELECT count(*) FROM documents WHERE kind='event'").fetchone()[0] == 1
     assert 3 not in outcomes
     assert outcomes == {1: 'settled', 4: 'skipped'}
+
+
+def test_protected_append_requires_explicit_opt_in_and_new_stable_source(settings):
+    _, _, _, second, _, component = _two_track_bridge_batch(settings)
+    session = component['messages'][0]['session_id']
+    component['context_messages'].append({**component['messages'][0], 'id': 10,
+                                          'content': 'The notebook cover was loose.'})
+    component['base_event_candidates'] = [{
+        'event_id': 'earlier-notebook', 'primary_track_id': second,
+        'session_ids': [session], 'source_message_ids': [10],
+        'predecessor_event_ids': [], 'active': True, 'protected': True,
+        'continuation_allowed': True,
+    }]
+    proposal = {'events': [{'action': 'extend', 'primary_track_id': second,
+                            'base_event_ids': ['earlier-notebook'], 'owned_unit_roots': [4]}],
+                'skip_unit_roots': [2, 3], 'defer_unit_roots': [],
+                'decision_review': {'events': [{'event_index': 0, 'reason': 'New stitch follows repair'}],
+                                    'boundaries': [], 'dispositions': [{
+                                        'disposition': 'skip', 'unit_roots': [2, 3],
+                                        'reason': 'Unrelated synthetic turns',
+                                        'parked_source_message_ids': []}]}}
+    without_opt_in = latest.normalize_event_curator_output(proposal, component)
+    assert without_opt_in['events'] == []
+    assert 4 in without_opt_in['defer_source_message_ids']
+    component['append_protected'] = True
+    with_opt_in = latest.normalize_event_curator_output(proposal, component)
+    assert len(with_opt_in['events']) == 1
+    assert with_opt_in['events'][0]['append_only'] is True
+    assert set(with_opt_in['events'][0]['source_message_ids']) == {4, 10}
 
 
 def test_bridge_settlement_beats_other_corridor_skip(settings):
@@ -439,12 +495,14 @@ def test_context_only_track_keeps_anchor_and_last_real_window():
     assert by_id['unused']['status'] == 'parked' and by_id['unused']['last_session_id'] == 'previous'
 
 
-def test_old_pending_contract_is_retired_without_processing_raw_data(settings):
+@pytest.mark.parametrize('old_contract', ['public-event-scene-context-v1',
+                                          'public-event-message-tracks-v7'])
+def test_old_pending_contract_is_retired_without_processing_raw_data(settings, old_contract):
     ingest(settings)
     p.initialize(settings.database)
     batch = p.new_batch(settings.database, True)
     with Store(settings.database) as store:
-        data = json.loads(batch['input_json']);data['contract'] = 'public-event-scene-context-v1'
+        data = json.loads(batch['input_json']);data['contract'] = old_contract
         store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?', (encode(data), batch['id']))
     p.initialize(settings.database)
     with Store(settings.database, read_only=True) as store:

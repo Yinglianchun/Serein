@@ -311,6 +311,10 @@ class FactEventStore:
             )
             if raw_predecessors is not None and not predecessors:
                 raise ValueError("supersedes_item_ids must be non-empty when present")
+            if type(raw.get("append_only", False)) is not bool or (
+                raw.get("append_only") is True and len(predecessors) != 1
+            ):
+                raise ValueError("append_only requires exactly one predecessor")
             if predecessor_ids.intersection(predecessors):
                 raise ValueError("a predecessor may appear in only one settlement item")
             predecessor_ids.update(predecessors)
@@ -365,7 +369,7 @@ class FactEventStore:
                     conn.rollback()
                     return stored
 
-                for _, item, predecessors, expected in prepared:
+                for index, item, predecessors, expected in prepared:
                     existing = None
                     if item["origin_id"]:
                         existing = conn.execute(
@@ -417,7 +421,7 @@ class FactEventStore:
                             )
                         predecessor = conn.execute(
                             """
-                            SELECT item_type, status, fingerprint
+                            SELECT item_type, status, fingerprint, title, body, recallable
                             FROM fact_events WHERE item_id=?
                             """,
                             (predecessor_id,),
@@ -458,6 +462,16 @@ class FactEventStore:
                             raise FactEventSettlementBlockedError(
                                 f"replacement drops predecessor sources: {predecessor_id}"
                             )
+                        if raw_items[index].get("append_only") is True:
+                            prefix = str(predecessor["body"]) + "\n\n"
+                            if (item["title"] != predecessor["title"]
+                                    or item["recallable"] != predecessor["recallable"]
+                                    or not str(item["body"]).startswith(prefix)
+                                    or not str(item["body"])[len(prefix):].strip()
+                                    or replacement_source_keys == actual_source_keys):
+                                raise FactEventSettlementBlockedError(
+                                    "append_only must preserve predecessor prose/settings and add new sources"
+                                )
 
                 results: list[dict[str, Any]] = []
                 for index, item, predecessors, _ in prepared:

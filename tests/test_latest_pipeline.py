@@ -64,7 +64,8 @@ def test_three_stages_and_writer_sees_exact_predecessor_originals(settings):
     task=asyncio.run(p.advance(settings.database,include_recent=True));prompt=task['request']['prompt']
     assert len(task['request']['messages'])==4
     assert task['role']=='event_writer' and 'Book club plan 1' in prompt and 'Book club plan 2' in prompt
-    assert '<previous_events_json>' in prompt and '正文最多 1000 字，这是写作硬上限而非目标' in prompt
+    assert '<previous_events_json>' in prompt and '正文通常控制在 500 字以内' in prompt
+    assert task['request']['rules'] and task['request']['rules'] not in prompt
     with Store(settings.database) as store:
         detail=json.loads(store.conn.execute('SELECT details_json FROM pipeline_event_details').fetchone()[0])
         assert 'evidence' not in detail
@@ -97,6 +98,8 @@ def test_writer_body_uses_1000_guidance_with_1500_tolerance():
     assert '正文超过容错上限 1500 字：1501 字' in ' '.join(latest.validate_event_writer_result(output))
     output['title']=''
     assert '标题为空' in latest.validate_event_writer_result(output)
+    output['kept_details']=['anchor']*13
+    assert any('最多 12 项' in error for error in latest.validate_event_writer_result(output))
 
 
 def test_public_writer_materializes_source_grounded_rules_with_configured_names():
@@ -173,6 +176,34 @@ def test_writer_prompt_examples_match_both_evidence_outcomes():
     assert insufficient['evidence_sufficient'] is False and insufficient['recallable'] is False
     assert insufficient['title']==insufficient['event_draft']==''
     assert insufficient['kept_details']==insufficient['discarded_details']==[]
+
+
+def test_writer_accepts_current_receiptless_output_and_diagnostic_review(settings):
+    ingest(settings)
+    curator=curator_task(settings)
+    p.submit(settings.database,curator['job_id'],output_for(curator['role'],curator['request']))
+    task=asyncio.run(p.advance(settings.database,include_recent=True))
+    output=output_for('event_writer',task['request'])
+    output.pop('claim_groups')
+    output.pop('sentence_evidence')
+    output['self_review']['result_preserved']=False
+    p.submit(settings.database,task['job_id'],output)
+    assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
+
+
+def test_writer_optional_receipt_still_checks_owned_quotes():
+    output=output_for('event_writer',{'messages':[{'id':1,'content':'The blue notebook arrived.'}]})
+    output['sentence_evidence'][0]['source_spans'][0]['quote']='invented quote'
+    assert any('逐字' in error for error in latest.validate_event_writer_result(output,
+        [{'id':1,'content':'The blue notebook arrived.'}]))
+
+
+def test_writer_insufficient_output_requires_review_object_but_not_true_checks():
+    output={'evidence_sufficient':False,'recallable':False,'title':'','event_draft':'',
+            'kept_details':[],'discarded_details':[]}
+    assert 'self_review 缺失或不是对象' in latest.validate_event_writer_result(output)
+    output['self_review']={'owned_evidence_sufficient':True}
+    assert latest.validate_event_writer_result(output)==[]
 
 
 @pytest.mark.parametrize('accepted',[False,True])

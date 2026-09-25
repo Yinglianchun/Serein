@@ -7,6 +7,7 @@ from ..core.store import Store, Conflict, encode, digest, now
 from ..deployment import identity, task_model, read_settings
 from .pipeline_limits import blocks, allowed_ids
 from ..compat.events import Events, reference_blockers
+from ..compat.germany.fact_events import FactEventStore
 from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
 from . import pipeline_latest as latest
 from .pipeline_config import snapshot, execution
@@ -18,7 +19,7 @@ from . import pipeline_tracks as track_state
 
 ROLES=('track_router','event_curator','event_writer')
 TZ=timezone(timedelta(hours=8))
-CONTRACT='public-event-message-tracks-v7'
+CONTRACT='public-event-message-tracks-v8'
 EVENT_CURATOR_MAX_ACTIVE_LEAVES_PER_TRACK=8
 
 
@@ -321,6 +322,8 @@ def save_routing_snapshot(database,batch,data,routed):
     validate_routing_result(data,routed)
     from .pipeline_recovery import assert_downstream_snapshot
     assert_downstream_snapshot(database,batch,data)
+    if 'components' not in data:
+        data['joint_review']=bool(data['input_policy'].get('joint_review_enabled',False))
     fresh=components(database,data,routed,include_materials='components' not in data)
     if 'components' in data and _component_signature(data['components'])!=_component_signature(fresh):
         raise RoutingRecoveryError('frozen components disagree with recovered routing result')
@@ -453,9 +456,18 @@ def candidates(database,track_ids,*,overflow_out=None):
                 detail=store.conn.execute('SELECT details_json FROM pipeline_event_details WHERE event_id=?',(row['item_id'],)).fetchone()
                 details=json.loads(detail[0]) if detail else {}
                 blockers=reference_blockers(store.conn,row['item_id'])
+                family=FactEventStore._replacement_family_payload(store.conn,row['item_id']) if blockers else {}
+                family_ids=list(family.get('family_ids') or [])
+                trusted=bool(family_ids) and all(str(origin or '').startswith('assistant_bridge:')
+                    for origin, in store.conn.execute('SELECT origin_id FROM fact_events WHERE item_id IN ('+
+                        ','.join('?' for _ in family_ids)+')',family_ids))
                 result.append({**dict(row),'event_id':row['item_id'],'primary_track_id':track,'track_id':track,'source_refs':refs,'originals':originals,
                     'source_message_ids':[m['id'] for m in originals],'session_ids':list({m['session_id'] for m in originals}),
-                    'source_activity_roles':details.get('source_activity_roles',{}),'blocked':bool(blockers),'blocking_reasons':blockers})
+                    'source_activity_roles':details.get('source_activity_roles',{}),'blocked':bool(blockers),
+                    'protected':bool(blockers),'manual':not str(dict(row).get('origin_id') or '').startswith('assistant_bridge:'),
+                    'blocking_reasons':blockers,
+                    'continuation_allowed':bool(blockers) and trusted and bool(family.get('ok'))
+                        and bool(family.get('is_exact_active_leaf')) and not bool(family.get('forked'))})
     return result
 
 
@@ -466,6 +478,7 @@ def components(database,data,routed,*,include_materials=True):
     it never unions the full histories or base Events of both Tracks.
     """
     assignments,tracks,_=route_result(data,routed)
+    policy=data.get('input_policy') or {}
     memberships,edges=routing_units(data['routing_messages'],assignments)
     by_id={row['id']:row for row in data['routing_messages']}
     stable_ids={m['id'] for m in data['messages']}
@@ -510,7 +523,16 @@ def components(database,data,routed,*,include_materials=True):
             'base_event_candidates':bases,
             'base_event_candidate_overflow':overflow,
             'context_session_ids':list({m['session_id'] for m in context.values()}),
+            'writer_material_review':bool(policy.get('material_review_enabled',False)),
+            'writer_round_gate':bool(policy.get('round_gate_enabled',False)),
+            'append_protected':bool(policy.get('append_protected_enabled',False)),
         })
+    if data.get('joint_review'):
+        from .pipeline_continuity import bounded_components
+        result=bounded_components(result)
+    if policy.get('round_gate_enabled',False):
+        from .pipeline_admission import add_lookahead
+        add_lookahead(result)
     return result
 
 
@@ -587,10 +609,18 @@ def request_for(database,batch,role,**fields):
                 prompt+='\n必须逐张转录图片里的可见原文，标题、正文、评论按区块保留；在同一 text 中用 [画面] 简述可见人物、物件、布局和关系，用 [文字] 放逐字转录。没有文字也保留画面描述；不猜身份、动机或前后经过，看不清标 unreadable。Writer 只读转录，不接收原图。最终 JSON 额外包含 image_transcriptions 数组，每图恰好一项：'+encode({'input_image':1,'text':'可见原文与画面描述','unreadable':False})
         else:
             event=fields['event'];component=fields['component']
+            selected_bases=[base for base in component['base_event_candidates'] if base['event_id'] in event['base_event_ids']]
+            append_only=bool(event.get('append_only'))
             prompt=latest.build_event_writer_prompt(data['day'],'',fields['messages'],context_messages=component['context_messages'],
                 track_cards=component['track_cards'],source_activity_roles={int(b['source_message_id']):b['activity_role'] for b in event['source_bindings']},
-                previous_events=[b for b in component['base_event_candidates'] if b['event_id'] in event['base_event_ids']],
-                track_context_events=component['base_event_candidates'])
+                previous_events=[] if append_only else selected_bases, include_role_rules=False,
+                track_context_events=([*component['base_event_candidates'],*selected_bases]
+                                      if append_only else component['base_event_candidates']),
+                source_materials=[row for row in event.get('source_materials',[])
+                                  if row['source_message_id'] in {message['id'] for message in fields['messages']}]
+                    if event.get('source_materials') is not None else None)
+            if append_only:
+                prompt+='\n旧 Event 受保护：只写新 owned 原文构成的后续段落；旧正文由程序原样保留并追加，不重写旧标题或召回设置。\n'
             owned={m['id'] for m in fields['messages']};allowed={m['id'] for m in component['context_messages']}
             bound_images=[{**item,'evidence_role':'owned' if item['source_message_id'] in owned else 'context_only'} for item in component.get('images',[]) if item['source_message_id'] in allowed]
             request['curator_image_transcriptions']=[{**item,'evidence_role':'owned' if item['source_message_id'] in owned else 'context_only'} for item in component.get('curator_image_transcriptions',[]) if item['source_message_id'] in allowed]
@@ -664,6 +694,8 @@ def submit(database,job_id,output):
 
 def _submit(database,job_id,output):
     initialize(database)
+    if isinstance(output,dict) and 'claim_groups' in output:
+        latest.canonicalize_claim_group_ids(output)
     encoded_output=encode(output)
     with Store(database,read_only=True) as store:
         row=store.conn.execute('SELECT j.*,b.status FROM pipeline_jobs j JOIN pipeline_batches b ON b.id=j.batch_id WHERE j.id=?',(job_id,)).fetchone()
@@ -811,12 +843,21 @@ def settle(database,batch,data,routed,plans):
                 m=by_id[key]
                 refs.append({'source_system':m['source'],'session_id':m['original_session_id'],'message_id':m.get('source_event_id') or str(key),'role':m['role'],'created_at':m['created_at'],'content':m['content'],'binding_method':'archive_pipeline','evidence_kind':'primary' if not refs else 'supporting'})
             refs=list({source_key(ref):ref for ref in refs}.values())
-            item={'type':'event','title':written['title'],'body':written['event_draft'],'recallable':written['recallable'],'source_refs':refs,
-                'origin_id':'assistant_bridge:'+batch['id']+':'+str(len(items))}
             bases=[b for b in component['base_event_candidates'] if b['event_id'] in event['base_event_ids']]
+            append_only=bool(event.get('append_only'))
+            if append_only:
+                if len(bases)!=1 or not str(written['event_draft']).strip():
+                    raise ValueError('Protected continuation requires one base and new prose')
+                title=bases[0]['title'];body=bases[0]['body']+'\n\n'+written['event_draft'].strip()
+                recallable=None if bases[0]['recallable'] is None else bool(bases[0]['recallable'])
+            else:
+                title=written['title'];body=written['event_draft'];recallable=written['recallable']
+            item={'type':'event','title':title,'body':body,'recallable':recallable,'source_refs':refs,
+                'origin_id':'assistant_bridge:'+batch['id']+':'+str(len(items))}
             if bases:
                 item.update(supersedes_item_ids=[b['event_id'] for b in bases],expected_predecessors=[{'item_id':b['event_id'],'fingerprint':b['fingerprint'],
                     'source_keys':[dict(zip(('source_system','session_id','message_id'),source_key(ref))) for ref in b['source_refs']]} for b in bases])
+            if append_only:item['append_only']=True
             items.append(item);details.append({'track_id':event['primary_track_id'],'writer':written,
                 'curator_decision_review':plan.get('decision_review'),
                 'curator_image_transcriptions':written.get('curator_image_transcriptions',[]),
@@ -934,7 +975,8 @@ async def first_event_writer_pass(database,batch,component,plan,index,runner):
     """Run frozen first Writer requests concurrently; preserve ordinal result order."""
     by_id={m['id']:m for m in component['context_messages']}
     async def invoke_one(ordinal,event):
-        owned=[by_id[key] for key in event['source_message_ids']]
+        stable={message['id'] for message in component['messages']}
+        owned=[by_id[key] for key in event['source_message_ids'] if not event.get('append_only') or key in stable]
         request=request_for(database,batch,'event_writer',messages=owned,event=event,component=component)
         written=await job(database,batch,request,f'event_writer:{index}:{ordinal}',runner)
         return event,written,request,owned
@@ -1010,6 +1052,8 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
                 from ..image_transcription import persist_transcriptions
                 persist_transcriptions(database,component['curator_image_transcriptions'])
             plan=latest.normalize_event_curator_output(decision(output),component);event_results=[]
+            from .pipeline_admission import apply_gate
+            plan=apply_gate(plan,component)
             first_results=await first_event_writer_pass(database,batch,component,plan,index,runner)
             # Any bounded context read remains serial: it can create shared image
             # transcription work and must not race another Writer's repair path.
