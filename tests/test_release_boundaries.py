@@ -7,6 +7,16 @@ import sys
 import pytest
 
 
+def test_release_includes_runtime_python_modules():
+    root = Path(__file__).resolve().parents[1]
+    manifest = set(json.loads((root/'release-files.json').read_text(encoding='utf-8')))
+    modules = {
+        path.relative_to(root).as_posix()
+        for path in (root/'src'/'serein').rglob('*.py')
+    }
+    assert modules <= manifest, sorted(modules - manifest)
+
+
 @pytest.mark.parametrize('private_path',[
     'deploy/secrets/api-token','deploy/runtime/settings.json',
     'deploy/installation.json','deploy/venv/pyvenv.cfg',

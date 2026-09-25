@@ -187,6 +187,7 @@
   "src/serein/extensions/pipeline_config.py",
   "src/serein/extensions/pipeline_images.py",
   "src/serein/extensions/pipeline_latest.py",
+  "src/serein/extensions/pipeline_audit.py",
   "src/serein/extensions/pipeline_continuity.py",
   "src/serein/extensions/pipeline_materials.py",
   "src/serein/extensions/pipeline_admission.py",
