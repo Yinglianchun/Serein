@@ -210,7 +210,8 @@ def test_import_boundary_keeps_concurrent_new_chats_and_retires_mixed_plan(setti
     p.initialize(settings.database)  # Upgrade recovers historical import membership.
     with Store(settings.database) as store:
         assert store.conn.execute("SELECT status FROM pipeline_batches WHERE id='old-mixed'").fetchone()[0]=='superseded_import_boundary'
-        assert {r[0] for r in store.conn.execute('SELECT raw_id FROM raw_processing')}==set(imported)
+        assert store.conn.execute("SELECT count(*) FROM raw_processing WHERE outcome='archived_only'").fetchone()[0]==0
+        assert store.conn.execute('SELECT released FROM pipeline_import_boundaries WHERE upload_id=?',(upload['id'],)).fetchone()[0]==0
     batch=p.new_batch(settings.database,True)
     assert batch and all(m['id'] not in imported for m in json.loads(batch['input_json'])['messages'])
     calls=[]
@@ -439,7 +440,7 @@ def test_legacy_116_originals_eleven_router_jobs_resume_without_repeating_them(s
     with Store(settings.database) as store:
         messages=[p.message(row) for row in store.conn.execute('SELECT * FROM raw_events ORDER BY id')]
         scope=digest(encode(['synthetic','legacy']))[:20]
-        data={'contract':p.CONTRACT,'messages':messages,'parked':[],'routing_messages':messages,'tracks':[],
+        data={'contract':p.CONTRACT,'runtime_revision':p.runtime_revision(),'messages':messages,'parked':[],'routing_messages':messages,'tracks':[],
               'scope':scope,'source':'synthetic','recent':[],'day':'2025-01-01'}
         batch={'id':'pipeline:legacy116','scope':scope,'input_json':encode(data)}
         store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json) VALUES (?,?,?)',tuple(batch.values()))
