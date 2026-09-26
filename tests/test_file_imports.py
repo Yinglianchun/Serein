@@ -325,3 +325,19 @@ def test_retry_one_preserves_success_and_other_failures(settings):
     with Store(settings.database) as store:
         rows=store.conn.execute('SELECT document_id,status,attempts,error FROM import_tag_jobs ORDER BY document_id').fetchall()
         assert [tuple(row) for row in rows]==[('a','pending',3,'prior reason'),('b','failed',3,'prior reason'),('c','done',3,'prior reason')]
+
+def test_import_history_uses_compact_boundary_without_consuming_live_chat(settings):
+    from serein.compat.raw_archive import raw_archive
+    preview=stage(settings.database,json.dumps(messages(2)),'history.json','auto',False)
+    assert advance_import(settings,preview['id'])['inserted']==2
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM pipeline_import_boundaries').fetchone()[0]==1
+        assert store.conn.execute("SELECT count(*) FROM raw_processing WHERE outcome='archived_only'").fetchone()[0]==0
+    raw_archive(settings).ingest([
+        {'source_event_id':'live-u','session_id':'live','role':'user','text':'new question',
+         'created_at':'2026-09-26T12:00:00Z'},
+        {'source_event_id':'live-a','session_id':'live','role':'assistant','text':'new answer',
+         'created_at':'2026-09-26T12:01:00Z'}],source='live')
+    task=asyncio.run(advance(settings.database,include_recent=True))
+    assert task['role']=='track_router'
+    assert {item['content'] for item in task['request']['messages']}=={'new question','new answer'}
