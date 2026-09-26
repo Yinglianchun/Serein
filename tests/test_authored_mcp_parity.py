@@ -96,6 +96,36 @@ def test_scene_minimal_write_edit_status_annotations_and_legacy_retry(runtime):
         assert store.conn.execute('SELECT count(*) FROM documents').fetchone()[0] == 2
 
 
+@pytest.mark.parametrize('legacy',[False,True])
+def test_semicolon_cues_on_mcp_write_and_edit(runtime,legacy):
+    server = create_server(Application(runtime))
+    first,second = 'rain'*12,'window'*8
+    args = {'content':'Synthetic scene','cues':[f' {first};；{second};{first}； ']}
+    if legacy:
+        args.update(operation_id='semicolon-write',title='Synthetic',date='2026-09-26')
+    reply = call(server,'write_scene',**args)
+    key = reply['id'] if legacy else re.search(r'\[scene_id:([^\]]+)\]',reply)[1]
+    with Store(runtime.database,read_only=True) as store:
+        doc = store.read(key)
+    assert doc['metadata']['scene_cues'] == [first,second]
+    edit = {'scene_id':key,'cues':[' rain；window;rain； ']}
+    if legacy:
+        edit.update(operation_id='semicolon-edit',expected_revision=doc['revision'])
+    else:
+        edit['expected_updated_at'] = doc['updated_at']
+    call(server,'edit_scene',**edit)
+    with Store(runtime.database,read_only=True) as store:
+        assert store.read(key)['metadata']['scene_cues'] == ['rain','window']
+
+
+def test_proposed_scene_splits_cues_before_length_validation():
+    from serein.api.mcp import Draft
+    first,second = 'rain'*12,'window'*8
+    draft = Draft(title='Synthetic',body_md='Synthetic scene',date='2026-09-26',
+                  cues=[f'{first};{second}；{first}'])
+    assert draft.cues == [first,second]
+
+
 @pytest.mark.parametrize('favorite', [False, True])
 def test_scene_domain_evidence_and_favorite_are_atomic(runtime, favorite):
     save_settings(runtime.database, {'features': {'favorites': favorite}})

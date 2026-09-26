@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from serein.api.http import create_app
 from serein.compat.diaries import Diaries
 from serein.compat.events import Events
-from serein.compat.scenes import initialize_scene_ids
+from serein.compat.scenes import Scenes, initialize_scene_ids
 from serein.config import Settings
 from serein.core import Store
 from serein.core.reader import Reader
@@ -77,6 +77,33 @@ def test_locked_diary_does_not_expose_body(live):
     assert '尚未解锁的正文' not in client.get(f'/diaries/{key}').text
     assert client.get(f'/v1/memories/diary:{key}').json()['readable'] is False
     assert client.put(f'/diaries/{key}',json={'content':'overwrite'}).status_code==423
+
+
+@pytest.mark.parametrize('as_list',[False,True])
+def test_scene_semicolon_cues_are_split_on_write_and_edit(live,as_list):
+    settings,client=live
+    # The combined value exceeds 80 characters; each separate cue is valid.
+    first='窗边的雨声'*8
+    second='一起看雨'*12
+    cues=f' {first};； {second};{first}； '
+    saved=client.post('/v1/tools/call',json={'name':'write_scene','arguments':{
+        'content':'一起坐在窗边看雨','cues':[cues] if as_list else cues}})
+    assert saved.status_code==200,saved.text
+    key=saved.json()['result'].split('[scene_id:')[1].split(']')[0]
+    scene=Scenes(settings.database).read(key)
+    assert scene['metadata']['scene_cues']==[first,second]
+    cues=' 听雨；窗边 ;听雨； '
+    changed=client.post('/v1/tools/call',json={'name':'edit_scene','arguments':{
+        'scene_id':key,'expected_updated_at':scene['metadata']['updated_at'],
+        'cues':[cues] if as_list else cues}})
+    assert changed.status_code==200,changed.text
+    assert Scenes(settings.database).read(key)['metadata']['scene_cues']==['听雨','窗边']
+
+
+@pytest.mark.parametrize('cues',[';；', ';'.join(str(i) for i in range(9)), 'a'*81+'；b'])
+def test_scene_semicolon_cues_still_enforce_limits(cues):
+    with pytest.raises(ValueError):
+        Scenes._cues([cues])
 
 
 def test_scene_edit_evidence_and_handoff_picker_use_current_canonical(live):
