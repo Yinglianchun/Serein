@@ -149,12 +149,7 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
     format_hint = {'events': [{'action': 'create', 'base_event_ids': [], 'primary_track_id': 'track_id', 'owned_unit_roots': [1]}],
                    'skip_unit_roots': [], 'defer_unit_roots': [],
                    'decision_review': {'events': [{'event_index': 0, 'reason': '这段原文实际展开的活动'}],
-                                       'boundaries': [{'left_event_index': 0, 'right_event_index': 1,
-                                           'reason': '为何是两段独立活动',
-                                           'evidence': [{'source_message_id': 1, 'quote': '左侧逐字原文'},
-                                                        {'source_message_id': 3, 'quote': '右侧逐字原文'}]}],
-                                       'dispositions': [{'disposition': 'skip', 'unit_roots': [5],
-                                           'reason': '为何不进入 Event', 'parked_source_message_ids': []}]}}
+                                       'boundaries': [], 'dispositions': []}}
     if component.get('continuity_pairs'):
         format_hint['decision_review']['continuations'] = []
         format_hint['decision_review']['bridge_exclusions'] = []
@@ -197,6 +192,8 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
             '返回 JSON，decision_review.events 按顺序覆盖所有拟议 Event；同一 Track 的每对相邻 Event 在 boundaries 中说明独立活动，'
             '并从左右各自独占的 owned 原文逐字引用。dispositions 覆盖所有 skip/defer unit；defer 引用真实 parked source ID，'
             'skip 的 parked_source_message_ids 为空。\n'
+            'boundaries 每项格式：'+json.dumps({'left_event_index':0,'right_event_index':1,'reason':'为何是两段独立活动','evidence':[{'source_message_id':1,'quote':'左侧逐字原文'},{'source_message_id':3,'quote':'右侧逐字原文'}]},ensure_ascii=False)+'；没有边界时返回 []。\n'
+            'dispositions 每项格式：'+json.dumps({'disposition':'skip|defer','unit_roots':[5],'reason':'处置依据','parked_source_message_ids':[]},ensure_ascii=False)+'；没有 skip/defer 时返回 []。\n'
             f'{json.dumps(format_hint, ensure_ascii=False)}\n\n'
             '只选择 scope=stable 的完整 unit。每个 stable unit 必须恰好进入 Event、skip 或 defer；只有 Router 声明的 bridge 可共享。'
             'parked/context_only 只可阅读。extend/merge 只填写 base_event_ids，host 取原文并集。'
