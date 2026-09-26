@@ -2,7 +2,7 @@ from fastapi import APIRouter, Body
 from pydantic import BaseModel, Field
 from typing import Literal
 import json
-from ..imports import stage, list_imports, initialize_imports
+from ..imports import stage, list_imports, initialize_imports, release_imported_originals
 from ..core.store import Store
 from ..work_tasks import enqueue, status, pause
 
@@ -27,6 +27,9 @@ def routes(settings,auth):
         with Store(settings.database,read_only=True) as store:
             tags={row['status']:row['n'] for row in store.conn.execute('SELECT status,COUNT(*) n FROM import_tag_jobs GROUP BY status')}
             failures=[dict(row) for row in store.conn.execute("SELECT document_id,error FROM import_tag_jobs WHERE status='failed' LIMIT 20")]
+            boundaries={row['upload_id'] for row in store.conn.execute('SELECT upload_id FROM pipeline_import_boundaries WHERE released=0')}
+        for entry in entries:
+            entry['event_boundary_active']=entry['id'] in boundaries
         return {'items':entries,'tagging':tags,'tagging_errors':failures}
 
     @router.post('/v1/imports/{identifier}/continue')
@@ -40,6 +43,10 @@ def routes(settings,auth):
     @router.post('/v1/imports/{identifier}/pause')
     def stop(identifier:str):
         return pause(settings.database,'import:'+identifier)
+
+    @router.post('/v1/imports/{identifier}/include-in-events')
+    def include_in_events(identifier:str):
+        return release_imported_originals(settings.database,identifier)
 
     @router.get('/v1/pipeline/status')
     def pipeline_status():
