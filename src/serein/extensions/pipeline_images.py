@@ -185,6 +185,8 @@ def bind_transcriptions(output, images):
         raise ValueError('每张输入图片必须恰有一份 image_transcriptions 转录')
     bound = {}; verify_images(images)
     for row in rows:
+        if isinstance(row, dict) and set(row) == {'input_image', 'text'} and isinstance(row.get('text'), str):
+            row = {**row, 'unreadable': not bool(row['text'].strip())}
         if not isinstance(row, dict) or set(row) != {'input_image', 'text', 'unreadable'}:
             raise ValueError('图片转录字段无效；出处由 host 绑定')
         index = row['input_image']
@@ -233,7 +235,7 @@ def _strip_task_media(value,key=''):
 
 def compact_batch_snapshot(data):
     """Keep the exact Router proof while dropping completed downstream material."""
-    keys=('contract','scope','source','day','routing_messages','routing_result',
+    keys=('contract','runtime_revision','scope','source','day','routing_messages','routing_result',
           'last_routing_repair','rebuild_of')
     compact={key:data[key] for key in keys if key in data}
     compact['task_snapshot_compacted']=True

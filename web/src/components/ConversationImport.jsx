@@ -55,6 +55,16 @@ export function ConversationImport({onImported}) {
     try{await request('/'+encodeURIComponent(job.id)+'/pause',{});setStatus('将在当前批次保存后暂停。');await refresh();}
     catch(error){if(mounted.current)setStatus(error.message);}
   }
+  async function includeInEvents() {
+    if(!job || busy || job.format==='operit' || !job.event_boundary_active)return;
+    setBusy(true);setStatus('正在把这份历史聊天放回 Event 整理池…');
+    try{
+      const result=await request('/'+encodeURIComponent(job.id)+'/include-in-events',{});
+      await refresh();
+      setStatus(result.originals?'已放回 '+result.originals+' 条历史原话；点击“继续整理”即可从这份记录开始归线。':'这份导入没有可整理的原话。');
+      onImported?.();
+    }catch(error){setStatus(error.message);}finally{setBusy(false);}
+  }
   async function retryTagging(limit) {
     if(busy)return;
     setBusy(true);
@@ -80,7 +90,9 @@ export function ConversationImport({onImported}) {
       {history.map(item=><option key={item.id} value={item.id}>{item.filename} · {item.processed}/{item.total}</option>)}</select></label>}
     {job&&<div className="import-preview">
       <p><strong>{job.filename}</strong> · {job.format==='operit'?'Operit 记忆库':`${job.sessions} 个对话`} · {job.total} 条</p>
-      {job.format!=='operit'&&<p className="import-help">历史聊天仅归档，可搜索、读取和绑定证据；自动归线与 Event 整理只处理后续新增聊天。</p>}
+      {job.format!=='operit'&&<p className="import-help">{job.event_boundary_active
+        ?'历史聊天默认仅归档，可搜索、读取和绑定证据；自动归线与 Event 整理只处理后续新增聊天。'
+        :'这份历史聊天已加入 Event 整理池，会和后续新聊天一样按原话归线、切分。'}</p>}
       {job.warnings.map((message,index)=><p key={index} className="import-help">{message}</p>)}
       <details><summary>查看内容预览</summary>{job.preview.map((item,index)=><blockquote key={index}>
         <strong>{item.title || (item.role==='user'?'用户':'AI')}</strong><p>{item.text}</p></blockquote>)}</details>
@@ -90,7 +102,9 @@ export function ConversationImport({onImported}) {
       <p>已处理 {job.processed}/{job.total} · 新增 {job.inserted} · 重复 {job.duplicate} · 失败 {job.failed}</p>
       {job.errors.map(error=><p className="import-error" key={error.entry}>第 {error.entry} 条：{error.message}</p>)}
       <div className="settings-actions">{job.status!=='completed'&&<button type="button" disabled={busy||running} onClick={run}>{job.processed?'继续导入':'开始导入'}</button>}
-        {running&&<button type="button" onClick={pause}>暂停</button>}</div>
+        {running&&<button type="button" onClick={pause}>暂停</button>}
+        {job.status==='completed'&&job.format!=='operit'&&job.event_boundary_active&&
+          <button type="button" disabled={busy} onClick={includeInEvents}>把这份历史加入 Event 整理</button>}</div>
     </div>}
     {Object.keys(tags).length>0&&<p className="import-help">记忆打标：等待 {tags.pending||0} · 完成 {tags.done||0} · 失败 {tags.failed||0} · 因编辑跳过 {tags.stale||0}
       <button className="import-refresh" type="button" disabled={busy} onClick={()=>refresh().catch(error=>setStatus(error.message))}>刷新</button>

@@ -59,6 +59,15 @@ def test_three_stages_and_writer_sees_exact_predecessor_originals(settings):
     async def runner(role,request):seen.append(role);return output_for(role,request)
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))['events']==1
     assert seen==list(p.ROLES)==['track_router','event_curator','event_writer']
+    with Store(settings.database,read_only=True) as store:
+        completed=json.loads(store.conn.execute("SELECT input_json FROM pipeline_batches WHERE status='done'").fetchone()[0])
+        assert completed['runtime_revision']==p.runtime_revision()
+        routes=[tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_routes ORDER BY raw_id')]
+        provenance=[tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_route_provenance ORDER BY raw_id')]
+    p.initialize(settings.database)
+    with Store(settings.database,read_only=True) as store:
+        assert [tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_routes ORDER BY raw_id')]==routes
+        assert [tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_route_provenance ORDER BY raw_id')]==provenance
     ingest(settings,2)
     task=curator_task(settings);p.submit(settings.database,task['job_id'],output_for(task['role'],task['request']))
     task=asyncio.run(p.advance(settings.database,include_recent=True));prompt=task['request']['prompt']
@@ -303,3 +312,64 @@ def test_images_keep_ownership_and_only_curator_receives_pixels(settings,monkeyp
         return {'choices':[{'message':{'content':json.dumps(output_for(request['role'],request))}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
+
+def test_curator_prompt_shows_complete_receipt_schema_and_safe_aliases(settings):
+    from serein.extensions.pipeline_audit import canonicalize_curator_review
+    ingest(settings)
+    task=curator_task(settings)
+    prompt=task['request']['prompt']
+    assert '"left_event_index": 0' in prompt
+    assert '"right_event_index": 1' in prompt
+    assert '"disposition": "skip"' in prompt
+    assert '"parked_source_message_ids": []' in prompt
+    review=canonicalize_curator_review({'events':[],'boundaries':[],'dispositions':[
+        {'status':'skip','unit_roots':[1],'reason':'background only'}]})
+    assert review['dispositions']==[{
+        'disposition':'skip','unit_roots':[1],'reason':'background only',
+        'parked_source_message_ids':[]}]
+
+
+def test_image_transcription_defaults_only_deterministic_unreadable_flag():
+    import hashlib
+    from serein.extensions.pipeline_images import bind_transcriptions, image_bytes
+    uri='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
+    body,_=image_bytes(uri)
+    receipt={'source_message_id':1,'position':1,'sha256':hashlib.sha256(body).hexdigest(),
+             'evidence_role':'stable','url':uri}
+    readable=bind_transcriptions({'image_transcriptions':[{'input_image':1,'text':'visible'}]},[receipt])
+    assert readable[0]['unreadable'] is False
+    blank=bind_transcriptions({'image_transcriptions':[{'input_image':1,'text':''}]},[receipt])
+    assert blank[0]['unreadable'] is True
+
+
+def test_runtime_revision_retires_all_unfinished_frozen_statuses(settings):
+    p.initialize(settings.database)
+    stale={'contract':p.CONTRACT,'runtime_revision':'stale','routing_messages':[]}
+    with Store(settings.database) as store:
+        for index,status in enumerate(('pending','needs_repair','routing_only','routed'),1):
+            store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,?)',
+                               (f'stale-{index}','scope',json.dumps(stale),status))
+        store.conn.execute('INSERT INTO pipeline_routes(raw_id,route_json) VALUES (?,?)',(999,'{}'))
+        store.conn.execute('INSERT INTO pipeline_route_provenance(raw_id,batch_id,route_json) VALUES (?,?,?)',
+                           (999,'stale-4','{}'))
+    p.initialize(settings.database)
+    with Store(settings.database,read_only=True) as store:
+        rows=store.conn.execute("SELECT status FROM pipeline_batches WHERE id LIKE 'stale-%' ORDER BY id").fetchall()
+        assert store.conn.execute('SELECT count(*) FROM pipeline_routes WHERE raw_id=999').fetchone()[0]==0
+        assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance WHERE raw_id=999').fetchone()[0]==0
+    assert [row['status'] for row in rows]==['superseded_protocol']*4
+
+def test_transcribe_component_prefers_frozen_exact_receipt(settings,monkeypatch):
+    import hashlib
+    from serein.extensions.pipeline_images import image_bytes
+    uri='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
+    body,_=image_bytes(uri)
+    image={'source_message_id':1,'position':1,'sha256':hashlib.sha256(body).hexdigest(),
+           'evidence_role':'stable','url':uri}
+    transcription={key:image[key] for key in ('source_message_id','position','sha256','evidence_role')}
+    transcription.update(text='visible title',unreadable=False)
+    component={'context_messages':[],'curator_image_transcriptions':[transcription]}
+    monkeypatch.setattr(p,'request_for',lambda *args,**kwargs:{'images':[image]})
+    used=asyncio.run(p.transcribe_component(settings.database,{'id':'frozen'},component,0,None))
+    assert used is True
+    assert component['curator_image_transcriptions']==[transcription]

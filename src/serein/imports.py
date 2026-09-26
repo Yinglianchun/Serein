@@ -196,15 +196,50 @@ def initialize_imports(database):
         archive_imported_originals(store.conn)
 
 
-def archive_imported_originals(conn):
-    """Import membership, not a global cursor: concurrent new chats stay eligible."""
+def archive_imported_originals(conn, upload_id=None):
+    """Keep imported-history exclusion as a compact, reversible upload boundary."""
+    conn.execute('CREATE TABLE IF NOT EXISTS raw_processing(raw_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,outcome TEXT NOT NULL)')
+    conn.execute('CREATE TABLE IF NOT EXISTS pipeline_import_boundaries('
+                 'upload_id TEXT PRIMARY KEY,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,'
+                 'released INTEGER NOT NULL DEFAULT 0)')
+    columns={row[1] for row in conn.execute('PRAGMA table_info(pipeline_import_boundaries)')}
+    if 'released' not in columns:
+        conn.execute('ALTER TABLE pipeline_import_boundaries ADD COLUMN released INTEGER NOT NULL DEFAULT 0')
     tables={row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {'file_imports','raw_events'}<=tables:return
-    conn.execute('CREATE TABLE IF NOT EXISTS raw_processing(raw_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,outcome TEXT NOT NULL)')
-    conn.execute("""INSERT OR IGNORE INTO raw_processing(raw_id,operation_id,outcome)
-        SELECT r.id,'file-import:' || f.id,'archived_only' FROM raw_events r
-        JOIN file_imports f ON f.id=json_extract(r.metadata_json,'$.import_upload_id')
-        WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)""")
+    # Migrate the old per-message markers before removing them. One upload boundary
+    # replaces hundreds or thousands of archived_only rows and can later be released
+    # without rewriting the raw archive.
+    conn.execute("""INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id)
+        SELECT DISTINCT substr(operation_id,13) FROM raw_processing
+        WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'""")
+    conn.execute("""DELETE FROM raw_processing
+        WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'""")
+    if upload_id:
+        conn.execute("""INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id,released)
+            SELECT ?,0 WHERE EXISTS (
+                SELECT 1 FROM raw_events WHERE json_extract(metadata_json,'$.import_upload_id')=?)""",
+            (str(upload_id),str(upload_id)))
+
+
+def release_imported_originals(database, upload_id):
+    """Opt one completed conversation import back into automatic Event processing."""
+    identifier=str(upload_id or '').strip()
+    if not identifier:
+        raise ValueError('导入任务 ID 不能为空')
+    initialize_imports(database)
+    with Store(database) as store,store.transaction(immediate=True):
+        row=store.conn.execute("SELECT id,format,cursor,json_array_length(payload_json,'$.entries') total FROM file_imports WHERE id=?",(identifier,)).fetchone()
+        if row is None:
+            raise ValueError('找不到导入任务')
+        if row['format']=='operit':
+            raise ValueError('Operit 记忆导入不属于原话 Event 整理')
+        if int(row['cursor'])!=int(row['total']):
+            raise ValueError('请先完成这份聊天记录的导入')
+        originals=store.conn.execute("SELECT count(*) FROM raw_events WHERE json_extract(metadata_json,'$.import_upload_id')=?",(identifier,)).fetchone()[0]
+        released=store.conn.execute('UPDATE pipeline_import_boundaries SET released=1 WHERE upload_id=? AND released=0',(identifier,)).rowcount
+    return {'status':'released' if released else 'unchanged','upload_id':identifier,
+            'originals':int(originals or 0),'released':bool(released)}
 
 
 def report(row):
@@ -293,7 +328,7 @@ def advance_import(settings,identifier):
             counts[status]+=1
         except (ValueError,KeyError) as exc:errors.append({'entry':start+offset+1,'message':str(exc)[:250]})
     with Store(settings.database) as store,store.transaction(immediate=True):
-        archive_imported_originals(store.conn)
+        archive_imported_originals(store.conn,identifier)
         store.conn.execute('UPDATE file_imports SET cursor=?,inserted=inserted+?,duplicate=duplicate+?,errors_json=? WHERE id=? AND cursor=?',
             (start+len(batch),counts['inserted'],counts['duplicate'],encode(errors),identifier,start))
         return report(store.conn.execute('SELECT * FROM file_imports WHERE id=?',(identifier,)).fetchone())

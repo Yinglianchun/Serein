@@ -2,6 +2,7 @@
 import asyncio
 import json
 import re
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from ..core.store import Store, Conflict, encode, digest, now
 from ..deployment import identity, task_model, read_settings
@@ -21,6 +22,22 @@ ROLES=('track_router','event_curator','event_writer')
 TZ=timezone(timedelta(hours=8))
 CONTRACT='public-event-message-tracks-v8'
 EVENT_CURATOR_MAX_ACTIVE_LEAVES_PER_TRACK=8
+
+_RUNTIME_CONTRACT_FILES = (
+    'pipeline.py', 'pipeline_latest.py', 'pipeline_audit.py', 'pipeline_images.py',
+    'pipeline_rules.py', 'pipeline_continuity.py', 'pipeline_materials.py',
+    'pipeline_admission.py', 'pipeline_recovery.py',
+)
+
+
+def runtime_revision():
+    """Invalidate unfinished frozen work when code or role rules change."""
+    root=Path(__file__).parent
+    code={name:digest((root/name).read_bytes()) for name in _RUNTIME_CONTRACT_FILES}
+    code['../image_transcription.py']=digest((root.parent/'image_transcription.py').read_bytes())
+    rules_root=root.parent/'resources'/'agents'
+    role_rules={role:digest((rules_root/role/'AGENTS.md').read_bytes()) for role in ROLES}
+    return digest(encode({'contract':CONTRACT,'code':code,'rules':role_rules}))
 
 
 class RoutingRecoveryError(ValueError):
@@ -48,17 +65,42 @@ def initialize(database):
         initialize_recovery(store.conn)
         from ..imports import archive_imported_originals
         archive_imported_originals(store.conn)
-        # Retire only the frozen plan that mixed in archive-only imports. Other
-        # originals remain eligible for a fresh plan; never mark the whole batch.
+        # Imported history uses a compact upload boundary rather than thousands
+        # of per-message raw_processing rows. Retire only unfinished frozen plans
+        # that crossed one of those explicit boundaries.
         store.conn.execute("""UPDATE pipeline_batches SET status='superseded_import_boundary'
-            WHERE status IN ('pending','routing_only') AND EXISTS (
+            WHERE status IN ('pending','needs_repair','routing_only','routed') AND EXISTS (
                 SELECT 1 FROM json_each(input_json,'$.routing_messages') m
-                JOIN raw_processing p ON p.raw_id=json_extract(m.value,'$.id')
-                WHERE p.outcome='archived_only')""")
-        # Earlier preview jobs used a different output protocol. Keep the records,
-        # restart only unfinished batches; already settled originals stay settled.
-        store.conn.execute("UPDATE pipeline_batches SET status='superseded_protocol' WHERE status='pending' AND json_extract(input_json,'$.contract') IS NULL")
-        store.conn.execute("UPDATE pipeline_batches SET status='superseded_protocol' WHERE status='pending' AND json_extract(input_json,'$.contract')<>?",(CONTRACT,))
+                JOIN pipeline_import_boundaries b
+                  ON b.upload_id=json_extract(m.value,'$.metadata.import_upload_id') AND b.released=0)""")
+        # A frozen task is reusable only under the exact runtime contract. This
+        # covers routed batches too, so a code/rule upgrade cannot resurrect an
+        # older downstream request through job()'s durable resume path.
+        revision=runtime_revision()
+        store.conn.execute("""UPDATE pipeline_batches SET status='superseded_protocol'
+            WHERE status IN ('pending','needs_repair','routing_only','routed')
+              AND (json_extract(input_json,'$.contract') IS NULL
+                   OR json_extract(input_json,'$.contract')<>?
+                   OR json_extract(input_json,'$.runtime_revision') IS NULL
+                   OR json_extract(input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision))
+        # Route caches are executable frozen decisions too. Discard caches whose
+        # producer cannot belong to the current runtime, including completed
+        # batches that may still own a parked tail. Keep batches/jobs/attempts.
+        store.conn.execute("""DELETE FROM pipeline_routes WHERE raw_id IN (
+            SELECT p.raw_id FROM pipeline_route_provenance p
+            JOIN pipeline_batches b ON b.id=p.batch_id
+            WHERE b.status='superseded_import_boundary'
+               OR json_extract(b.input_json,'$.contract') IS NULL
+               OR json_extract(b.input_json,'$.contract')<>?
+               OR json_extract(b.input_json,'$.runtime_revision') IS NULL
+               OR json_extract(b.input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision))
+        store.conn.execute("""DELETE FROM pipeline_route_provenance WHERE batch_id IN (
+            SELECT id FROM pipeline_batches b
+            WHERE b.status='superseded_import_boundary'
+               OR json_extract(b.input_json,'$.contract') IS NULL
+               OR json_extract(b.input_json,'$.contract')<>?
+               OR json_extract(b.input_json,'$.runtime_revision') IS NULL
+               OR json_extract(b.input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision))
         compact_completed_snapshots(store)
         expire_completed_media(store)
 
@@ -170,9 +212,10 @@ def new_batch(database,include_recent,clock=None):
         complete_upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
             complete_upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
-        scopes=store.conn.execute('SELECT DISTINCT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+' ORDER BY r.id').fetchall()
+        import_boundary=" AND NOT EXISTS (SELECT 1 FROM pipeline_import_boundaries b WHERE b.upload_id=json_extract(r.metadata_json,'$.import_upload_id') AND b.released=0)"
+        scopes=store.conn.execute('SELECT DISTINCT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id').fetchall()
         for source,session in scopes:
-            rows=[task_message(row) for row in store.conn.execute('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+' ORDER BY r.id',(source,session))]
+            rows=[task_message(row) for row in store.conn.execute('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id',(source,session))]
             eligible=[r for r in rows if datetime.fromisoformat(r['created_at'].replace('Z','+00:00'))<=watermark]
             chunks=blocks(eligible,policy['max_input_chars'])
             for chunk_index,eligible in enumerate(chunks):
@@ -192,7 +235,7 @@ def new_batch(database,include_recent,clock=None):
                     tracks,ordinal=track_state.load_tracks(store,source,session,eligible[0]['id'],task_message,
                                                            lookback_days=policy.get('track_lookback_days',3))
                 recent=[task_message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,eligible[0]['id']))][::-1]
-                data={'contract':CONTRACT,'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
+                data={'contract':CONTRACT,'runtime_revision':runtime_revision(),'input_policy':policy,'messages':stable,'parked':parked,'routing_messages':eligible,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'source':source,'recent':recent,'day':watermark.date().isoformat()}
                 key='pipeline:'+digest(encode(data))
                 existing=store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(key,)).fetchone()
                 if existing:continue
@@ -580,7 +623,7 @@ def writer_images(messages,owned_ids):
 def request_for(database,batch,role,**fields):
     if role not in ROLES:raise ValueError('This pipeline stage is retired or unknown; request the next task')
     data=json.loads(batch['input_json']);config=snapshot(database,batch['id']);names=config['identity']
-    request={'role':role,'identity':names,'batch_id':batch['id'],'contract':CONTRACT,**fields}
+    request={'role':role,'identity':names,'batch_id':batch['id'],'contract':CONTRACT,'runtime_revision':data.get('runtime_revision'),**fields}
     model_task='image_transcription' if fields.get('transcription_only') and config['models'].get('image_transcription') else role
     model=config['models'].get(model_task)
     request['execution']={'mode':config['policy']['execution_mode'],'revision':config['revision'],
@@ -922,6 +965,15 @@ async def transcribe_component(database,batch,component,index,runner,*,key_prefi
     from ..image_transcription import reusable_transcriptions, mark_transcription, persist_transcriptions, PROMPT
     probe=await asyncio.to_thread(request_for,database,batch,'event_curator',component=component,transcription_only=True)
     images=probe.get('images',[])
+    frozen=list(component.get('curator_image_transcriptions') or [])
+    if frozen:
+        try:
+            verify_transcriptions(frozen,images)
+        except ValueError:
+            pass
+        else:
+            component['curator_image_transcriptions']=frozen
+            return bool(images)
     cached=reusable_transcriptions(database,component['context_messages'],images)
     if len(cached)==len(images):
         component['curator_image_transcriptions']=cached
@@ -1106,7 +1158,8 @@ async def _flush_routes_frozen(database):
         upload=''
         if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='file_imports'").fetchone():
             upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=json_array_length(payload_json,'$.entries')))"
-        rows=[task_message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id) AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"+upload+' ORDER BY r.id')]
+        import_boundary=" AND NOT EXISTS (SELECT 1 FROM pipeline_import_boundaries b WHERE b.upload_id=json_extract(r.metadata_json,'$.import_upload_id') AND b.released=0)"
+        rows=[task_message(r) for r in store.conn.execute("SELECT r.* FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM pipeline_routes p WHERE p.raw_id=r.id) AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)"+upload+import_boundary+' ORDER BY r.id')]
     sessions={}
     for row in rows:sessions.setdefault((row['source'],row['original_session_id']),[]).append(row)
     current=datetime.now(timezone.utc)
@@ -1119,7 +1172,7 @@ async def _flush_routes_frozen(database):
                 tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],task_message,
                                                        lookback_days=config['policy'].get('track_lookback_days',3))
             recent=[task_message(r) for r in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,messages[0]['id']))][::-1]
-            data={'contract':CONTRACT,'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
+            data={'contract':CONTRACT,'runtime_revision':runtime_revision(),'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
             key='route:'+digest(encode(data));batch={'id':key,'input_json':encode(data)}
             store.conn.execute("INSERT OR IGNORE INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,'routing_only')",(key,scope,batch['input_json']))
         output=await route_batch(database,batch,data,None)

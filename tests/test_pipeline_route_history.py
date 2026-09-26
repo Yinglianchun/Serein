@@ -20,7 +20,7 @@ def freeze(settings):
 
 
 def history(settings, data, *, key='route:synthetic', legacy=False, runner=synthetic_runner):
-    origin = {k: deepcopy(data[k]) for k in ('contract', 'routing_messages', 'tracks',
+    origin = {k: deepcopy(data[k]) for k in ('contract', 'runtime_revision', 'routing_messages', 'tracks',
              'next_track_ordinal', 'scope', 'recent', 'day', 'input_policy') if k in data}
     batch = {'id': key, 'scope': data['scope'], 'input_json': encode(origin)}
     with Store(settings.database) as store:
@@ -124,6 +124,20 @@ def test_completed_downstream_jobs_reuse_frozen_plan_after_historical_recovery(s
     with Store(settings.database, read_only=True) as store:
         assert dict(store.conn.execute('SELECT id,output_json FROM pipeline_jobs WHERE batch_id=?', (batch['id'],))) == outputs
         assert json.loads(store.conn.execute('SELECT card_json FROM pipeline_tracks').fetchone()[0]) == later
+
+
+def test_legacy_cache_without_current_runtime_proof_requires_repair(settings):
+    ingest(settings)
+    _, data = freeze(settings)
+    with Store(settings.database) as store:
+        for message in data['routing_messages']:
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(message['id'],encode({
+                'source_message_id':message['id'],
+                'primary_track_id':'legacy-track',
+                'context_track_ids':[],
+                'routing_role':'primary_activity'})))
+    with pytest.raises(p.RoutingRecoveryError, match='legacy-track'):
+        p.cached_route_result(settings.database,data)
 
 
 def test_source_snapshot_without_jobs_is_self_contained(settings):
