@@ -216,8 +216,10 @@ def archive_imported_originals(conn, upload_id=None):
     conn.execute("""DELETE FROM raw_processing
         WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'""")
     if upload_id:
-        conn.execute('INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id,released) VALUES (?,0)',
-                     (str(upload_id),))
+        conn.execute("""INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id,released)
+            SELECT ?,0 WHERE EXISTS (
+                SELECT 1 FROM raw_events WHERE json_extract(metadata_json,'$.import_upload_id')=?)""",
+            (str(upload_id),str(upload_id)))
 
 
 def release_imported_originals(database, upload_id):
