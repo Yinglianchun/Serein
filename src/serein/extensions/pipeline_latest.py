@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from contextvars import ContextVar
 from contextlib import contextmanager
-from .pipeline_audit import canonicalize_claim_group_ids, writer_receipt_errors, curator_receipt_errors
+from .pipeline_audit import canonicalize_claim_group_ids, writer_receipt_errors, curator_receipt_errors, canonicalize_curator_review
 from . import pipeline_materials
 from .pipeline_continuity import validate_bridge_owners, validate_continuations
 from . import pipeline_admission
@@ -149,7 +149,12 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
     format_hint = {'events': [{'action': 'create', 'base_event_ids': [], 'primary_track_id': 'track_id', 'owned_unit_roots': [1]}],
                    'skip_unit_roots': [], 'defer_unit_roots': [],
                    'decision_review': {'events': [{'event_index': 0, 'reason': '这段原文实际展开的活动'}],
-                                       'boundaries': [], 'dispositions': []}}
+                                       'boundaries': [{'left_event_index': 0, 'right_event_index': 1,
+                                           'reason': '为何是两段独立活动',
+                                           'evidence': [{'source_message_id': 1, 'quote': '左侧逐字原文'},
+                                                        {'source_message_id': 3, 'quote': '右侧逐字原文'}]}],
+                                       'dispositions': [{'disposition': 'skip', 'unit_roots': [5],
+                                           'reason': '为何不进入 Event', 'parked_source_message_ids': []}]}}
     if component.get('continuity_pairs'):
         format_hint['decision_review']['continuations'] = []
         format_hint['decision_review']['bridge_exclusions'] = []
@@ -580,7 +585,7 @@ def _normalize_expanded_event_curator_output(output: dict[str, Any], component: 
 
 def normalize_event_curator_output(output: dict[str, Any], component: dict[str, Any]) -> dict[str, Any]:
     """Expand the compact model decision, then enforce the existing host contract."""
-    review = output.get('decision_review')
+    review = canonicalize_curator_review(output.get('decision_review'))
     output = {key: value for key, value in output.items() if key != 'decision_review'}
     payload_keys = set(output).difference({'_splitter_provider', '_splitter_model', '_splitter_provider_index', '_track_context_receipt', '_codex_job'})
     if payload_keys == {'events', 'skip_unit_roots', 'defer_unit_roots'}:
