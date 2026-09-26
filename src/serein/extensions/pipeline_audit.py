@@ -220,6 +220,28 @@ def writer_receipt_errors(result: dict, owned_sources: list[dict] | None,
     return errors
 
 
+
+def canonicalize_curator_review(review: Any) -> Any:
+    """Repair only schema details whose intended meaning is deterministic."""
+    if not isinstance(review, dict):
+        return review
+    normalized = dict(review)
+    dispositions = review.get('dispositions')
+    if isinstance(dispositions, list):
+        rows = []
+        for row in dispositions:
+            if not isinstance(row, dict):
+                rows.append(row)
+                continue
+            item = dict(row)
+            if 'disposition' not in item and item.get('status') in {'skip', 'defer'}:
+                item['disposition'] = item.pop('status')
+            if item.get('disposition') == 'skip' and 'parked_source_message_ids' not in item:
+                item['parked_source_message_ids'] = []
+            rows.append(item)
+        normalized['dispositions'] = rows
+    return normalized
+
 def curator_receipt_errors(review: Any, plan: dict, component: dict) -> list[str]:
     errors: list[str] = []
     required = {'events', 'boundaries', 'dispositions'}
