@@ -40,9 +40,18 @@ def validate_bridge_owners(output, component, review=None):
                 'unit_root_message_id', 'excluded_track_id', 'reason', 'evidence'}:
             raise ValueError('Invalid bridge_exclusions fields')
         root, track = row['unit_root_message_id'], row['excluded_track_id']
-        if (type(root) is not int or not isinstance(track, str)
-                or (root, track) not in missing or (root, track) in seen):
-            raise ValueError('Bridge exclusion must identify one missing side exactly once')
+        if type(root) is not int or not isinstance(track, str):
+            raise ValueError('Bridge exclusion needs an integer unit root and string excluded Track')
+        if (root, track) in seen:
+            raise ValueError(f'Duplicate bridge exclusion {(root, track)!r}; keep one evidenced entry')
+        if (root, track) not in missing:
+            raise ValueError(
+                f'Unexpected bridge exclusion {(root, track)!r}; required exclusion pairs for the current '
+                f'Event ownership are {sorted(missing)!r}. Exclusions apply only when both bridge Tracks '
+                'have proposed Events and one side owns the whole unit while the other does not. '
+                'Remove this extra exclusion entry; a side with no Event needs no exclusion. '
+                'Do not create an Event or change ownership merely to make an exclusion applicable. '
+                'Keep source-grounded skip/defer decisions in dispositions.')
         if not isinstance(row['reason'], str) or not row['reason'].strip():
             raise ValueError('Bridge exclusion needs a grounded reason')
         sources = set(units[root].get('source_message_ids') or [root])

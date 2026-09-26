@@ -4,7 +4,6 @@ These checks verify references and exact quotes, not the truth of a paraphrase.
 """
 from __future__ import annotations
 
-import re
 from typing import Any
 
 
@@ -68,44 +67,10 @@ def _sentences_match_body(sentences: list[str], body: object) -> bool:
     return not body[position:].strip()
 
 
-def _quote_attributed_to_user(prefix: str, user_name: str | None = None) -> bool:
-    clause = re.split(r'[。！？!?；;\n]', prefix)[-1]
-    if re.search(r'(?:她|用户)', clause):
-        return True
-    if not user_name:
-        return False
-    name = re.escape(user_name)
-    if user_name.isascii():
-        name = rf'(?<![A-Za-z0-9]){name}(?![A-Za-z0-9])'
-    return bool(re.search(name, clause))
-
-
-def _direct_quote_errors(text: str, source_id: int, quote: str, label: str,
-                         user_name: str | None = None) -> list[str]:
-    errors: list[str] = []
-    start = text.find(quote)
-    while start >= 0:
-        prefix = text[:start].rstrip()
-        if prefix.endswith(('“', '"', '‘', "'")):
-            before_open = prefix[:-1].rstrip()
-            attributed = _quote_attributed_to_user(before_open, user_name)
-            if not attributed:
-                errors.append(f'{label} 直接引用来源 {source_id} 却没有在引语所在句标明她／用户')
-            end = start + len(quote)
-            tail = text[end:]
-            dialogue_quote = before_open.endswith(('：', ':')) or not attributed
-            if dialogue_quote and tail.startswith(('”', '"', '’', "'")):
-                after = tail[1:].lstrip()
-                quote_has_ending = bool(re.search(r'[。！？!?；;，,：:…]$', quote))
-                separated = bool(after and re.match(r'[。！？!?；;，,：:]', after))
-                if after and not quote_has_ending and not separated:
-                    errors.append(f'{label} 直接引用来源 {source_id} 后切回叙述时缺少标点')
-        start = text.find(quote, start + len(quote))
-    return list(dict.fromkeys(errors))
-
-
 def writer_receipt_errors(result: dict, owned_sources: list[dict] | None,
                           user_name: str | None = None) -> list[str]:
+    # Keep the existing call signature; attribution belongs to source-aware
+    # writing/review, not a name or punctuation pattern in the finished prose.
     sources = ({item['id']: item for item in owned_sources if type(item.get('id')) is int}
                if owned_sources is not None else None)
     groups, sentences = result.get('claim_groups'), result.get('sentence_evidence')
@@ -165,7 +130,6 @@ def writer_receipt_errors(result: dict, owned_sources: list[dict] | None,
     used: set[str] = set()
     covered: dict[str, list[tuple[int, str]]] = {}
     text_parts: list[str] = []
-    user_quotes_in_body: list[tuple[int, str]] = []
     for index, entry in enumerate(sentences):
         label = f'sentence_evidence[{index}]'
         if not isinstance(entry, dict):
@@ -191,25 +155,15 @@ def writer_receipt_errors(result: dict, owned_sources: list[dict] | None,
         if not isinstance(spans, list) or not spans:
             errors.append(f'{label} 缺少来源片段')
             spans = []
-        quotes, valid_spans = [], []
+        valid_spans = []
         for span in spans:
             valid = _source_span(span, sources, label, errors)
             if valid:
                 valid_spans.append(valid)
-                quotes.append(valid[1])
-                source = sources.get(valid[0]) if sources is not None else None
-                if (source and source.get('role') == 'user' and
-                        valid[1] in str(source.get('content') or '')):
-                    user_quotes_in_body.append(valid)
-                    errors.extend(_direct_quote_errors(sentence, valid[0], valid[1], label, user_name))
         for group_id in ids:
             covered.setdefault(group_id, []).extend(valid_spans)
     if not _sentences_match_body(text_parts, result.get('event_draft')):
         errors.append('event_draft 与 sentence_evidence 逐句拼接不一致')
-    body = str(result.get('event_draft') or '')
-    for source_id, quote in dict.fromkeys(user_quotes_in_body):
-        errors.extend(error for error in _direct_quote_errors(body, source_id, quote, 'event_draft', user_name)
-                      if '缺少标点' in error)
     for group_id, spans in by_id.items():
         if group_id not in used:
             errors.append(f'{group_id} 未被正文引用')

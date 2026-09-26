@@ -347,6 +347,7 @@
   "tests/test_pipeline_materials.py",
   "tests/test_pipeline_continuity.py",
   "tests/test_pipeline_admission.py",
+  "tests/test_pipeline_audit.py",
   "tests/test_pipeline_append.py",
   "tests/test_pipeline_scenes.py",
   "tests/test_public_edition.py",

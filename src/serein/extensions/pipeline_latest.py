@@ -155,16 +155,7 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
         format_hint['decision_review']['bridge_exclusions'] = []
     if component.get('writer_round_gate'):
         format_hint['decision_review']['events'][0]['admission'] = {'closed_by': None}
-    material_rule = ('decision_review.events 每项增加 materials，按该 Event 的全部 owned source_message_id 逐条标记 '
-                     '{"source_message_id":1,"use":"main|background|omit|mixed","reason":"依据","omit_quotes":[]}。'
-                     'main 是实际起因、推进、结果或必要回应；background 是必需前提；omit 是无关旁支；'
-                     'mixed 保留主内容，并用逐字 omit_quotes 标出省略片段。main/background 的 omit_quotes 为空，'
-                     'mixed 必须有省略片段；不可遗漏或重复 owned 来源。只决定本 Event 的写作用途，不改变 ownership。'
-                     '同条消息有重要决定或回应，也要逐段核对：无关的状态提醒、普通告别或任务回执标 mixed，'
-                     '用逐字 omit_quotes 指明省略片段；普通称呼本身不使告别变成主线，'
-                     '若告别或玩笑本身正在被讨论则保留。'
-                     '附带状态确认和任务回执可省；若其本身是讨论中心或改变结果则保留。拒绝、纠正、条件、因果和有区别的语气不得省。\n'
-                     if component.get('writer_material_review') else '')
+    material_rule = pipeline_materials.PROMPT if component.get('writer_material_review') else ''
     continuity_rule = ('本次共同审阅 continuity_pairs 明确连接的少量 Track。桥接只允许共同审阅，不自动合并 Event。'
                        '若一条 Event 拥有多条 Track 的普通实质 unit，decision_review.continuations 必须按所用 bridge '
                        '给出 event_index、left_track_id、right_track_id、bridge_unit_root、reason，'
@@ -173,12 +164,16 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
                        'Router 声明的 bridge 不自动归属两侧：若一侧 Event 拥有整枚 bridge，另一侧 Event 未拥有，'
                        '须显式共享完整 unit，或在 decision_review.bridge_exclusions 给出 unit_root_message_id、'
                        'excluded_track_id、reason 和该 unit 内的逐字 evidence。仅共享对象或背景可排除；'
-                       '实际回应、拒绝、纠正或收尾不可排除。\n'
+                       '实际回应、拒绝、纠正或收尾不可排除。排除项只针对两侧都提出 Event 且单侧拥有完整 bridge 的组合；'
+                       '双侧已拥有、双侧均未拥有或某侧没有 Event 时不填。多填时只删除多余项，不为通过校验新建 Event 或改变 ownership。\n'
                        if component.get('continuity_pairs') else
                        '你看到的是单一 primary Track 的有界 corridor。declared bridge 只共享当前直接 unit。\n')
     admission_rule = ('本次启用普通交流的 Writer 轮次门槛。边界与来源归属先定，再在 decision_review.events 每项增加 '
                       'admission:{"closed_by":null}。只有原文明确结束此事或后来确实转向另一活动，'
                       '才把 closed_by 改为逐字 {"source_message_id":1,"quote":"原文"}；完整回答、沉默和跨日不等于结束。'
+                      'closed_by 是结束的原文证据，不要求是最后一条消息；可以引用 owned 中明确结束此事的消息，'
+                      '保留其后接住决定、回顾体验的收尾。后文重新提出未落定的问题时不能仍用先前一句宣称结束。'
+                      '也可引用本 Event 之后实际转向的同 session 原文，不能用更早的无关背景证明结束。'
                       '程序按 owned 实质原文计算完整用户与助手交流，至少两轮才进 Writer；'
                       '不足轮且未结束时照常提出 Event，由程序暂存，不要为了凑轮数合并活动。'
                       'boundary_lookahead 仅供判断后续是否真的结束或仍在回应，不能当作 owned 来源。\n'
@@ -684,8 +679,7 @@ def build_event_writer_prompt(day: str, title: str, messages: list[dict[str, Any
             f'<track_context_events_json>\n{json.dumps(context_events, ensure_ascii=False)}\n</track_context_events_json>\n\n'
             f'<previous_events_json>\n{json.dumps(previous, ensure_ascii=False)}\n</previous_events_json>\n'
             + (f'<curator_materials_json>\n{json.dumps(source_materials, ensure_ascii=False)}\n</curator_materials_json>\n'
-               '材料用途不是新事实来源：main 保留展开与语气，background 只保留必要前提，omit 不进正文、命题组或细节，'
-               'mixed 省略 omit_quotes 而保留有效回应。不得换句话绕过省略；若标注与必要语义冲突，以完整原文为准。\n'
+               + pipeline_materials.WRITER_RULE
                if source_materials is not None else ''))
 
 def build_event_writer_repair_prompt(original_prompt, failed_result, violations):

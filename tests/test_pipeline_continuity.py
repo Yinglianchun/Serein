@@ -89,6 +89,28 @@ def test_bridge_owner_is_explicit_or_excluded_with_verbatim_evidence():
         validate_bridge_owners(output, component, {'bridge_exclusions': [invented]})
     output['events'][0]['source_bindings'].append({'source_message_id': 2})
     validate_bridge_owners(output, component, {'bridge_exclusions': []})
+    with pytest.raises(ValueError, match='Remove this extra exclusion entry'):
+        validate_bridge_owners(output, component, {'bridge_exclusions': [exclusion]})
+
+
+def test_bridge_exclusion_repair_does_not_require_creating_a_missing_side_event():
+    messages = [
+        {'id': 1, 'track_id': 'a', 'session_id': 1, 'content': 'The cover is done.'},
+        {'id': 2, 'track_id': 'a', 'session_id': 1, 'content': 'Make a label instead.'},
+        {'id': 3, 'track_id': 'b', 'session_id': 1, 'content': 'Use blue paper.'},
+    ]
+    component = _component('a', messages, 2)
+    output = {'events': [{'primary_track_id': 'b', 'source_bindings': [
+        {'source_message_id': 2}, {'source_message_id': 3}]}]}
+    before = copy.deepcopy(output)
+    exclusion = {'unit_root_message_id': 2, 'excluded_track_id': 'a',
+                 'reason': 'No cover Event was proposed',
+                 'evidence': [{'source_message_id': 2, 'quote': 'Make a label'}]}
+    with pytest.raises(ValueError, match='Do not create an Event or change ownership'):
+        validate_bridge_owners(output, component, {'bridge_exclusions': [exclusion]})
+    assert output == before
+    validate_bridge_owners(output, component, {'bridge_exclusions': []})
+    assert output == before
 
 
 def test_compact_curator_does_not_add_a_second_bridge_owner():

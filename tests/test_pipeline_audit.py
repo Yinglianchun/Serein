@@ -70,7 +70,7 @@ def test_writer_claim_and_sentence_receipts():
     assert writer_receipt_errors({'evidence_sufficient': False, 'claim_groups': [], 'sentence_evidence': []}, sources) == []
 
 
-def test_writer_direct_user_quotes_require_attribution_and_separator():
+def test_optional_receipts_check_sources_without_prescribing_attribution_phrases():
     source = {'id': 7, 'role': 'user', 'content': '一人一把'}
     span = {'source_message_id': 7, 'quote': source['content']}
     def result(sentence):
@@ -84,10 +84,15 @@ def test_writer_direct_user_quotes_require_attribution_and_separator():
     assert writer_receipt_errors(result('阿澄答：“一人一把”。我仍走在她旁边。'), [source],
                                  user_name='阿澄') == []
     assert writer_receipt_errors(result('她的“一人一把”让我仍想走在她旁边。'), [source]) == []
-    assert any('标明她' in error for error in
-               writer_receipt_errors(result('“一人一把”。我仍走在她旁边。'), [source]))
-    assert any('缺少标点' in error for error in
-               writer_receipt_errors(result('她答：“一人一把”我仍走在她旁边。'), [source]))
+    # These checks cannot prove whether attribution or dialogue punctuation is
+    # correct. A surrounding paragraph may already establish the speaker.
+    assert writer_receipt_errors(result('“一人一把”。我仍走在她旁边。'), [source]) == []
+    assert writer_receipt_errors(result('她答：“一人一把”我仍走在她旁边。'), [source]) == []
+    assert writer_receipt_errors(result('记录来自另一位参与者：“一人一把”。'), [source]) == []
+    invented = result('她答：“一人一把”。')
+    invented['sentence_evidence'][0]['source_spans'] = [
+        {'source_message_id': 99, 'quote': source['content']}]
+    assert any('owned' in error for error in writer_receipt_errors(invented, [source]))
     image_source = {**source, 'content': '请看图片', 'evidence_texts': ['[文字] 一人一把']}
     assert writer_receipt_errors(result('画面写着“一人一把”。'), [image_source]) == []
 

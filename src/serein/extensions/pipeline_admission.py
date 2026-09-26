@@ -36,7 +36,7 @@ def _visible(message):
 
 
 def exchanges(messages):
-    """Group adjacent role runs; separate a completed exchange at the next user."""
+    """Group reply bubbles while keeping new proactive turns separate."""
     result, current = [], []
     for message in sorted(messages, key=lambda row: int(row['id'])):
         if not _visible(message):
@@ -44,7 +44,15 @@ def exchanges(messages):
         if current and message.get('session_id') != current[0].get('session_id'):
             result.append(current)
             current = []
-        if {row['role'] for row in current} == {'user', 'assistant'} and message['role'] == 'user':
+        roles = {row['role'] for row in current}
+        metadata = message.get('metadata') or {}
+        is_proactive = message['role'] == 'assistant' and bool(
+            metadata.get('proactive') or metadata.get('autonomy'))
+        if is_proactive and 'user' in roles:
+            result.append(current)
+            current = []
+            roles = set()
+        if roles == {'user', 'assistant'} and message['role'] == 'user':
             result.append(current)
             current = []
         current.append(message)
@@ -55,9 +63,19 @@ def exchanges(messages):
 
 def count_rounds(owned_ids, messages):
     owned = set(owned_ids)
-    return sum({row['role'] for row in unit} == {'user', 'assistant'}
-               and all(int(row['id']) in owned for row in unit)
-               for unit in exchanges(messages))
+    count = 0
+    for unit in exchanges(messages):
+        if ({row['role'] for row in unit} != {'user', 'assistant'}
+                or not all(int(row['id']) in owned for row in unit)):
+            continue
+        users = {int(row['id']) for row in unit if row['role'] == 'user'}
+        if unit[0]['role'] == 'user' and any(
+            type(target := (row.get('metadata') or {}).get('reply_to_user_message_id')) is int
+            and target not in users for row in unit if row['role'] == 'assistant'
+        ):
+            continue
+        count += 1
+    return count
 
 
 def validate(review, output, component):
@@ -65,7 +83,8 @@ def validate(review, output, component):
         return {}
     if not isinstance(review, dict) or not isinstance(review.get('events'), list):
         raise ValueError('Round admission needs per-Event decisions')
-    messages = {int(row['id']): row for row in component.get('context_messages') or []}
+    messages = {int(row['id']): row for row in
+                [*component.get('context_messages', []), *component.get('messages', [])]}
     result = {}
     for row in review['events']:
         index = row['event_index']
@@ -79,12 +98,16 @@ def validate(review, output, component):
             if not isinstance(closure, dict) or set(closure) != {'source_message_id', 'quote'}:
                 raise ValueError('Admission closure needs a source ID and verbatim quote')
             source_id, quote = closure['source_message_id'], closure['quote']
-            if (type(source_id) is not int or source_id not in messages or source_id < max(owned)
+            if (type(source_id) is not int or source_id not in messages
+                    or (source_id not in owned and source_id < max(owned))
                     or not isinstance(quote, str) or not quote.strip()
                     or quote not in str(messages[source_id].get('content') or '')
                     or messages[source_id].get('session_id') not in
                     {messages[key].get('session_id') for key in owned if key in messages}):
-                raise ValueError('Admission closure must quote later original in the same session')
+                raise ValueError(
+                    f'Admission closure must quote owned or later original in the same session: '
+                    f'event_index={index}, closed_by={source_id}, '
+                    f'last_owned_source_message_id={max(owned)}')
         result[event['event_ref']] = admission
     return result
 
@@ -94,7 +117,8 @@ def apply_gate(plan, component):
     if not component.get('writer_round_gate'):
         return plan
     result = deepcopy(plan)
-    scope = {int(row['id']): row for row in component.get('context_messages') or []}
+    scope = {int(row['id']): row for row in
+             [*component.get('context_messages', []), *component['messages']]}
     stable = {int(row['id']) for row in component['messages']}
     admissions = plan['event_admissions']
     accepted, pending, skipped, receipts = [], set(), set(), []

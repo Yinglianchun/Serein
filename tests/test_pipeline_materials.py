@@ -64,3 +64,25 @@ def test_materials_follow_event_ref_when_a_protected_proposal_is_deferred():
     ]}
     attach(review, output, plan, component)
     assert plan['events'][0]['source_materials'] == review['events'][1]['materials']
+
+
+def test_material_review_does_not_reject_a_main_greeting_by_keyword():
+    message = {'id': 1, 'role': 'user', 'content': 'Goodnight is the title I chose for the sketch.'}
+    component = {'writer_material_review': True, 'messages': [message]}
+    output = {'events': [{'event_ref': 'event:0', 'source_bindings': [{'source_message_id': 1}]}]}
+    plan = {'events': [{'event_ref': 'event:0', 'source_message_ids': [1]}]}
+    materials = [{'source_message_id': 1, 'use': 'main', 'reason': 'The sketch title', 'omit_quotes': []}]
+    attach({'events': [{'event_index': 0, 'materials': materials}]}, output, plan, component)
+    assert substantive_ids(plan['events'][0]) == [1]
+    prompt = build_event_writer_prompt('2026-01-01', '', [message], source_materials=materials)
+    assert message['content'] in prompt
+
+
+def test_whole_message_cannot_be_omitted_as_mixed():
+    component = {'writer_material_review': True, 'messages': [{'id': 1, 'content': 'Goodnight.'}]}
+    output = {'events': [{'event_ref': 'event:0', 'source_bindings': [{'source_message_id': 1}]}]}
+    plan = {'events': [{'event_ref': 'event:0', 'source_message_ids': [1]}]}
+    materials = [{'source_message_id': 1, 'use': 'mixed', 'reason': 'A closing aside',
+                  'omit_quotes': ['Goodnight.']}]
+    with pytest.raises(ValueError, match='retain content'):
+        attach({'events': [{'event_index': 0, 'materials': materials}]}, output, plan, component)

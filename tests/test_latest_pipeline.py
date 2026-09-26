@@ -105,11 +105,12 @@ def test_writer_body_uses_1000_guidance_with_1500_tolerance():
 def test_public_writer_materializes_source_grounded_rules_with_configured_names():
     with latest.identity_scope({'ai_name': 'Atlas', 'user_name': 'Lin'}):
         rules = latest.materialize_agent_rules('event_writer')
-    assert 'Atlas 在回复中对Lin的话作出的展开' in rules
-    assert '最小完整语义单位' in rules and '局部回应不能改变前句' in rules
-    assert '不额外补出理解、判断、解释等动作' in rules
-    assert '不把某一种归属句式当成模板' in rules
-    assert '原文停留在“想、打算、建议' in rules
+    assert '我是 Atlas，Lin是她' in rules
+    assert '局部回应不能截坏前句' in rules
+    assert '纠正后直接写最终结论' in rules
+    assert '不按相隔多久机械补时间' in rules
+    assert 'claim_groups 与 sentence_evidence 不必返回' in rules
+    assert '前版绑定原文已经作为 owned 完整并入' in rules
     assert '反例三' in rules and '台灯' in rules
     assert '我把这句话理解成' not in rules
     assert 'Haven' not in rules and '小雨' not in rules
@@ -136,17 +137,19 @@ def test_router_and_curator_keep_developing_activity_over_keyword_or_tone():
     assert '下一批判断直接续接的最小线索' in router
     assert '另一话更新而开启一次新的完整观看' in router
     assert '不按醒目的称呼、作品名或重复关键词投票归线' in router
-    assert '从事实转成玩笑或幻想' in router
-    assert '正常使用，不自动续接它的安装、调试 Track' in router
-    assert '不因语气变化或转为调笑就拆分' in curator
-    assert '不能只贴“技术／情感”等不同类别标签' in curator
+    assert '不因内容类别或语气变了另开 Track' in router
+    assert '工具的正常使用不自动继承施工线' in router
+    assert 'primary 取主要推进的新线' in router
+    assert '先识别整段实际活动' in curator
+    assert '换问法、材料类别、语气或比喻也不是切分依据' in curator
+    assert '不能只给两段贴不同类别' in curator
 
 
 def test_router_prompt_requests_concrete_track_scope():
     prompt = latest.build_event_track_message_prompt('2026-09-23', [], [])
     assert '"subject":"具体对象或事项"' in prompt
     assert '"throughline":"这段经历的最小续接线索"' in prompt
-    assert '仅仅属于同一产品或系统不够' in prompt
+    assert '设想、未来建议或同产品关联不够' in prompt
 
 
 def test_model_counting_tolerance_settles_without_truncation(settings):
@@ -196,6 +199,19 @@ def test_writer_optional_receipt_still_checks_owned_quotes():
     output['sentence_evidence'][0]['source_spans'][0]['quote']='invented quote'
     assert any('逐字' in error for error in latest.validate_event_writer_result(output,
         [{'id':1,'content':'The blue notebook arrived.'}]))
+
+
+@pytest.mark.parametrize('body', [
+    '她说这本书的装订不错。我据此判断封面还能留着。',
+    '“留下封面。”',
+    '书' * 501,
+    '书' * 1500,
+])
+def test_writer_validation_does_not_turn_style_or_soft_budget_into_rejection(body):
+    result = {'evidence_sufficient': True, 'recallable': False, 'title': 'Notebook',
+              'event_draft': body, 'kept_details': [], 'discarded_details': [],
+              'self_review': {'result_preserved': False}}
+    assert latest.validate_event_writer_result(result) == []
 
 
 def test_writer_insufficient_output_requires_review_object_but_not_true_checks():
