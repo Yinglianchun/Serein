@@ -52,7 +52,9 @@ def _frames(database, batch):
     """Replay accepted jobs against THEIR inputs/ordinals, without invoking job()."""
     from . import pipeline as p
     original = json.loads(batch['input_json'])
-    if original.get('contract') != p.CONTRACT or original.get('scope') != batch['scope']:
+    if (original.get('contract') != p.CONTRACT
+            or original.get('runtime_revision') != p.runtime_revision()
+            or original.get('scope') != batch['scope']):
         raise p.RoutingRecoveryError('route producer has an incompatible frozen contract')
     if not _same_scope(original, original.get('routing_messages', [])):
         raise p.RoutingRecoveryError('route producer messages do not belong to its frozen scope')
@@ -286,8 +288,10 @@ def _rebuild(database, batch_id):
             store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id=?', (frozen['id'],))
             store.conn.execute('DELETE FROM pipeline_route_provenance WHERE raw_id=?', (frozen['id'],))
         # Retain only the original pre-routing input, never old ownership/plans.
-        fresh = {key: deepcopy(data[key]) for key in ('contract', 'input_policy', 'messages', 'parked',
+        fresh = {key: deepcopy(data[key]) for key in ('contract', 'runtime_revision', 'input_policy', 'messages', 'parked',
                  'routing_messages', 'tracks', 'scope', 'source', 'recent', 'day') if key in data}
+        fresh['contract'] = p.CONTRACT
+        fresh['runtime_revision'] = p.runtime_revision()
         fresh['tracks'] = [c for c in fresh['tracks'] if p._card_is_complete(c)]
         fresh['next_track_ordinal'] = max(data.get('next_track_ordinal', 1),
                                          tracks.next_ordinal(data['scope'], reserved))
