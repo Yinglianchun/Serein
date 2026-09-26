@@ -349,3 +349,18 @@ def test_runtime_revision_retires_all_unfinished_frozen_statuses(settings):
         assert store.conn.execute('SELECT count(*) FROM pipeline_routes WHERE raw_id=999').fetchone()[0]==0
         assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance WHERE raw_id=999').fetchone()[0]==0
     assert [row['status'] for row in rows]==['superseded_protocol']*4
+
+def test_transcribe_component_prefers_frozen_exact_receipt(settings,monkeypatch):
+    import hashlib
+    from serein.extensions.pipeline_images import image_bytes
+    uri='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
+    body,_=image_bytes(uri)
+    image={'source_message_id':1,'position':1,'sha256':hashlib.sha256(body).hexdigest(),
+           'evidence_role':'stable','url':uri}
+    transcription={key:image[key] for key in ('source_message_id','position','sha256','evidence_role')}
+    transcription.update(text='visible title',unreadable=False)
+    component={'context_messages':[],'curator_image_transcriptions':[transcription]}
+    monkeypatch.setattr(p,'request_for',lambda *args,**kwargs:{'images':[image]})
+    used=asyncio.run(p.transcribe_component(settings.database,{'id':'frozen'},component,0,None))
+    assert used is True
+    assert component['curator_image_transcriptions']==[transcription]
