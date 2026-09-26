@@ -76,8 +76,9 @@ class Scenes:
 
     @staticmethod
     def _cues(value):
-        values=re.split(r'[,|\n，]',value) if isinstance(value,str) else value
+        values=re.split(r'[,|\n，;；]',value) if isinstance(value,str) else value
         if not isinstance(values,list): raise ValueError('cues must be a list')
+        values=[part for v in values for part in re.split(r'[;；]',str(v))]
         values=list(dict.fromkeys(str(v).strip() for v in values if str(v).strip()))
         if not 1<=len(values)<=8 or any(len(v)>80 for v in values): raise ValueError('Use 1..8 cues of at most 80 characters')
         return values
