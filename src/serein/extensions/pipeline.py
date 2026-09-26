@@ -83,16 +83,24 @@ def initialize(database):
                    OR json_extract(input_json,'$.contract')<>?
                    OR json_extract(input_json,'$.runtime_revision') IS NULL
                    OR json_extract(input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision))
-        # Route caches are executable frozen decisions too. Once their producer
-        # is superseded, discard only the cache/provenance rows; keep the batch,
-        # jobs and attempts as audit history.
+        # Route caches are executable frozen decisions too. Discard caches whose
+        # producer cannot belong to the current runtime, including completed
+        # batches that may still own a parked tail. Keep batches/jobs/attempts.
         store.conn.execute("""DELETE FROM pipeline_routes WHERE raw_id IN (
             SELECT p.raw_id FROM pipeline_route_provenance p
             JOIN pipeline_batches b ON b.id=p.batch_id
-            WHERE b.status IN ('superseded_protocol','superseded_import_boundary'))""")
+            WHERE b.status='superseded_import_boundary'
+               OR json_extract(b.input_json,'$.contract') IS NULL
+               OR json_extract(b.input_json,'$.contract')<>?
+               OR json_extract(b.input_json,'$.runtime_revision') IS NULL
+               OR json_extract(b.input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision))
         store.conn.execute("""DELETE FROM pipeline_route_provenance WHERE batch_id IN (
-            SELECT id FROM pipeline_batches
-            WHERE status IN ('superseded_protocol','superseded_import_boundary'))""")
+            SELECT id FROM pipeline_batches b
+            WHERE b.status='superseded_import_boundary'
+               OR json_extract(b.input_json,'$.contract') IS NULL
+               OR json_extract(b.input_json,'$.contract')<>?
+               OR json_extract(b.input_json,'$.runtime_revision') IS NULL
+               OR json_extract(b.input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision))
         compact_completed_snapshots(store)
         expire_completed_media(store)
 
@@ -290,123 +298,18 @@ def validate_routing_result(data,routed):
 
 
 def cached_route_result(database,data):
-    """Turn only a complete, bounded cache hit into a normalized batch result."""
+    """Reuse only route history whose exact producer can be proved."""
     expected=[item['id'] for item in data['routing_messages']]
     with Store(database,read_only=True) as store:
         rows=[store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=?',(key,)).fetchone() for key in expected]
-        # A removed cache row may still have an intact recorded producer.
         rows=[row or store.conn.execute('SELECT route_json FROM pipeline_route_provenance WHERE raw_id=?',(key,)).fetchone() for key,row in zip(expected,rows)]
         if not rows or not all(rows):return None
         try:assignments=[json.loads(row[0]) for row in rows]
         except (TypeError,ValueError) as error:
             raise RoutingRecoveryError('cached route JSON is invalid') from error
-        used=_assignment_tracks(data,assignments)
-        from .pipeline_recovery import recover_cached_routes
-        recovered=recover_cached_routes(database,data,assignments)
-        if recovered is not None:return recovered
-        cards={card['track_id']:card for card in data['tracks'] if _card_is_complete(card)}
-        missing=[key for key in used if key not in cards]
-        if missing:
-            placeholders=','.join('?' for _ in missing)
-            for row in store.conn.execute('SELECT id,scope,card_json FROM pipeline_tracks WHERE id IN ('+placeholders+')',missing):
-                try:card=json.loads(row['card_json'])
-                except (TypeError,ValueError) as error:
-                    raise RoutingRecoveryError('invalid cached Track card: '+row['id']) from error
-                # A cache-only card must have been materialized in this frozen
-                # session. Frozen cards already carry the allowed previous-window
-                # boundary, so never widen that boundary by searching all cards.
-                if row['scope']==data['scope'] and _card_is_complete(card) and card['track_id']==row['id']:
-                    # Do not import future turn text into an older frozen batch.
-                    anchors=card.get('recent_source_message_ids',[])
-                    if not isinstance(anchors,list) or any(type(key) is not int for key in anchors):
-                        raise RoutingRecoveryError('invalid cached Track anchors: '+row['id'])
-                    if anchors and max(anchors)>max(expected):
-                        raise RoutingRecoveryError('cached Track is newer than this frozen batch: '+row['id'])
-                    visible={m['id']:m for m in [*data.get('recent',[]),*data['routing_messages']]}
-                    bounded=[visible[key] for key in anchors if key in visible]
-                    cards[row['id']]={**card,'recent_source_message_ids':[m['id'] for m in bounded],
-                                      'recent_turns':latest.transcript_payload(bounded)}
-        unresolved=[key for key in used if key not in cards]
-        if unresolved:
-            raise RoutingRecoveryError('cached route references Track(s) without verifiable frozen material: '+','.join(unresolved))
-    return {'assignments':assignments,'tracks':[cards[key] for key in used],
-            'track_state_updates':[cards[key] for key in used],
-            'next_track_ordinal':max(data.get('next_track_ordinal',1),track_state.next_ordinal(data['scope'],list(cards.values()))),
-            '_public_normalized':True}
-
-
-def _component_signature(components):
-    # Group/order changes must not hide changed ownership or bridge endpoints.
-    # Keep duplicates visible; only unordered collection order is normalized.
-    return tuple(sorted(encode({
-        'track_ids':sorted(component.get('track_ids',[])),
-        'messages':sorted(m['id'] for m in component.get('messages',[])),
-        'parked':sorted(component.get('parked_context_source_ids',[])),
-        'memberships':sorted(encode({
-            'root':unit.get('unit_root_message_id'),
-            'sources':sorted(unit.get('source_message_ids',[])),
-            'track':unit.get('track_id'),'session':unit.get('session_id'),
-            'role':unit.get('routing_role'),
-        }) for unit in component.get('memberships',[])),
-        'edges':sorted(encode(edge) for edge in component.get('context_edges',[])),
-    }) for component in components))
-
-
-def save_routing_snapshot(database,batch,data,routed):
-    """Persist the exact interpretation before any downstream model stage runs."""
-    validate_routing_result(data,routed)
-    from .pipeline_recovery import assert_downstream_snapshot
-    assert_downstream_snapshot(database,batch,data)
-    if 'components' not in data:
-        data['joint_review']=bool(data['input_policy'].get('joint_review_enabled',False))
-    fresh=components(database,data,routed,include_materials='components' not in data)
-    if 'components' in data and _component_signature(data['components'])!=_component_signature(fresh):
-        raise RoutingRecoveryError('frozen components disagree with recovered routing result')
-    data['routing_result']=routed
-    data.setdefault('components',fresh)
-    if batch['status']=='needs_repair':
-        data['last_routing_repair']={'checked_at':now(),'previous_result':json.loads(batch['result_json'])}
-    encoded_data=encode(data)
-    with Store(database) as store,store.transaction(immediate=True):
-        if routed.get('recovered_route_sources'):
-            # Historical recovery must never rewind a Track card that has moved
-            # or changed since the producer ran. Fill only truly missing cards;
-            # the frozen batch keeps its exact recovered snapshot in input_json.
-            for card in routed['track_state_updates']:
-                store.conn.execute(
-                    'INSERT OR IGNORE INTO pipeline_tracks VALUES (?,?,?)',
-                    (card['track_id'], card.get('last_session_id', data['scope']), encode(card)))
-        else:
-            track_state.persist(store.conn,routed['track_state_updates'],data['scope'],preserve_newer=True)
-        if batch['status']=='needs_repair':
-            store.conn.execute("UPDATE pipeline_batches SET status='pending',result_json=NULL WHERE id=?",(batch['id'],))
-        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encoded_data,batch['id']))
-    batch['input_json']=encoded_data
-    return data
-
-
-def mark_needs_repair(database,batch,error):
-    detail={'status':'needs_repair','batch_id':batch['id'],'reason':str(error),
-            'note':'归线材料需要修复；原话和已完成步骤保留。修复后点击“重新校验并继续”。'}
-    with Store(database) as store,store.transaction(immediate=True):
-        store.conn.execute("UPDATE pipeline_batches SET status='needs_repair',result_json=? WHERE id=?",(encode(detail),batch['id']))
-    return detail
-
-
-def router_jobs(database,batch):
-    with Store(database,read_only=True) as store:
-        rows=[dict(row) for row in store.conn.execute(
-            "SELECT * FROM pipeline_jobs WHERE batch_id=? AND role LIKE 'track_router%' ORDER BY rowid",(batch['id'],))]
-    indexed=[]
-    for row in rows:
-        match=re.fullmatch(r'track_router:([0-9]+)',row['role'])
-        if not match or row['id']!=batch['id']+':'+row['role']:
-            raise RoutingRecoveryError('unrecognized frozen Router job: '+row['id'])
-        indexed.append((int(match[1]),row))
-    indexed.sort(key=lambda item:item[0])
-    if [index for index,_ in indexed]!=list(range(len(indexed))):
-        raise RoutingRecoveryError('frozen Router jobs are not a contiguous prefix')
-    return [row for _,row in indexed]
+        _assignment_tracks(data,assignments)
+    from .pipeline_recovery import recover_cached_routes
+    return recover_cached_routes(database,data,assignments)
 
 
 def _router_prefix(data,request,cursor):
