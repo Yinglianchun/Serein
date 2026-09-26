@@ -26,7 +26,7 @@ EVENT_CURATOR_MAX_ACTIVE_LEAVES_PER_TRACK=8
 _RUNTIME_CONTRACT_FILES = (
     'pipeline.py', 'pipeline_latest.py', 'pipeline_audit.py', 'pipeline_images.py',
     'pipeline_rules.py', 'pipeline_continuity.py', 'pipeline_materials.py',
-    'pipeline_admission.py',
+    'pipeline_admission.py', 'pipeline_recovery.py',
 )
 
 
@@ -83,6 +83,16 @@ def initialize(database):
                    OR json_extract(input_json,'$.contract')<>?
                    OR json_extract(input_json,'$.runtime_revision') IS NULL
                    OR json_extract(input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision))
+        # Route caches are executable frozen decisions too. Once their producer
+        # is superseded, discard only the cache/provenance rows; keep the batch,
+        # jobs and attempts as audit history.
+        store.conn.execute("""DELETE FROM pipeline_routes WHERE raw_id IN (
+            SELECT p.raw_id FROM pipeline_route_provenance p
+            JOIN pipeline_batches b ON b.id=p.batch_id
+            WHERE b.status IN ('superseded_protocol','superseded_import_boundary'))""")
+        store.conn.execute("""DELETE FROM pipeline_route_provenance WHERE batch_id IN (
+            SELECT id FROM pipeline_batches
+            WHERE status IN ('superseded_protocol','superseded_import_boundary'))""")
         compact_completed_snapshots(store)
         expire_completed_media(store)
 
