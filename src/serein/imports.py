@@ -197,14 +197,23 @@ def initialize_imports(database):
 
 
 def archive_imported_originals(conn):
-    """Import membership, not a global cursor: concurrent new chats stay eligible."""
+    """Keep imported-history exclusion as a compact, reversible upload boundary."""
     tables={row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {'file_imports','raw_events'}<=tables:return
     conn.execute('CREATE TABLE IF NOT EXISTS raw_processing(raw_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,outcome TEXT NOT NULL)')
-    conn.execute("""INSERT OR IGNORE INTO raw_processing(raw_id,operation_id,outcome)
-        SELECT r.id,'file-import:' || f.id,'archived_only' FROM raw_events r
-        JOIN file_imports f ON f.id=json_extract(r.metadata_json,'$.import_upload_id')
-        WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)""")
+    conn.execute('CREATE TABLE IF NOT EXISTS pipeline_import_boundaries('
+                 'upload_id TEXT PRIMARY KEY,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
+    # Migrate the old per-message markers before removing them. One upload boundary
+    # replaces hundreds or thousands of archived_only rows and can later be released
+    # without rewriting the raw archive.
+    conn.execute("""INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id)
+        SELECT DISTINCT substr(operation_id,13) FROM raw_processing
+        WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'""")
+    conn.execute("""INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id)
+        SELECT DISTINCT f.id FROM file_imports f
+        JOIN raw_events r ON f.id=json_extract(r.metadata_json,'$.import_upload_id')""")
+    conn.execute("""DELETE FROM raw_processing
+        WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'""")
 
 
 def report(row):
