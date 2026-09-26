@@ -341,3 +341,34 @@ def test_import_history_uses_compact_boundary_without_consuming_live_chat(settin
     task=asyncio.run(advance(settings.database,include_recent=True))
     assert task['role']=='track_router'
     assert {item['content'] for item in task['request']['messages']}=={'new question','new answer'}
+
+def test_completed_import_can_be_released_into_event_pipeline(settings):
+    client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
+    preview=stage(settings.database,json.dumps(messages(2)),'backfill.json','auto',False)
+    assert advance_import(settings,preview['id'])['inserted']==2
+    before=client.get('/v1/imports').json()['items']
+    item=next(row for row in before if row['id']==preview['id'])
+    assert item['event_boundary_active'] is True
+    released=client.post('/v1/imports/'+preview['id']+'/include-in-events',json={})
+    assert released.status_code==200 and released.json()['released'] is True
+    assert released.json()['originals']==2
+    after=client.get('/v1/imports').json()['items']
+    assert next(row for row in after if row['id']==preview['id'])['event_boundary_active'] is False
+    task=asyncio.run(advance(settings.database,include_recent=True))
+    assert task['role']=='track_router'
+    assert {row['content'] for row in task['request']['messages']}=={'  original 0\n','  original 1\n'}
+    again=client.post('/v1/imports/'+preview['id']+'/include-in-events',json={})
+    assert again.status_code==200 and again.json()['released'] is False
+
+
+def test_legacy_import_without_archived_marker_stays_released(settings):
+    preview=stage(settings.database,json.dumps(messages(2)),'manually-restored.json','auto',False)
+    assert advance_import(settings,preview['id'])['inserted']==2
+    with Store(settings.database) as store:
+        store.conn.execute('DELETE FROM pipeline_import_boundaries WHERE upload_id=?',(preview['id'],))
+        store.conn.execute("DELETE FROM raw_processing WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'")
+    from serein.imports import archive_imported_originals
+    with Store(settings.database) as store:
+        archive_imported_originals(store.conn)
+        assert store.conn.execute('SELECT count(*) FROM pipeline_import_boundaries WHERE upload_id=?',(preview['id'],)).fetchone()[0]==0
+
