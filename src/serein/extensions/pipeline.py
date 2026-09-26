@@ -312,6 +312,80 @@ def cached_route_result(database,data):
     return recover_cached_routes(database,data,assignments)
 
 
+def _component_signature(components):
+    # Group/order changes must not hide changed ownership or bridge endpoints.
+    # Keep duplicates visible; only unordered collection order is normalized.
+    return tuple(sorted(encode({
+        'track_ids':sorted(component.get('track_ids',[])),
+        'messages':sorted(m['id'] for m in component.get('messages',[])),
+        'parked':sorted(component.get('parked_context_source_ids',[])),
+        'memberships':sorted(encode({
+            'root':unit.get('unit_root_message_id'),
+            'sources':sorted(unit.get('source_message_ids',[])),
+            'track':unit.get('track_id'),'session':unit.get('session_id'),
+            'role':unit.get('routing_role'),
+        }) for unit in component.get('memberships',[])),
+        'edges':sorted(encode(edge) for edge in component.get('context_edges',[])),
+    }) for component in components))
+
+
+def save_routing_snapshot(database,batch,data,routed):
+    """Persist the exact interpretation before any downstream model stage runs."""
+    validate_routing_result(data,routed)
+    from .pipeline_recovery import assert_downstream_snapshot
+    assert_downstream_snapshot(database,batch,data)
+    if 'components' not in data:
+        data['joint_review']=bool(data['input_policy'].get('joint_review_enabled',False))
+    fresh=components(database,data,routed,include_materials='components' not in data)
+    if 'components' in data and _component_signature(data['components'])!=_component_signature(fresh):
+        raise RoutingRecoveryError('frozen components disagree with recovered routing result')
+    data['routing_result']=routed
+    data.setdefault('components',fresh)
+    if batch['status']=='needs_repair':
+        data['last_routing_repair']={'checked_at':now(),'previous_result':json.loads(batch['result_json'])}
+    encoded_data=encode(data)
+    with Store(database) as store,store.transaction(immediate=True):
+        if routed.get('recovered_route_sources'):
+            # Historical recovery must never rewind a Track card that has moved
+            # or changed since the producer ran. Fill only truly missing cards;
+            # the frozen batch keeps its exact recovered snapshot in input_json.
+            for card in routed['track_state_updates']:
+                store.conn.execute(
+                    'INSERT OR IGNORE INTO pipeline_tracks VALUES (?,?,?)',
+                    (card['track_id'], card.get('last_session_id', data['scope']), encode(card)))
+        else:
+            track_state.persist(store.conn,routed['track_state_updates'],data['scope'],preserve_newer=True)
+        if batch['status']=='needs_repair':
+            store.conn.execute("UPDATE pipeline_batches SET status='pending',result_json=NULL WHERE id=?",(batch['id'],))
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encoded_data,batch['id']))
+    batch['input_json']=encoded_data
+    return data
+
+
+def mark_needs_repair(database,batch,error):
+    detail={'status':'needs_repair','batch_id':batch['id'],'reason':str(error),
+            'note':'归线材料需要修复；原话和已完成步骤保留。修复后点击“重新校验并继续”。'}
+    with Store(database) as store,store.transaction(immediate=True):
+        store.conn.execute("UPDATE pipeline_batches SET status='needs_repair',result_json=? WHERE id=?",(encode(detail),batch['id']))
+    return detail
+
+
+def router_jobs(database,batch):
+    with Store(database,read_only=True) as store:
+        rows=[dict(row) for row in store.conn.execute(
+            "SELECT * FROM pipeline_jobs WHERE batch_id=? AND role LIKE 'track_router%' ORDER BY rowid",(batch['id'],))]
+    indexed=[]
+    for row in rows:
+        match=re.fullmatch(r'track_router:([0-9]+)',row['role'])
+        if not match or row['id']!=batch['id']+':'+row['role']:
+            raise RoutingRecoveryError('unrecognized frozen Router job: '+row['id'])
+        indexed.append((int(match[1]),row))
+    indexed.sort(key=lambda item:item[0])
+    if [index for index,_ in indexed]!=list(range(len(indexed))):
+        raise RoutingRecoveryError('frozen Router jobs are not a contiguous prefix')
+    return [row for _,row in indexed]
+
+
 def _router_prefix(data,request,cursor):
     messages=request.get('messages')
     if not isinstance(messages,list) or not messages or not all(isinstance(m,dict) for m in messages):
