@@ -340,7 +340,12 @@ def test_runtime_revision_retires_all_unfinished_frozen_statuses(settings):
         for index,status in enumerate(('pending','needs_repair','routing_only','routed'),1):
             store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,?)',
                                (f'stale-{index}','scope',json.dumps(stale),status))
+        store.conn.execute('INSERT INTO pipeline_routes(raw_id,route_json) VALUES (?,?)',(999,'{}'))
+        store.conn.execute('INSERT INTO pipeline_route_provenance(raw_id,batch_id,route_json) VALUES (?,?,?)',
+                           (999,'stale-4','{}'))
     p.initialize(settings.database)
     with Store(settings.database,read_only=True) as store:
         rows=store.conn.execute("SELECT status FROM pipeline_batches WHERE id LIKE 'stale-%' ORDER BY id").fetchall()
+        assert store.conn.execute('SELECT count(*) FROM pipeline_routes WHERE raw_id=999').fetchone()[0]==0
+        assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance WHERE raw_id=999').fetchone()[0]==0
     assert [row['status'] for row in rows]==['superseded_protocol']*4
