@@ -196,7 +196,7 @@ def initialize_imports(database):
         archive_imported_originals(store.conn)
 
 
-def archive_imported_originals(conn):
+def archive_imported_originals(conn, upload_id=None):
     """Keep imported-history exclusion as a compact, reversible upload boundary."""
     conn.execute('CREATE TABLE IF NOT EXISTS raw_processing(raw_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,outcome TEXT NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS pipeline_import_boundaries('
@@ -213,11 +213,11 @@ def archive_imported_originals(conn):
     conn.execute("""INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id)
         SELECT DISTINCT substr(operation_id,13) FROM raw_processing
         WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'""")
-    conn.execute("""INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id)
-        SELECT DISTINCT f.id FROM file_imports f
-        JOIN raw_events r ON f.id=json_extract(r.metadata_json,'$.import_upload_id')""")
     conn.execute("""DELETE FROM raw_processing
         WHERE outcome='archived_only' AND operation_id LIKE 'file-import:%'""")
+    if upload_id:
+        conn.execute('INSERT OR IGNORE INTO pipeline_import_boundaries(upload_id,released) VALUES (?,0)',
+                     (str(upload_id),))
 
 
 def release_imported_originals(database, upload_id):
@@ -326,7 +326,7 @@ def advance_import(settings,identifier):
             counts[status]+=1
         except (ValueError,KeyError) as exc:errors.append({'entry':start+offset+1,'message':str(exc)[:250]})
     with Store(settings.database) as store,store.transaction(immediate=True):
-        archive_imported_originals(store.conn)
+        archive_imported_originals(store.conn,identifier)
         store.conn.execute('UPDATE file_imports SET cursor=?,inserted=inserted+?,duplicate=duplicate+?,errors_json=? WHERE id=? AND cursor=?',
             (start+len(batch),counts['inserted'],counts['duplicate'],encode(errors),identifier,start))
         return report(store.conn.execute('SELECT * FROM file_imports WHERE id=?',(identifier,)).fetchone())
