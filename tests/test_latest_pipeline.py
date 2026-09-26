@@ -303,3 +303,44 @@ def test_images_keep_ownership_and_only_curator_receives_pixels(settings,monkeyp
         return {'choices':[{'message':{'content':json.dumps(output_for(request['role'],request))}}]}
     monkeypatch.setattr('serein.model_runtime.complete',complete)
     assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
+
+def test_curator_prompt_shows_complete_receipt_schema_and_safe_aliases(settings):
+    from serein.extensions.pipeline_audit import canonicalize_curator_review
+    ingest(settings)
+    task=curator_task(settings)
+    prompt=task['request']['prompt']
+    assert '"left_event_index": 0' in prompt
+    assert '"right_event_index": 1' in prompt
+    assert '"disposition": "skip"' in prompt
+    assert '"parked_source_message_ids": []' in prompt
+    review=canonicalize_curator_review({'events':[],'boundaries':[],'dispositions':[
+        {'status':'skip','unit_roots':[1],'reason':'background only'}]})
+    assert review['dispositions']==[{
+        'disposition':'skip','unit_roots':[1],'reason':'background only',
+        'parked_source_message_ids':[]}]
+
+
+def test_image_transcription_defaults_only_deterministic_unreadable_flag():
+    import hashlib
+    from serein.extensions.pipeline_images import bind_transcriptions, image_bytes
+    uri='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII='
+    body,_=image_bytes(uri)
+    receipt={'source_message_id':1,'position':1,'sha256':hashlib.sha256(body).hexdigest(),
+             'evidence_role':'stable','url':uri}
+    readable=bind_transcriptions({'image_transcriptions':[{'input_image':1,'text':'visible'}]},[receipt])
+    assert readable[0]['unreadable'] is False
+    blank=bind_transcriptions({'image_transcriptions':[{'input_image':1,'text':''}]},[receipt])
+    assert blank[0]['unreadable'] is True
+
+
+def test_runtime_revision_retires_all_unfinished_frozen_statuses(settings):
+    p.initialize(settings.database)
+    stale={'contract':p.CONTRACT,'runtime_revision':'stale','routing_messages':[]}
+    with Store(settings.database) as store:
+        for index,status in enumerate(('pending','needs_repair','routing_only','routed'),1):
+            store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,?)',
+                               (f'stale-{index}','scope',json.dumps(stale),status))
+    p.initialize(settings.database)
+    with Store(settings.database,read_only=True) as store:
+        rows=store.conn.execute("SELECT status FROM pipeline_batches WHERE id LIKE 'stale-%' ORDER BY id").fetchall()
+    assert [row['status'] for row in rows]==['superseded_protocol']*4
