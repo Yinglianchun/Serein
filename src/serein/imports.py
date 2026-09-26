@@ -198,11 +198,11 @@ def initialize_imports(database):
 
 def archive_imported_originals(conn):
     """Keep imported-history exclusion as a compact, reversible upload boundary."""
-    tables={row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    if not {'file_imports','raw_events'}<=tables:return
     conn.execute('CREATE TABLE IF NOT EXISTS raw_processing(raw_id INTEGER PRIMARY KEY,operation_id TEXT NOT NULL,outcome TEXT NOT NULL)')
     conn.execute('CREATE TABLE IF NOT EXISTS pipeline_import_boundaries('
                  'upload_id TEXT PRIMARY KEY,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
+    tables={row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {'file_imports','raw_events'}<=tables:return
     # Migrate the old per-message markers before removing them. One upload boundary
     # replaces hundreds or thousands of archived_only rows and can later be released
     # without rewriting the raw archive.
