@@ -957,6 +957,15 @@ async def transcribe_component(database,batch,component,index,runner,*,key_prefi
     from ..image_transcription import reusable_transcriptions, mark_transcription, persist_transcriptions, PROMPT
     probe=await asyncio.to_thread(request_for,database,batch,'event_curator',component=component,transcription_only=True)
     images=probe.get('images',[])
+    frozen=list(component.get('curator_image_transcriptions') or [])
+    if frozen:
+        try:
+            verify_transcriptions(frozen,images)
+        except ValueError:
+            pass
+        else:
+            component['curator_image_transcriptions']=frozen
+            return bool(images)
     cached=reusable_transcriptions(database,component['context_messages'],images)
     if len(cached)==len(images):
         component['curator_image_transcriptions']=cached
