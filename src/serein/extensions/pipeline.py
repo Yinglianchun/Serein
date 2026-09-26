@@ -298,18 +298,49 @@ def validate_routing_result(data,routed):
 
 
 def cached_route_result(database,data):
-    """Reuse only route history whose exact producer can be proved."""
+    """Turn only a complete, bounded cache hit into a normalized batch result."""
     expected=[item['id'] for item in data['routing_messages']]
     with Store(database,read_only=True) as store:
         rows=[store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=?',(key,)).fetchone() for key in expected]
+        # A removed cache row may still have an intact recorded producer.
         rows=[row or store.conn.execute('SELECT route_json FROM pipeline_route_provenance WHERE raw_id=?',(key,)).fetchone() for key,row in zip(expected,rows)]
         if not rows or not all(rows):return None
         try:assignments=[json.loads(row[0]) for row in rows]
         except (TypeError,ValueError) as error:
             raise RoutingRecoveryError('cached route JSON is invalid') from error
-        _assignment_tracks(data,assignments)
-    from .pipeline_recovery import recover_cached_routes
-    return recover_cached_routes(database,data,assignments)
+        used=_assignment_tracks(data,assignments)
+        from .pipeline_recovery import recover_cached_routes
+        recovered=recover_cached_routes(database,data,assignments)
+        if recovered is not None:return recovered
+        cards={card['track_id']:card for card in data['tracks'] if _card_is_complete(card)}
+        missing=[key for key in used if key not in cards]
+        if missing:
+            placeholders=','.join('?' for _ in missing)
+            for row in store.conn.execute('SELECT id,scope,card_json FROM pipeline_tracks WHERE id IN ('+placeholders+')',missing):
+                try:card=json.loads(row['card_json'])
+                except (TypeError,ValueError) as error:
+                    raise RoutingRecoveryError('invalid cached Track card: '+row['id']) from error
+                # A cache-only card must have been materialized in this frozen
+                # session. Frozen cards already carry the allowed previous-window
+                # boundary, so never widen that boundary by searching all cards.
+                if row['scope']==data['scope'] and _card_is_complete(card) and card['track_id']==row['id']:
+                    # Do not import future turn text into an older frozen batch.
+                    anchors=card.get('recent_source_message_ids',[])
+                    if not isinstance(anchors,list) or any(type(key) is not int for key in anchors):
+                        raise RoutingRecoveryError('invalid cached Track anchors: '+row['id'])
+                    if anchors and max(anchors)>max(expected):
+                        raise RoutingRecoveryError('cached Track is newer than this frozen batch: '+row['id'])
+                    visible={m['id']:m for m in [*data.get('recent',[]),*data['routing_messages']]}
+                    bounded=[visible[key] for key in anchors if key in visible]
+                    cards[row['id']]={**card,'recent_source_message_ids':[m['id'] for m in bounded],
+                                      'recent_turns':latest.transcript_payload(bounded)}
+        unresolved=[key for key in used if key not in cards]
+        if unresolved:
+            raise RoutingRecoveryError('cached route references Track(s) without verifiable frozen material: '+','.join(unresolved))
+    return {'assignments':assignments,'tracks':[cards[key] for key in used],
+            'track_state_updates':[cards[key] for key in used],
+            'next_track_ordinal':max(data.get('next_track_ordinal',1),track_state.next_ordinal(data['scope'],list(cards.values()))),
+            '_public_normalized':True}
 
 
 def _component_signature(components):

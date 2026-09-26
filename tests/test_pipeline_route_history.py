@@ -126,7 +126,7 @@ def test_completed_downstream_jobs_reuse_frozen_plan_after_historical_recovery(s
         assert json.loads(store.conn.execute('SELECT card_json FROM pipeline_tracks').fetchone()[0]) == later
 
 
-def test_legacy_cache_without_current_runtime_proof_is_rerouted(settings):
+def test_legacy_cache_without_current_runtime_proof_requires_repair(settings):
     ingest(settings)
     _, data = freeze(settings)
     with Store(settings.database) as store:
@@ -136,7 +136,8 @@ def test_legacy_cache_without_current_runtime_proof_is_rerouted(settings):
                 'primary_track_id':'legacy-track',
                 'context_track_ids':[],
                 'routing_role':'primary_activity'})))
-    assert p.cached_route_result(settings.database,data) is None
+    with pytest.raises(p.RoutingRecoveryError, match='legacy-track'):
+        p.cached_route_result(settings.database,data)
 
 
 def test_source_snapshot_without_jobs_is_self_contained(settings):

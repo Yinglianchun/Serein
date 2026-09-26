@@ -59,6 +59,15 @@ def test_three_stages_and_writer_sees_exact_predecessor_originals(settings):
     async def runner(role,request):seen.append(role);return output_for(role,request)
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=runner))['events']==1
     assert seen==list(p.ROLES)==['track_router','event_curator','event_writer']
+    with Store(settings.database,read_only=True) as store:
+        completed=json.loads(store.conn.execute("SELECT input_json FROM pipeline_batches WHERE status='done'").fetchone()[0])
+        assert completed['runtime_revision']==p.runtime_revision()
+        routes=[tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_routes ORDER BY raw_id')]
+        provenance=[tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_route_provenance ORDER BY raw_id')]
+    p.initialize(settings.database)
+    with Store(settings.database,read_only=True) as store:
+        assert [tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_routes ORDER BY raw_id')]==routes
+        assert [tuple(row) for row in store.conn.execute('SELECT * FROM pipeline_route_provenance ORDER BY raw_id')]==provenance
     ingest(settings,2)
     task=curator_task(settings);p.submit(settings.database,task['job_id'],output_for(task['role'],task['request']))
     task=asyncio.run(p.advance(settings.database,include_recent=True));prompt=task['request']['prompt']
