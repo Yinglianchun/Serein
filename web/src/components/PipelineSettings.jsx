@@ -6,12 +6,23 @@ export function PipelineSettings({onOpenSummary}) {
   const [task,setTask]=useState(null),[output,setOutput]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
   const [work,setWork]=useState(null);
   const [limits,setLimits]=useState(null);
-  const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null);
+  const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null),restoreDialog=useRef(null);
   const [rebuildTarget,setRebuildTarget]=useState('');
   const running=['queued','running'].includes(work?.status);
   const needsRepair=work?.status==='needs_repair'||work?.result?.status==='needs_repair';
   const failure=work?.error||(needsRepair?work?.result?.reason:'');
   const candidateOverflows=work?.result?.candidate_overflow_deferrals||[];
+  const roleNames={track_router:'归线',event_curator:'切分',event_writer:'Event 写作'};
+  const autoMessage=limits?.auto_enabled===false?'自动整理已暂停；手动点击“继续整理”仍可启动任务。'
+    :work?.auto_boundary_originals>0?`自动整理已开启，但 ${work.auto_boundary_originals} 条旧原话在启用边界外，需要手动恢复。`
+    :work?.status==='awaiting_agent'?'自动整理已开启，当前等待 Agent 领取任务。'
+    :work?.status==='failed'||work?.status==='paused'||needsRepair?'自动整理已开启，当前批次需要处理下方的失败原因。'
+    :running?'自动整理正在后台运行。'
+    :work?.unassigned_roles?.length===3?'自动整理已开启，但三个阶段都未配置模型，自动模型任务不会启动；请到“自动摘要配置”选择阶段模型，或切换 Agent 模式并让 Agent 领取任务。'
+    :work?.unassigned_roles?.length?`自动整理已开启，但${work.unassigned_roles.map(role=>roleNames[role]||role).join('、')}未配置模型；运行到这些阶段会等待 Agent。请到“自动摘要配置”选择阶段模型。`
+    :work?.execution_mode==='agent'?'自动整理已开启，当前为 Agent 模式；点击“继续整理”可创建任务，等待 Agent 领取。'
+    :work?.stage==='settled_today'?'今天的自动检查已完成；新原话会在下一轮检查。'
+    :'自动整理已开启；后台在每天 03:00 后检查新原话。要立即运行可点击“继续整理”。';
   const stages={paused:'本批已暂停',idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复',rebuilt:'计划已重建'};
   async function call(action,body) {
     const response=await fetch('/__serein/pipeline/'+action,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -66,6 +77,17 @@ export function PipelineSettings({onOpenSummary}) {
       setStatus('已重新开放这张图片的三次转录机会，正在继续整理。');
     }catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
+  async function restoreBoundary() {
+    if(busy||running)return;
+    setBusy(true);
+    try {
+      const result=await call('restore-auto-boundary',{confirm:'RESTORE_AUTO_BOUNDARY'});
+      if(result.status==='busy')throw new Error('整理任务正在运行，请稍后重试。');
+      restoreDialog.current.close();
+      accept(await call('next',{include_recent:true}));
+      setStatus(`已恢复 ${result.restored_originals} 条自动边界外原话，后台开始整理；已结算记录不变。`);
+    }catch(error){setStatus(error.message);}finally{setBusy(false);}
+  }
   async function confirmRebuild() {
     if(busy||!rebuildTarget)return;
     setBusy(true);
@@ -91,13 +113,14 @@ export function PipelineSettings({onOpenSummary}) {
   }
   async function submit() {
     setBusy(true);
-    try {await call('submit',{job_id:task.job_id,output:JSON.parse(output)});setTask(null);setOutput('');accept(await call('next',{include_recent:true}));setStatus('结果已校验并保存，后台继续下一步。');}
+    try {const saved=await call('submit',{job_id:task.job_id,output:JSON.parse(output)});setTask(null);setOutput('');accept(await call('next',{include_recent:true}));setStatus(saved.status==='host_deferred'?'Curator 再次遗漏原话，所在审阅范围已留待下轮；原话没有跳过。':'结果已校验并保存，后台继续下一步。');}
     catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   return <section className="settings-group"><div className="settings-group__heading"><h3>原话整理</h3>
     <p>归线 → 切分与转录 → Event 写作。在“配置”页选择执行方式、三阶段模型和整理参数。Scene 由聊天中的 agent 主动写。</p></div>
     <ConversationImport onImported={()=>setStatus('原话已导入。点击继续整理，进入下一步。')} />
-    {limits&&<p>{limits.auto_enabled===false?'自动整理已暂停；手动点击“继续整理”仍可启动任务。':'自动整理已开启。'}</p>}
+    {limits&&<p>{autoMessage}</p>}
+    {work?.auto_boundary_originals>0&&<p>有 {work.auto_boundary_originals} 条原话在开启自动整理时被划到边界外。它们仍保存在原话档案中，点击“继续整理”不会处理这些原话。<button type="button" disabled={busy||running} onClick={()=>restoreDialog.current.showModal()}>恢复并整理这批原话</button></p>}
     <button type="button" className="settings-link" onClick={onOpenSummary}>自动摘要配置</button>
     {work&&<div aria-live="polite"><p>当前阶段：{stages[work.stage]||work.stage} · 本批已完成 {work.completed||0} 个步骤 · 已保存 {work.events??work.result?.events??0} 条 Event</p>
       {work.prompt_chars>0&&<p>本次提示词 {work.prompt_chars} 字符 · 超时 {work.timeout_seconds} 秒 · 第 {work.attempt||1} 次尝试</p>}
@@ -111,7 +134,7 @@ export function PipelineSettings({onOpenSummary}) {
       {(work.failed_images||[]).map(image=><p className="import-error" key={image.sha256}>
         图片 {image.sha256.slice(0,8)} 转录失败三次，已暂停自动重试；依赖它的原话仍保留。
         <button type="button" disabled={busy||running} onClick={()=>retryImage(image.sha256)}>重试这张图片</button></p>)}
-      {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批累计失败三次，已暂停：{batch.reason}。同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button></p>)}
+      {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批已暂停：{batch.reason}。同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button></p>)}
       {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
       {needsRepair&&<p>批次：<code>{work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。不会跳过原话或删除已保存的 Event。</p>}
       {task&&<p>等待 {stages[task.role]||task.role}：下载任务交给 Agent，再提交返回的 JSON。</p>}</div>}
@@ -130,6 +153,11 @@ export function PipelineSettings({onOpenSummary}) {
       <div className="settings-actions"><button type="button" disabled={busy} onClick={()=>{rebuildDialog.current.close();setRebuildTarget('');}}>取消</button>
         <button type="button" disabled={busy||!rebuildTarget} onClick={confirmRebuild}>确认作废旧计划并重新归线</button></div>
       <p role="status">{status}</p>
+    </dialog>
+    <dialog ref={restoreDialog} className="agent-guide" aria-labelledby="pipeline-restore-title">
+      <h3 id="pipeline-restore-title">恢复自动边界外的原话？</h3>
+      <p>将 {work?.auto_boundary_originals||0} 条原话重新放入待整理池，并启动一次后台整理。后续模型调用可能产生费用；已结算和主动跳过的原话不会重跑。</p>
+      <div className="settings-actions"><button type="button" onClick={()=>restoreDialog.current.close()}>取消</button><button type="button" disabled={busy||running} onClick={restoreBoundary}>确认恢复并整理</button></div>
     </dialog>
     <p role="status">{status}</p></section>;
 }

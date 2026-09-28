@@ -107,8 +107,12 @@ def normalize_event_track_message_output(
     payload_keys = set(output).difference(
         {"_splitter_provider", "_splitter_model", "_splitter_provider_index", "_codex_job"}
     )
-    if payload_keys != {"message_assignments", "track_updates"}:
-        raise ValueError("Track Router returned an invalid top-level schema")
+    expected_keys = {"message_assignments", "track_updates"}
+    if not expected_keys.issubset(payload_keys):
+        raise ValueError(
+            "Track Router top-level fields missing: "
+            f"{sorted(expected_keys - payload_keys)}"
+        )
     raw_assignments = output.get("message_assignments")
     raw_updates = output.get("track_updates")
     if not isinstance(raw_assignments, list) or not isinstance(raw_updates, list):
@@ -128,14 +132,23 @@ def normalize_event_track_message_output(
         "routing_role",
     }
     for index, raw in enumerate(raw_assignments):
-        if not isinstance(raw, dict) or set(raw) != required_fields:
-            raise ValueError("Track Router message assignment has invalid fields")
+        if not isinstance(raw, dict):
+            raise ValueError(f"Track Router message assignment #{index + 1} must be an object")
+        if not required_fields.issubset(raw):
+            raise ValueError(
+                f"Track Router message assignment #{index + 1} fields missing: "
+                f"{sorted(required_fields - set(raw))}"
+            )
         source_id = raw.get("source_message_id")
         primary_ref = str(raw.get("primary_track_ref") or "").strip()
         raw_context_refs = raw.get("context_track_refs")
         routing_role = str(raw.get("routing_role") or "").strip()
         if type(source_id) is not int or index >= len(expected_ids) or source_id != expected_ids[index]:
-            raise ValueError("Track Router assignments must exact-cover source messages in order")
+            expected_id = expected_ids[index] if index < len(expected_ids) else None
+            raise ValueError(
+                f"Track Router assignment #{index + 1} source_message_id={source_id!r}; "
+                f"expected={expected_id!r} in source message order"
+            )
         if primary_ref not in existing and not re.fullmatch(r"new:[1-9][0-9]*", primary_ref):
             raise ValueError("Track Router referenced an unknown primary Track")
         if not isinstance(raw_context_refs, list):
@@ -165,15 +178,18 @@ def normalize_event_track_message_output(
         )
         used_refs.extend([primary_ref, *context_refs])
     if len(assignments) != len(expected_ids):
-        raise ValueError("Track Router omitted a source message")
+        raise ValueError(f"Track Router omitted source_message_ids={expected_ids[len(assignments):]}")
 
     update_by_ref: dict[str, dict[str, Any]] = {}
-    for raw in raw_updates:
-        if not isinstance(raw, dict) or set(raw) not in (
-            {"track_ref", "subject", "throughline", "status"},
-            {"track_ref", "subject", "throughline", "event_policy", "status"},
-        ):
-            raise ValueError("Track Router update has invalid fields")
+    for index, raw in enumerate(raw_updates):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Track Router update #{index + 1} must be an object")
+        required_update_fields = {"track_ref", "subject", "throughline", "status"}
+        if not required_update_fields.issubset(raw):
+            raise ValueError(
+                f"Track Router update #{index + 1} fields missing: "
+                f"{sorted(required_update_fields - set(raw))}"
+            )
         track_ref = str(raw.get("track_ref") or "").strip()
         subject = " ".join(str(raw.get("subject") or "").split())
         throughline = " ".join(str(raw.get("throughline") or "").split())
@@ -200,8 +216,12 @@ def normalize_event_track_message_output(
             "event_policy": event_policy,
             "status": status,
         }
-    if set(update_by_ref) != set(used_refs):
-        raise ValueError("Track Router updates must exactly cover all used Tracks")
+    used_ref_set = set(used_refs)
+    if set(update_by_ref) != used_ref_set:
+        raise ValueError(
+            "Track Router updates must exactly cover all used Tracks: "
+            f"missing={sorted(used_ref_set - set(update_by_ref))}, unused={sorted(set(update_by_ref) - used_ref_set)}"
+        )
 
     new_refs = sorted(
         {ref for ref in used_refs if ref not in existing},
