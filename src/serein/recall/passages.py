@@ -80,7 +80,7 @@ def full_coverage(document, spans):
     return True
 
 
-def prepare_passages(settings, *, legacy=None, document_ids=None):
+def prepare_passages(settings, *, legacy=None, document_ids=None, client=None):
     """Keep valid old layouts when complete; otherwise build independent slices."""
     from ..configured_models import recall_settings
     from .policy import RecallPolicy
@@ -88,6 +88,9 @@ def prepare_passages(settings, *, legacy=None, document_ids=None):
     policy = RecallPolicy.from_config(recall_settings(settings))
     if not policy.passages_enabled:
         return {'status':'disabled'}
+    if client is None and settings.embedding.get('tokenizer'):
+        client = EmbeddingClient(settings.database, settings.index, **settings.embedding)
+    window = getattr(client, 'window', None)
     grouped, counts = {}, Counter()
     if legacy:
         for row in legacy['rows']:
@@ -119,6 +122,12 @@ def prepare_passages(settings, *, legacy=None, document_ids=None):
                         counts['owners_reused_local'] += 1
                         continue
                     spans = layout(layouts, doc, policy.passage_min_chars)
+                    if window:
+                        title = doc['title'].strip()+'\n' if doc['kind']=='event' and doc['title'].strip() else ''
+                        prefix = f"Instruct: {profile['document_instruction']}\nDocument: " if profile['document_instruction'] else ''
+                        if spans or not window.fits(prefix + title + body):
+                            spans = [(a+start,a+end) for a,b in regions(doc)
+                                     for start,end in window.spans(body[a:b],prefix=prefix+title,max_chars=profile['max_chars'])]
                     if not spans:
                         conn.execute('DELETE FROM passages WHERE document_id=?',(doc['id'],))
                         conn.execute('INSERT OR REPLACE INTO passage_owners VALUES (?,?)',(doc['id'],stamp))
@@ -180,7 +189,7 @@ def fill_passages(settings, *, client=None, batch_size=16, progress=None, docume
         return {'status':'disabled','planned':0,'embedded':0,'requests':0,'canonical_writes':0}
     client=client or EmbeddingClient(settings.database,settings.index,**settings.embedding)
     document_ids=None if document_ids is None else set(document_ids)
-    prepare_passages(settings,document_ids=document_ids)
+    prepare_passages(settings,document_ids=document_ids,client=client)
     with Search(settings.database,settings.index) as search:
         stored=json.loads(search.conn.execute("SELECT value FROM settings WHERE key='embedding_profile'").fetchone()[0])
         if stored != client.profile: raise ValueError('Passage provider profile differs from index')

@@ -67,6 +67,9 @@ def fill_vectors(settings, *, batch_size=16, limit=None, client=None, progress=N
             if len(prefix) + len(body) > profile["max_chars"]:
                 skipped["requires_passage_index"] += 1
                 continue
+            if getattr(client, 'window', None) and not client.window.fits(prefix + body):
+                skipped['requires_token_passages'] += 1
+                continue
             pending.append({"id": row["id"], "kind": row["kind"], "stamp": content_stamp(document), "body": body})
     if limit is not None:
         pending = pending[:limit]
