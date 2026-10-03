@@ -288,11 +288,14 @@ def test_domain_editor_updates_next_tagging_request_without_restart(settings, mo
             'expected_dataset_version':version,'domains':domains})
 
     catalog=[*baseline['policies'],custom]
+    def semantic_catalog():
+        # The tagger sees domain meanings; surfacing policies belong to the host.
+        return [{key:item[key] for key in ('key','label','description')} for item in catalog]
     added=publish(catalog,baseline['dataset_version'])
     assert added.status_code==200,added.text
     assert client.get(endpoint).json()['policies']==catalog
     asyncio.run(process(settings.database))
-    assert calls[-1]['domains']==catalog
+    assert calls[-1]['domains']==semantic_catalog()
     updated={**custom,'label':'阅读与书评','description':'阅读体验、书评与借阅；排除工作文档'}
     catalog[-1]=updated
     changed=publish(catalog,added.json()['dataset_version'])
@@ -302,7 +305,7 @@ def test_domain_editor_updates_next_tagging_request_without_restart(settings, mo
     scenes.write('Another reading experience.',['another book'],title='After description update')
     asyncio.run(process(settings.database))
     assert len(calls)==2  # Existing tagged memories are not tagged again.
-    assert calls[-1]['domains']==catalog
+    assert calls[-1]['domains']==semantic_catalog()
     assert read_settings(settings.database)['tagging']['domains']==catalog
     assert publish(baseline['policies'],changed.json()['dataset_version']).status_code==200
     assert client.get(endpoint).json()['policies']==baseline['policies']
