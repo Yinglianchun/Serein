@@ -29,6 +29,7 @@ def test_saved_transcript_survives_expired_external_original(settings, monkeypat
     monkeypatch.setattr(images, 'image_bytes', read)
     transcribed = []
     writers = []
+    curators = []
     async def runner(role, request):
         if request.get('transcription_only'):
             transcribed.append(request['images'][0]['source_message_id'])
@@ -36,6 +37,8 @@ def test_saved_transcript_survives_expired_external_original(settings, monkeypat
                 'text': 'Synthetic cover title', 'unreadable': False}]}
         if role == 'event_writer':
             writers.append(request)
+        elif role == 'event_curator':
+            curators.append(copy.deepcopy(request))
         return output_for(role, request)
     for window, day in [('earlier', '2025-01-01'), ('later', '2025-01-02')]:
         attachment = remote if window == 'earlier' else PNG
@@ -57,12 +60,20 @@ def test_saved_transcript_survives_expired_external_original(settings, monkeypat
     assert reads == [remote]
     assert transcribed == ([1, 3] if add_new_image else [1])
     request = writers[-1]
+    assert request['writer_mode'] == 'append'
+    assert {message['original_session_id'] for message in request['messages']} == {'later'}
     assert request['images'] == [] and request['image_input_mode'] == 'transcriptions_only'
     assert {row['source_message_id'] for row in request['curator_image_transcriptions']} == (
+        {3} if add_new_image else set())
+    assert {row['source_message_id'] for row in curators[-1]['curator_image_transcriptions']} == (
         {1, 3} if add_new_image else {1})
     with Store(settings.database, read_only=True) as store:
         cached = json.loads(store.conn.execute('SELECT image_transcription_json FROM raw_events WHERE id=1').fetchone()[0])
+        sources = store.conn.execute('SELECT session_id,message_id FROM fact_event_sources WHERE item_id IN '
+            "(SELECT item_id FROM fact_events WHERE status='active')").fetchall()
     assert cached['items'][0]['source_fingerprint']
+    assert set(map(tuple, sources)) == {(window, window + '-' + role)
+                                      for window in ('earlier', 'later') for role in ('user', 'reply')}
 
 
 def test_replaced_attachment_requires_fresh_bytes(settings, monkeypatch):

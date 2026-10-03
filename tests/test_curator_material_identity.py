@@ -81,6 +81,7 @@ def test_protected_append_filters_writer_materials_to_new_owned_sources(settings
     component['base_event_candidates'] = [{
         'event_id': 'earlier-cover', 'primary_track_id': second, 'session_ids': [10],
         'source_message_ids': [10], 'predecessor_event_ids': [], 'active': True,
+        'title': 'Cover repair', 'body': 'We repaired the cover earlier.',
         'protected': True, 'continuation_allowed': True}]
     output = {'events': [{'action': 'extend', 'primary_track_id': second,
         'base_event_ids': ['earlier-cover'], 'owned_unit_roots': [4]}],
@@ -98,6 +99,9 @@ def test_protected_append_filters_writer_materials_to_new_owned_sources(settings
         return output_for(role, request)
     asyncio.run(p.first_event_writer_pass(settings.database, batch, component, plan, 0, runner))
     request = requests[0]
+    assert request['writer_mode'] == 'append'
+    assert 'We repaired the cover earlier.' in request['prompt']
+    assert 'Earlier cover repair.' not in request['prompt']
     assert [message['id'] for message in request['messages']] == [4]
     materials = json.loads(request['prompt'].split('<curator_materials_json>\n')[1].split('\n</')[0])
     assert [row['source_message_id'] for row in materials] == [4]
@@ -108,6 +112,8 @@ def test_protected_append_filters_writer_materials_to_new_owned_sources(settings
 def test_cross_window_event_extension_hands_correct_materials_to_writer(settings, with_image):
     save_settings(settings.database, {'pipeline': {'material_review_enabled': True}})
     seen = []
+    curator_seen = []
+    first_body = None
     transcription_calls = []
     async def runner(role, request):
         if request.get('transcription_only'):
@@ -116,6 +122,7 @@ def test_cross_window_event_extension_hands_correct_materials_to_writer(settings
                 'unreadable': False} for index, _ in enumerate(request['images'], 1)]}
         output = output_for(role, request)
         if role == 'event_curator':
+            curator_seen.append(copy.deepcopy(request))
             annotate(output, request['component'])
         elif role == 'event_writer':
             seen.append(request)
@@ -131,6 +138,9 @@ def test_cross_window_event_extension_hands_correct_materials_to_writer(settings
         ], source='synthetic')
         result = asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
         assert result.get('events') == 1, result
+        if window == 'first-window':
+            with Store(settings.database, read_only=True) as store:
+                first_body = store.conn.execute("SELECT body FROM fact_events WHERE status='active'").fetchone()[0]
         if with_image and window == 'first-window':
             from serein.extensions.pipeline_images import expire_completed_media
             with Store(settings.database) as store:
@@ -146,16 +156,23 @@ def test_cross_window_event_extension_hands_correct_materials_to_writer(settings
     assert len(seen) == 2
     request = seen[-1]
     assert request['event']['action'] == 'extend'
-    assert {message['original_session_id'] for message in request['messages']} == {'first-window', 'second-window'}
+    assert request['writer_mode'] == 'append'
+    assert {message['original_session_id'] for message in request['messages']} == {'second-window'}
+    assert first_body in request['prompt']
+    assert 'Synthetic cover response first-window' not in request['prompt']
     if with_image:
         assert len(transcription_calls) == 1
         assert request['images'] == []
-        assert request['curator_image_transcriptions'][0]['text'] == 'Synthetic cover image'
-        assert request['curator_image_transcriptions'][0]['source_message_id'] == 1
+        assert request['curator_image_transcriptions'] == []
+        transcript = curator_seen[-1]['curator_image_transcriptions'][0]
+        assert transcript['text'] == 'Synthetic cover image'
+        assert transcript['source_message_id'] == 1
     materials = json.loads(request['prompt'].split('<curator_materials_json>\n')[1].split('\n</')[0])
     assert {row['source_message_id'] for row in materials} == {message['id'] for message in request['messages']}
     with Store(settings.database, read_only=True) as store:
         assert store.conn.execute("SELECT count(*) FROM fact_events WHERE status='active'").fetchone()[0] == 1
+        assert store.conn.execute("SELECT body FROM fact_events WHERE status='active'").fetchone()[0] == (
+            first_body + '\n\n' + output_for('event_writer', request)['event_draft'])
         sources = store.conn.execute('SELECT session_id,message_id FROM fact_event_sources WHERE item_id IN '
             "(SELECT item_id FROM fact_events WHERE status='active')").fetchall()
     assert set(map(tuple, sources)) == {(window, window + '-' + message) for window in ('first-window', 'second-window')
