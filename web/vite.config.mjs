@@ -13,6 +13,7 @@ import {
 } from "./server/sceneEvidenceBridge.mjs";
 import { narrativeBodyDiff, runNarrativeCodexTask } from "./server/narrativeCodexRunner.mjs";
 import { buildNarrativePreviewFingerprint } from "./server/narrativeMaterialPreview.mjs";
+import { createNarrativePreviewJobs } from "./server/narrativePreviewJobs.mjs";
 
 const narrativeWriterRoleDir = fileURLToPath(new URL("./codex_agents/narrative_writer/", import.meta.url));
 
@@ -691,6 +692,7 @@ function sereinMemoryBridge() {
     name: "serein-memory-bridge",
     configurePreviewServer(server) { sereinMemoryBridge().configureServer(server); },
     configureServer(server) {
+      const narrativePreviewJobs = createNarrativePreviewJobs();
       appearanceBridge(server, callSereinBackend, readJsonBody);
       server.middlewares.use("/__serein/export/markdown", async (request,response)=>{
         if(request.method!=="GET"){response.statusCode=405;response.end();return;}
@@ -1143,6 +1145,16 @@ function sereinMemoryBridge() {
 
       server.middlewares.use("/__serein/narrative-preview", async (request, response) => {
         response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.setHeader("Cache-Control", "no-store");
+        if (request.method === "GET") {
+          const jobId = new URL(request.url, "http://localhost").searchParams.get("jobId") || "";
+          const job = narrativePreviewJobs.get(jobId);
+          response.statusCode = job ? (job.state === "pending" ? 202 : job.result.statusCode) : 404;
+          response.end(JSON.stringify(job
+            ? (job.state === "pending" ? { status: "pending" } : job.result.payload)
+            : { status: "error", reason: "preview_job_missing", message: "预览任务已中断，请重新预览。" }));
+          return;
+        }
         if (request.method !== "POST") {
           response.statusCode = 405;
           response.end(JSON.stringify({ error: "method_not_allowed" }));
@@ -1157,45 +1169,66 @@ function sereinMemoryBridge() {
             response.end(JSON.stringify({ status: "invalid", reason: "invalid_preview_request", writes_performed: [] }));
             return;
           }
-          const upstream = await callSereinDashboard("/api/narrative-rolls/preview-input", {
-            method: "POST",
-            body: {
-              narrative_id: narrativeId,
-              mode,
-              expected_revision: Number.parseInt(body.expectedRevision, 10) || undefined,
-              expected_document_sha256: String(body.expectedDocumentSha256 || "").trim(),
-              proposed_material_ids: body.proposedMaterialIds,
-            },
-          });
-          if (!upstream.ok) {
-            response.statusCode = upstream.status;
-            response.end(JSON.stringify(upstream.payload));
-            return;
-          }
-          const input = upstream.payload;
-          const preview = mode === "edit"
-            ? {
-                status: "ok",
-                evidence_sufficient: true,
-                body: String(body.proposedBody || "").trim(),
-                issues: [],
-                diff: narrativeBodyDiff(input.current_body, String(body.proposedBody || "").trim()),
+          const jobId = narrativePreviewJobs.start(async (signal) => {
+            const upstream = await callSereinDashboard("/api/narrative-rolls/preview-input", {
+              method: "POST",
+              signal,
+              body: {
+                narrative_id: narrativeId,
                 mode,
-                provider: "host_validation_only",
-                publication_status: "not_published",
+                expected_revision: Number.parseInt(body.expectedRevision, 10) || undefined,
+                expected_document_sha256: String(body.expectedDocumentSha256 || "").trim(),
+                proposed_material_ids: body.proposedMaterialIds,
+              },
+            });
+            if (!upstream.ok) {
+              return upstream.status === 504
+                ? { statusCode: 504, payload: { status: "error", reason: "narrative_preview_timeout", message: "读取叙事卷材料超时，请重新预览。", writes_performed: [] } }
+                : { statusCode: upstream.status, payload: upstream.payload };
+            }
+            const input = upstream.payload;
+            const preview = mode === "edit"
+              ? {
+                  status: "ok",
+                  evidence_sufficient: true,
+                  body: String(body.proposedBody || "").trim(),
+                  issues: [],
+                  diff: narrativeBodyDiff(input.current_body, String(body.proposedBody || "").trim()),
+                  mode,
+                  provider: "host_validation_only",
+                  publication_status: "not_published",
+                  writes_performed: [],
+                }
+              : await runNarrativeCodexTask({
+                  mode,
+                  title: input.title,
+                  writingFocus: input.writing_focus,
+                  currentBody: input.current_body,
+                  materials: input.materials,
+                  roleDir: narrativeWriterRoleDir,
+                }, {signal});
+            if (!preview.body) {
+              return { statusCode: mode === "edit" ? 400 : 200, payload: {
+                ...preview,
+                narrative_id: narrativeId,
+                base_revision: input.base_revision,
+                base_document_sha256: input.base_document_sha256,
+                material_counts: input.material_counts,
+                current_material_ids: input.current_material_ids,
+                proposed_material_ids: input.proposed_material_ids,
+                material_delta: input.material_delta,
+                material_snapshot_sha256: input.material_snapshot_sha256,
                 writes_performed: [],
-              }
-            : await runNarrativeCodexTask({
-                mode,
-                title: input.title,
-                writingFocus: input.writing_focus,
-                currentBody: input.current_body,
-                materials: input.materials,
-                roleDir: narrativeWriterRoleDir,
-              });
-          if (!preview.body) {
-            response.statusCode = mode === "edit" ? 400 : 200;
-            response.end(JSON.stringify({
+              } };
+            }
+            const fingerprint = buildNarrativePreviewFingerprint({
+              narrativeId,
+              revision: input.base_revision,
+              documentSha256: input.base_document_sha256,
+              body: preview.body,
+              materialSnapshotSha256: input.material_snapshot_sha256,
+            });
+            return { statusCode: 200, payload: {
               ...preview,
               narrative_id: narrativeId,
               base_revision: input.base_revision,
@@ -1205,30 +1238,13 @@ function sereinMemoryBridge() {
               proposed_material_ids: input.proposed_material_ids,
               material_delta: input.material_delta,
               material_snapshot_sha256: input.material_snapshot_sha256,
-              writes_performed: [],
-            }));
-            return;
-          }
-          const fingerprint = buildNarrativePreviewFingerprint({
-            narrativeId,
-            revision: input.base_revision,
-            documentSha256: input.base_document_sha256,
-            body: preview.body,
-            materialSnapshotSha256: input.material_snapshot_sha256,
+              preview_fingerprint: fingerprint,
+            } };
           });
-          response.statusCode = 200;
-          response.end(JSON.stringify({
-            ...preview,
-            narrative_id: narrativeId,
-            base_revision: input.base_revision,
-            base_document_sha256: input.base_document_sha256,
-            material_counts: input.material_counts,
-            current_material_ids: input.current_material_ids,
-            proposed_material_ids: input.proposed_material_ids,
-            material_delta: input.material_delta,
-            material_snapshot_sha256: input.material_snapshot_sha256,
-            preview_fingerprint: fingerprint,
-          }));
+          response.statusCode = jobId ? 202 : 429;
+          response.end(JSON.stringify(jobId
+            ? { status: "pending", job_id: jobId }
+            : { status: "error", reason: "preview_busy", message: "已有预览正在生成，请稍后再试。" }));
         } catch (error) {
           console.error("[serein-memory-bridge] Narrative preview failed", error);
           response.statusCode = error?.name === "AbortError" ? 504 : 502;

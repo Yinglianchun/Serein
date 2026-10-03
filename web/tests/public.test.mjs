@@ -136,13 +136,14 @@ test('evidence retains original host identities, not archive row IDs',()=>{
   assert.equal(ref.content,'Original text');
 });
 
-test('configured Writer receives images and blocks unavailable image evidence',async()=>{
+test('configured Writer only sends bound text, without loading referenced images',async(t)=>{
   const review={source_bound:true,final_supported_versions:true,no_correction_narration:true,material_relevance:true,
     no_new_inference:true,no_meta_explanation:true,no_forced_closure:true,dates_preserved:true,identity_correct:true};
   const requests=[];
-  const backend=async(path,options)=>{
+  const backend=async(path,options,config)=>{
     if(path==='/v1/settings')return {ok:true,payload:{identity:{user_name:'Nori',ai_name:'Atlas'},
       upstream:{writer_enabled:true},models:[{id:'writer',model:'synthetic-writer'}],assignments:{writer:'writer'}}};
+    assert.equal(config.timeout,310_000);
     requests.push(options.body);
     return {ok:true,payload:{result:{evidence_sufficient:true,body:'The notice changed the room.',issues:[],self_review:review}}};
   };
@@ -150,11 +151,33 @@ test('configured Writer receives images and blocks unavailable image evidence',a
     roleDir:fileURLToPath(new URL('../codex_agents/narrative_writer/',import.meta.url))};
   const result=await runNarrativeCodexTask({...args,materials:{content:'![notice](https://example.org/notice.png)'}},{backend});
   assert.equal(result.status,'ok');
-  assert.deepEqual(requests[0].image_inputs,['https://example.org/notice.png']);
+  assert.equal(Object.hasOwn(requests[0],'image_inputs'),false);
+  assert.doesNotMatch(requests[0].prompt,/"images"|必须固定阅读全部图片/);
   assert.match(requests[0].prompt,/Atlas/);
   assert.match(requests[0].prompt,/How the reading group grew/);
   const unavailable=await runNarrativeCodexTask({...args,materials:{content:'![notice](local-notice.png)'}},{backend});
-  assert.equal(unavailable.status,'insufficient');
-  assert.equal(unavailable.body,'');
-  assert.equal(requests.length,1);
+  assert.equal(unavailable.status,'ok');
+  assert.equal(requests.length,2);
+  await assert.rejects(runNarrativeCodexTask({...args,materials:{}},{backend:async(path)=>
+    path==='/v1/settings' ? backend(path) : {ok:false,status:504,payload:{detail:'Writer timed out'}}}),
+    /narrative_writer_timeout/);
+
+  const previous = Object.fromEntries(['SEREIN_WRITER_ENABLED','SEREIN_WRITER_MODEL','SEREIN_WRITER_COMMAND']
+    .map(key => [key,process.env[key]]));
+  try {
+    process.env.SEREIN_WRITER_ENABLED='1';
+    process.env.SEREIN_WRITER_MODEL='synthetic';
+    process.env.SEREIN_WRITER_COMMAND=JSON.stringify([process.execPath,'-e','setInterval(() => {}, 1000)']);
+    t.mock.timers.enable({apis:['setTimeout']});
+    const run=runNarrativeCodexTask({...args,materials:{}},{backend:async()=>({ok:true,payload:{
+      identity:{},upstream:{writer_enabled:false}}})});
+    const timedOut=assert.rejects(run,/narrative_writer_timeout/);
+    await new Promise(resolve=>setImmediate(resolve));
+    t.mock.timers.tick(300_000);
+    await timedOut;
+  } finally {
+    for(const [key,value] of Object.entries(previous)) {
+      if(value===undefined)delete process.env[key];else process.env[key]=value;
+    }
+  }
 });

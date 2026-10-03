@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,6 +16,18 @@ def test_release_includes_runtime_python_modules():
         for path in (root/'src'/'serein').rglob('*.py')
     }
     assert modules <= manifest, sorted(modules - manifest)
+
+
+def test_release_includes_web_runtime_imports():
+    root = Path(__file__).resolve().parents[1]
+    manifest = set(json.loads((root/'release-files.json').read_text(encoding='utf-8')))
+    for relative in manifest:
+        if not relative.startswith('web/') or not relative.endswith('.mjs') or '/tests/' in relative:
+            continue
+        module = root/relative
+        for source in re.findall(r"from\s+['\"](\.[^'\"]+\.mjs)['\"]", module.read_text(encoding='utf-8')):
+            target = (module.parent/source).resolve().relative_to(root).as_posix()
+            assert target in manifest, f'{relative} imports unpackaged {target}'
 
 
 @pytest.mark.parametrize('private_path',[
