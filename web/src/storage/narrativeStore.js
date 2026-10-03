@@ -186,29 +186,52 @@ function projectLiveRoll(item, index, fallback) {
 }
 
 export async function previewNarrativeRoll(roll, mode, proposedMaterialIds, proposedBody = "") {
-  const response = await fetch("/__serein/narrative-preview", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      narrativeId: roll.id,
-      mode,
-      expectedRevision: roll.revision,
-      expectedDocumentSha256: roll.documentHash,
-      proposedMaterialIds,
-      proposedBody,
-    }),
-  });
-  const payload = await response.json().catch(() => ({
-    status: "error",
-    message: "预览返回了无法读取的内容。",
-    writes_performed: [],
-  }));
-  if (!response.ok || !["ok", "insufficient"].includes(payload?.status)) {
-    const error = new Error(payload?.message || payload?.reason || "没有生成这次预览。");
-    error.payload = payload;
+  const signal = AbortSignal.timeout(360_000);
+  try {
+    let response = await fetch("/__serein/narrative-preview", {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        narrativeId: roll.id,
+        mode,
+        expectedRevision: roll.revision,
+        expectedDocumentSha256: roll.documentHash,
+        proposedMaterialIds,
+        proposedBody,
+      }),
+    });
+    const readPayload = (reply) => reply.json().catch(() => ({
+      status: "error",
+      message: reply.status === 504
+        ? "预览服务等待超时，请重新预览。"
+        : `预览服务返回了无法读取的响应（HTTP ${reply.status}）。`,
+      writes_performed: [],
+    }));
+    let payload = await readPayload(response);
+    if (response.status === 202 && payload?.status === "pending") {
+      const jobId = String(payload.job_id || "");
+      if (!jobId) throw new Error("预览任务没有返回编号，请重新预览。");
+      do {
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+        signal.throwIfAborted();
+        response = await fetch(`/__serein/narrative-preview?jobId=${encodeURIComponent(jobId)}`, {
+          cache: "no-store",
+          signal,
+        });
+        payload = await readPayload(response);
+      } while (response.status === 202 && payload?.status === "pending");
+    }
+    if (!response.ok || !["ok", "insufficient"].includes(payload?.status)) {
+      const error = new Error(payload?.message || payload?.reason || "没有生成这次预览。");
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  } catch (error) {
+    if (signal.aborted) throw new Error("预览等待超时，请重新预览。", {cause: error});
     throw error;
   }
-  return payload;
 }
 
 export async function saveNarrativeRollBody(roll, body, preview) {

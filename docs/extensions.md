@@ -20,7 +20,7 @@ HTTP `POST /v1/extensions/pipeline_next` 接受 `{"include_recent":true}`，返�
 
 设置页“配置 Agent 撰写叙事卷”弹窗提供配置步骤。使用外部 runner 时，关闭“启用 API Writer”，在前端 Node 服务环境设置 `SEREIN_WRITER_ENABLED=1`、`SEREIN_WRITER_MODEL`，并在修改这些进程环境后重启该 Node 服务。
 
-`SEREIN_WRITER_COMMAND` 为 JSON 字符串数组，例如 `["python","/absolute/path/writer.py"]`。runner 接收 `task=narrative_preview`、显式 `model`、`prompt`、冻结 `materials` 与 `output_schema`，返回严格符合 schema 的 JSON。证据不足必须返回 `evidence_sufficient=false`、空 body 和问题列表。引用图片无法读取时也应返回证据不足。
+`SEREIN_WRITER_COMMAND` 为 JSON 字符串数组，例如 `["python","/absolute/path/writer.py"]`。runner 接收 `task=narrative_preview`、显式 `model`、`prompt`、冻结 `materials` 与 `output_schema`，返回严格符合 schema 的 JSON。证据不足必须返回 `evidence_sufficient=false`、空 body 和问题列表。Writer 只读取本次绑定的文字材料，不加载原消息图片；文字不足时不能猜测图片内容。
 
 角色文件在 `web/codex_agents/`；目录名保留导入接口，runner 不依赖 Codex。`update` 使用原正文和新增材料，`rewrite` 使用全部绑定材料；移除材料要求 rewrite。服务端保存仍复查材料 fingerprint 和版本，预览不发布。
 

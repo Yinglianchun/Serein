@@ -3,7 +3,7 @@ export function sereinConfigured(env = process.env) {
   return Boolean(String(env.SEREIN_MEMORY_URL || "").trim());
 }
 
-export async function callSereinBackend(path, { method = "GET", body, timeoutMs } = {}, { env = process.env, fetchImpl = fetch, timeout = 30_000 } = {}) {
+export async function callSereinBackend(path, { method = "GET", body, timeoutMs, signal } = {}, { env = process.env, fetchImpl = fetch, timeout = 30_000 } = {}) {
   const base = String(env.SEREIN_MEMORY_URL || "").trim().replace(/\/$/, "");
   const token = String(env.SEREIN_MEMORY_TOKEN || "").trim();
   if (!base || !token) throw new Error("serein_backend_not_configured");
@@ -15,7 +15,7 @@ export async function callSereinBackend(path, { method = "GET", body, timeoutMs 
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs ?? timeout),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs ?? timeout)]) : AbortSignal.timeout(timeoutMs ?? timeout),
   });
   return { ok: response.ok, status: response.status, payload: await response.json() };
 }

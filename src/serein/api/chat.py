@@ -386,14 +386,14 @@ def routes(settings, services, auth):
         if not model:raise HTTPException(503,'Select a Writer model in Settings')
         if not isinstance(body.get('prompt'),str) or not isinstance(body.get('output_schema'),dict):
             raise HTTPException(400,'Writer requires prompt and output_schema')
-        images=body.get('image_inputs',[])
-        if not isinstance(images,list) or any(not isinstance(url,str) or not url.startswith(('https://','http://','data:image/')) for url in images):
-            raise HTTPException(400,'Writer requires complete accessible images')
-        content=[{'type':'text','text':body['prompt']}, *[{'type':'image_url','image_url':{'url':url}} for url in images]] if images else body['prompt']
+        if body.get('image_inputs'):
+            raise HTTPException(400,'Narrative Writer accepts text materials only')
         try:
-            result=await complete(model,{'messages':[{'role':'user','content':content}],
-                'response_format':{'type':'json_schema','json_schema':{'name':'narrative_preview','strict':True,'schema':body['output_schema']}}})
+            result=await asyncio.wait_for(complete({**model,'request_timeout_seconds':300},{'messages':[{'role':'user','content':body['prompt']}],
+                'response_format':{'type':'json_schema','json_schema':{'name':'narrative_preview','strict':True,'schema':body['output_schema']}}}),timeout=300)
             return {'result':json.loads(result['choices'][0]['message']['content'])}
+        except (httpx.TimeoutException,TimeoutError):
+            raise HTTPException(504,'Narrative Writer exceeded 5 minutes') from None
         except (httpx.HTTPError,ValueError,KeyError,IndexError,TypeError):
             raise HTTPException(502,'Writer returned an invalid result') from None
     return router
