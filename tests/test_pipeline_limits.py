@@ -653,6 +653,35 @@ def test_manual_pipeline_worker_retries_only_first_held_batch(settings,monkeypat
     assert flags==[True,False] and result['status']=='needs_repair'
 
 
+def test_manual_pipeline_worker_continues_after_curator_omission(settings,monkeypatch):
+    calls=[]
+    outcomes=[
+        {'status':'processed','events':0,'processed_originals':0,'deferred':2,
+         'curator_omission_deferrals':[{'reason':'curator_omitted','missing_source_message_ids':[2],
+                                      'deferred_source_message_ids':[1,2]}]},
+        {'status':'processed','events':1,'processed_originals':2},
+        {'status':'processed','events':0,'processed_originals':0,'deferred':2},
+    ]
+    async def advance(database,*,include_recent=False,retry_repair=False):
+        calls.append(retry_repair)
+        return outcomes.pop(0)
+    monkeypatch.setattr(p,'_advance',advance)
+    result=asyncio.run(work.work(settings,'pipeline',{'include_recent':True}))
+    assert calls==[True,False,False]
+    assert result['status']=='current' and result['events']==1 and result['deferred']==4
+    assert result['curator_omission_deferrals'][0]['reason']=='curator_omitted'
+
+
+def test_manual_pipeline_worker_continues_after_third_omission_pauses_scope(settings,monkeypatch):
+    outcomes=[{'status':'paused','job_id':'held:curator','batch_id':'held','failures':3},
+              {'status':'processed','events':1,'processed_originals':2},
+              {'status':'current','events':0}]
+    async def advance(database,**kwargs):return outcomes.pop(0)
+    monkeypatch.setattr(p,'_advance',advance)
+    result=asyncio.run(work.work(settings,'pipeline',{}))
+    assert result['status']=='current' and result['events']==1 and not outcomes
+
+
 def test_component_signature_preserves_bridge_endpoints_and_ownership():
     from copy import deepcopy
     original=[{'track_ids':['a','b'],'messages':[{'id':1},{'id':2},{'id':3}],

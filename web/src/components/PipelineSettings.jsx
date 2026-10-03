@@ -12,6 +12,7 @@ export function PipelineSettings({onOpenSummary}) {
   const needsRepair=work?.status==='needs_repair'||work?.result?.status==='needs_repair';
   const failure=work?.error||(needsRepair?work?.result?.reason:'');
   const candidateOverflows=work?.result?.candidate_overflow_deferrals||[];
+  const curatorOmissions=work?.result?.curator_omission_deferrals||[];
   const roleNames={track_router:'归线',event_curator:'切分',event_writer:'Event 写作'};
   const autoMessage=limits?.auto_enabled===false?'自动整理已暂停；手动点击“继续整理”仍可启动任务。'
     :work?.auto_boundary_originals>0?`自动整理已开启，但 ${work.auto_boundary_originals} 条旧原话在启用边界外，需要手动恢复。`
@@ -128,6 +129,7 @@ export function PipelineSettings({onOpenSummary}) {
       {work.result?.note&&<p>{work.result.note}</p>}
       {work.result?.pending>0&&<p>本批仍有 {work.result.pending} 条原话等待后续处理。</p>}
       {work.result?.deferred>0&&<p>暂缓 {work.result.deferred} 条原话；其中 {work.result.protected_deferrals?.length||0} 条事件提案涉及已有内容保护。可对照原话与已有事件人工处理。</p>}
+      {curatorOmissions.map((item,index)=><p key={index} className="import-error">Curator {item.reason==='curator_omission_dependency'?'所在范围与漏项共享原话，已一起留待下轮':'未说明原话去向，已将所在审阅范围留待下轮'}：{item.missing_source_message_ids.join('、')}。本轮没有将这些原话标为跳过。</p>)}
       {candidateOverflows.map(item=><p key={item.track_id} className="import-error">Track <code>{item.track_id}</code> 有 {item.eligible_active_leaf_count} 条 active Event leaves，超过上限 {item.limit}；本批未调用 Curator 或 Writer。请先归档误归线或不再需要的 Event，或人工安全合并相关 leaves。</p>)}
       {work.result?.skipped>0&&<p>本批跳过 {work.result.skipped} 条原话，原始记录仍保留。</p>}
       {work.result?.missing_images?.length>0&&<p>已跳过 {work.result.missing_images.length} 个缺失的图片附件；原话文字保留，未猜补图片内容。</p>}
