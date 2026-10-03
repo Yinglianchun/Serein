@@ -114,7 +114,7 @@ def candidates(search, query, policy, limit=50):
             # Delivery cooldown belongs after winner selection; filtering here
             # could promote lower-ranked entity candidates into vacated slots.
             if ref in query.exclude_ids or doc['id'] in query.exclude_ids: continue
-            if doc['kind']=='scene' and domain_rejection(doc,query,policy): continue
+            if domain_rejection(doc,query,policy): continue
             if doc['id'] not in found and len(found)>=limit: continue
             hit=found.setdefault(doc['id'],{'id':doc['id'],'kind':doc['kind'],'score':None,'method':'entity','object':{**obj,'evidence':[]},'entity_handles':[]})
             hit['entity_handles'].append({'text':row['text'],'support_count':len(json.loads(row['supports_json']))})

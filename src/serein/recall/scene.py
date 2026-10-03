@@ -34,11 +34,18 @@ def evidence_lines(document):
 
 def domain_rejection(document, query, policy):
     domain = canonical_domain(document["metadata"]).casefold()
-    rule = policy.domains.get(domain, "normal")
+    rule = policy.domain_rules.get(document['kind'], {}).get(domain, policy.domains.get(domain, "normal"))
     if rule == "excluded":
         return "domain_excluded"
-    if rule == "explicit_only" and not query.names_title(document["title"]):
-        return "domain_explicit_only"
+    if rule == 'explicit_only':
+        cues = document['metadata'].get('scene_cues') or []
+        if isinstance(cues, str):
+            cues = [cues]
+        explicit = query.names_title(document['title']) or any(
+            query.names_title(cue) for cue in cues if isinstance(cue, str)) or bool(
+                re.search(r'(?<![a-zA-Z0-9_:-])' + re.escape(document['id']) + r'(?![a-zA-Z0-9_:-])', query.text))
+        if not explicit:
+            return 'domain_explicit_only'
     return None
 
 
@@ -52,14 +59,16 @@ def cue_matches(document, query):
     return bool(terms) and set(terms) <= set(tokens(cue_text))
 
 
-def related_candidates(reader, seed_ids, query, policy, limit=10, *, include_delivered=False):
+def related_candidates(reader, seed_ids, query, policy, limit=1, *, include_delivered=False):
     """One hop over confirmed edges; relationships are handles, not admission."""
     if not read_from_store(reader.store)['features']['association']:
         return []
     seeds, found = set(seed_ids), {}
     for seed in sorted(seeds):
-        origin = reader.read(seed, kind="scene", with_evidence=False)
+        origin = reader.read(seed, with_evidence=False)
         if not origin["readable"] or not origin["surface_state"]["can_surface"]:
+            continue
+        if origin['kind'] not in {'event', 'scene'}:
             continue
         if domain_rejection(origin["document"], query, policy):
             continue
@@ -76,16 +85,18 @@ def related_candidates(reader, seed_ids, query, policy, limit=10, *, include_del
             target = row["target_scene_id"] if row["source_scene_id"] == seed else row["source_scene_id"]
             if target in seeds or target in found:
                 continue
-            obj = reader.read(target, kind="scene", with_evidence=False)
+            obj = reader.read(target, with_evidence=False)
             if not obj["readable"] or not obj["surface_state"]["can_surface"]:
                 continue
-            ref = "scene:" + target
+            if obj['kind'] not in {'event', 'scene'}:
+                continue
+            ref = obj['kind'] + ':' + target
             if target in query.exclude_ids or ref in query.exclude_ids or (not include_delivered and query.mode == "surface" and ref in query.delivered_ids):
                 continue
             if domain_rejection(obj["document"], query, policy):
                 continue
             imported=metadata.get('linker_version') in {'legacy-edge-import-v1','legacy-edge-import-v2'}
-            found[target] = {"id": target, "kind": "scene", "edge_id": row["id"], "seed_id": seed,
+            found[target] = {"id": target, "kind": obj['kind'], "edge_id": row["id"], "seed_id": seed,
                              "disposition": "candidate", "reason": "legacy_relationship_not_evidence" if imported else "confirmed_relationship_not_evidence"}
             if len(found) == limit:
                 return list(found.values())

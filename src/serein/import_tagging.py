@@ -76,7 +76,8 @@ async def tag_one(database,job):
             from .model_runtime import complete, non_thinking_options
             model=task_model(database,'operit_tagging')
             if not model:return
-            domains=read_settings(database)['tagging']['domains']
+            domains=[{key:item.get(key,'') for key in ('key','label','description')}
+                     for item in read_settings(database)['tagging']['domains']]
             sent_materials=prompt_materials(materials)
             generate_cues=needs_operit_cues(doc)
             names=identity(database)

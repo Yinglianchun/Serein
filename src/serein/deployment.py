@@ -143,12 +143,28 @@ def save_settings(database, changes):
         explicit_mode='execution_mode' in (json.loads(stored[0]).get('pipeline',{}) if stored else {}) or 'execution_mode' in changes.get('pipeline',{})
         if changes.get('expected_version') is not None and changes['expected_version'] != current['settings_version']:
             raise Conflict('设置已在其他页面更新，请刷新后重试')
+        if changes.get('expected_tagging_version') is not None and changes['expected_tagging_version'] != current['tagging_version']:
+            raise Conflict('domain_policy_publish_version_conflict')
         for section, values in changes.items():
-            if section == 'expected_version':continue
+            if section in ('expected_version', 'expected_tagging_version'):continue
             if section == 'tagging':
-                if current['tagging'] != values:
+                tagging = deepcopy(current['tagging'])
+                if 'domains' in values:
+                    tagging['domains'] = values['domains']
+                if 'policies' in values:
+                    tagging['policies'] = {**tagging.get('policies', {}), **values['policies']}
+                keys = {item['key'] for item in tagging['domains']}
+                for kind, rules in (values.get('policies') or {}).items():
+                    if kind not in ('event', 'scene') or not isinstance(rules, dict) or rules.keys() - keys:
+                        raise ValueError('Invalid domain policy catalog')
+                    if any(rule not in ('normal', 'explicit_only', 'excluded') for rule in rules.values()):
+                        raise ValueError('Invalid domain policy')
+                if 'policies' in tagging:
+                    tagging['policies'] = {kind:{key:rule for key,rule in rules.items() if key in keys}
+                                           for kind,rules in tagging['policies'].items()}
+                if current['tagging'] != tagging:
                     current['tagging_version'] += 1
-                current['tagging'] = values
+                current['tagging'] = tagging
             elif section == 'models':
                 previous = {item['id']: item for item in current['models']}
                 current['models'] = [{**previous.get(item['id'], {}), **item} for item in values]

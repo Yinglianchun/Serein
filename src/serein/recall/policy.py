@@ -11,6 +11,7 @@ class RecallPolicy:
     max_cards: int = 2
     candidate_limit: int = 50
     domains: dict[str, str] = field(default_factory=dict)
+    domain_rules: dict[str, dict[str, str]] = field(default_factory=dict)
     routing_file: str | None = None
     germany_policy_file: str | None = None
     passages_enabled: bool = False
@@ -18,7 +19,7 @@ class RecallPolicy:
 
     @classmethod
     def from_config(cls, raw):
-        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "max_cards", "candidate_limit", "domains", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars"}
+        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "max_cards", "candidate_limit", "domains", "domain_rules", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars"}
         if unknown:
             raise ValueError(f"Unknown recall policy fields: {', '.join(sorted(unknown))}")
         policy = cls(**raw)
@@ -35,4 +36,7 @@ class RecallPolicy:
             raise ValueError("Invalid recall threshold or result budget")
         if any(value not in {"normal", "explicit_only", "excluded"} for value in policy.domains.values()):
             raise ValueError("Domain policies must be normal, explicit_only, or excluded")
+        if any(kind not in {'event', 'scene'} or any(value not in {'normal', 'explicit_only', 'excluded'}
+               for value in rules.values()) for kind, rules in policy.domain_rules.items()):
+            raise ValueError('Invalid per-kind domain policies')
         return policy

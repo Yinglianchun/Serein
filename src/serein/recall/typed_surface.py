@@ -137,8 +137,8 @@ class Snapshot:
             if doc['id'] in query.exclude_ids or doc['kind'] + ':' + doc['id'] in query.exclude_ids:
                 self.suppressed['excluded_by_request'] += 1
                 continue
-            if doc['kind'] == 'scene' and scene.domain_rejection(doc, query, policy):
-                self.suppressed['scene_domain_rejected'] += 1
+            if scene.domain_rejection(doc, query, policy):
+                self.suppressed[doc['kind'] + '_domain_rejected'] += 1
                 continue
             if content_stamp(doc) != indexed_row['stamp']:
                 self.suppressed['stale_content_rebuild_required'] += 1
@@ -414,14 +414,14 @@ def select_candidate_pool(snapshot, found, ranked, entity_matches, query, *, lim
 
 
 def add_related_candidate(snapshot, ranked, rows, query, policy):
-    """Give one reviewed Scene neighbor outside the direct pool a scoring chance."""
+    """Give one reviewed Event/Scene neighbor a scoring chance, with no bonus."""
     links=scene.related_candidates(snapshot.search.reader,
-        [row['owner_id'] for row in rows if row['owner_kind']=='scene'], query, policy,
+        [row['owner_id'] for row in rows], query, policy,
         limit=None, include_delivered=True)
     by_id={link['id']:link for link in links}
     owners={(row['owner_kind'],row['owner_id']) for row in rows}
     for row in ranked:
-        if row['owner_kind']=='scene' and row['owner_id'] in by_id and ('scene',row['owner_id']) not in owners:
+        if row['owner_id'] in by_id and (row['owner_kind'],row['owner_id']) not in owners:
             # Keep its own body/vector score. The edge is provenance, not a bonus.
             return [*rows, {**row, 'relation_candidate':by_id[row['owner_id']]}]
     return rows
@@ -569,7 +569,7 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
         result['selected_refs']=[hit['kind']+':'+hit['id'] for hit in hits]
         result['pools']={kind:{'method':'cosine','items':[h for h in hits if h['kind']==kind]} for kind in ('event','scene')}
         result['suppressed']=dict(suppressed)
-        result['related_candidates']=scene.related_candidates(search.reader,[h['id'] for h in hits if h['kind']=='scene'],query,engine.policy)
+        result['related_candidates']=scene.related_candidates(search.reader,[h['id'] for h in hits],query,engine.policy)
         result.update(render(hits,reader=search.reader,body_char_limit=body_char_limit,
                     scope_arc_key=(scope.get('scope_anchor') or {}).get('arc_key',''),delivered_menu_keys=delivered_menu_keys))
         return {**result,'status':'matched' if hits else 'no_match'}

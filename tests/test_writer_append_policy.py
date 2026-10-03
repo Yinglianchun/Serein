@@ -10,6 +10,22 @@ from serein.extensions import pipeline as p
 from serein.extensions import pipeline_latest as latest
 
 
+@pytest.mark.parametrize('model_value', [None, False, True, 'ignored'])
+def test_new_event_eligibility_is_generated_by_host(settings, model_value):
+    ingest(settings)
+    async def runner(role, request):
+        result = output_for(role, request)
+        if role == 'event_writer':
+            if model_value is None:
+                result.pop('recallable')
+            else:
+                result['recallable'] = model_value
+        return result
+    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['events'] == 1
+    with Store(settings.database, read_only=True) as store:
+        assert store.conn.execute("SELECT recallable FROM fact_events WHERE status='active'").fetchone()[0] == 1
+
+
 def test_normal_extension_appends_and_preserves_existing_settings_and_sources(settings):
     ingest(settings)
     asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))
@@ -31,6 +47,28 @@ def test_normal_extension_appends_and_preserves_existing_settings_and_sources(se
         assert current['body']==old['body']+'\n\nWe agreed to Book club plan 2'
         assert current['title']==old['title'] and current['recallable']==old['recallable']
         assert store.conn.execute('SELECT count(*) FROM fact_event_sources WHERE item_id=?',(current['item_id'],)).fetchone()[0]==4
+
+
+@pytest.mark.parametrize('manual', [False, None])
+@pytest.mark.parametrize('action', ['extend', 'rewrite'])
+def test_continuation_preserves_manual_closure_or_unreviewed_state(settings, manual, action):
+    from serein.compat.events import Events
+    ingest(settings)
+    asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))
+    with Store(settings.database, read_only=True) as store:
+        key = store.conn.execute("SELECT item_id FROM fact_events WHERE status='active'").fetchone()[0]
+    Events(settings.database).revise(key, recallable=manual)
+    ingest(settings, 2)
+    async def runner(role, request):
+        result = output_for(role, request)
+        if role == 'event_curator': result['events'][0]['action'] = action
+        if role == 'event_writer': result['recallable'] = True
+        return result
+    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))['events'] == 1
+    with Store(settings.database, read_only=True) as store:
+        row = store.conn.execute("SELECT item_id,recallable FROM fact_events WHERE status='active'").fetchone()
+        assert row['recallable'] == (None if manual is None else 0)
+        assert store.read(row['item_id'])['manual_surface'] == row['recallable']
 
 
 @pytest.mark.parametrize('drift',[False,True])

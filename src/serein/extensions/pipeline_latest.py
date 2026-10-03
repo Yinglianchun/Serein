@@ -720,11 +720,11 @@ def build_event_writer_prompt(day: str, title: str, messages: list[dict[str, Any
     agent_rules = materialize_agent_rules('event_writer') if include_role_rules else ''
     rules_block = f'{agent_rules}\n\n' if agent_rules else ''
     example_quote = '把旧书放回书架。'
-    sufficient = {'evidence_sufficient': True, 'recallable': False,
+    sufficient = {'evidence_sufficient': True,
                   'kept_details': [example_quote], 'discarded_details': [],
                   'self_review': {key: True for key in _SELF_REVIEW_KEYS},
                   'title': '短标题', 'event_draft': example_quote}
-    insufficient = {'evidence_sufficient': False, 'recallable': False,
+    insufficient = {'evidence_sufficient': False,
                     'kept_details': [], 'discarded_details': [],
                     'self_review': {key: key != 'owned_evidence_sufficient' for key in _SELF_REVIEW_KEYS},
                     'title': '', 'event_draft': ''}
@@ -755,16 +755,11 @@ def validate_event_writer_result(result: dict[str, Any], owned_sources: list[dic
     kept = [str(value).strip() for value in result.get('kept_details') or [] if str(value).strip()]
     discarded = [str(value).strip() for value in result.get('discarded_details') or [] if str(value).strip()]
     evidence_sufficient = result.get('evidence_sufficient')
-    recallable = result.get('recallable')
     review = result.get('self_review')
     violations: list[str] = []
     if type(evidence_sufficient) is not bool:
         violations.append('evidence_sufficient 缺失或不是布尔值')
-    if type(recallable) is not bool:
-        violations.append('recallable 缺失或不是布尔值')
     if evidence_sufficient is False:
-        if recallable is not False:
-            violations.append('evidence_sufficient=false 时 recallable 必须为 false')
         if title or body or kept or discarded:
             violations.append('evidence_sufficient=false 时不得返回 Event 内容')
         if not isinstance(review, dict):

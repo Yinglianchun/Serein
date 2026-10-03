@@ -183,13 +183,34 @@ export async function saveRecallObservationReviews(reviews) {
   }
 }
 
-export function hasDomainPolicyDraft() {
-  return window.localStorage.getItem(domainPolicyStorageKey) != null;
+function domainDraftKey(kind) {
+  return kind ? `${domainPolicyStorageKey}.${kind}` : domainPolicyStorageKey;
 }
 
-export function readDomainPolicyDraft(baseline = canonicalDomainPolicies) {
+function migrateDomainDraft() {
+  const old = window.localStorage.getItem(domainPolicyStorageKey);
+  if (old == null) return;
+  for (const kind of ["event", "scene"]) {
+    if (window.localStorage.getItem(domainDraftKey(kind)) == null) window.localStorage.setItem(domainDraftKey(kind), old);
+  }
+  window.localStorage.removeItem(domainPolicyStorageKey);
+}
+
+export function hasDomainPolicyDraft(kind) {
+  if (kind) migrateDomainDraft();
+  return window.localStorage.getItem(domainDraftKey(kind)) != null;
+}
+
+export function domainPolicyDraftVersion(kind) {
+  try { return JSON.parse(window.localStorage.getItem(domainDraftKey(kind)))?.version ?? null; }
+  catch { return null; }
+}
+
+export function readDomainPolicyDraft(baseline = canonicalDomainPolicies, kind) {
+  if (kind) migrateDomainDraft();
   try {
-    const saved = JSON.parse(window.localStorage.getItem(domainPolicyStorageKey));
+    const stored = JSON.parse(window.localStorage.getItem(domainDraftKey(kind)));
+    const saved = Array.isArray(stored) ? stored : stored?.domains;
     if (!Array.isArray(saved)) return cloneRoutes(baseline);
     const savedByKey = new Map(saved.map((item) => [item?.key, item?.policy]));
     return baseline.map((domain) => ({
@@ -203,13 +224,12 @@ export function readDomainPolicyDraft(baseline = canonicalDomainPolicies) {
   }
 }
 
-export function saveDomainPolicyDraft(domains) {
-  window.localStorage.setItem(domainPolicyStorageKey, JSON.stringify(
-    domains.map(({ key, policy }) => ({ key, policy })),
-  ));
+export function saveDomainPolicyDraft(domains, kind, version = null) {
+  const policies = domains.map(({ key, policy }) => ({ key, policy }));
+  window.localStorage.setItem(domainDraftKey(kind), JSON.stringify(kind ? { domains: policies, version } : policies));
 }
 
-export function clearDomainPolicyDraft(baseline = canonicalDomainPolicies) {
-  window.localStorage.removeItem(domainPolicyStorageKey);
+export function clearDomainPolicyDraft(baseline = canonicalDomainPolicies, kind) {
+  window.localStorage.removeItem(domainDraftKey(kind));
   return cloneRoutes(baseline);
 }

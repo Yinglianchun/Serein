@@ -1147,7 +1147,11 @@ def settle(database,batch,data,routed,plans):
                     raise FactEventSettlementBlockedError('旧正文与新增段落总计超过 1500 字符，未保存；请压缩新增段落或明确重建为整篇 rewrite，旧正文与原话仍保留。')
                 recallable=None if bases[0]['recallable'] is None else bool(bases[0]['recallable'])
             else:
-                title=written['title'];body=written['event_draft'];recallable=written['recallable']
+                title=written['title'];body=written['event_draft']
+                # Evidence is already accepted. Preserve a predecessor's manual
+                # closure; the Writer never chooses surfacing eligibility.
+                recallable=(False if any(b.get('recallable') == 0 for b in bases) else
+                            None if any(b.get('recallable') is None for b in bases) else True)
             item={'type':'event','title':title,'body':body,'recallable':recallable,'source_refs':refs,
                 'origin_id':'assistant_bridge:'+batch['id']+':'+str(len(items))}
             if bases:

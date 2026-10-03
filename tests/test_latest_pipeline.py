@@ -338,10 +338,11 @@ def test_writer_prompt_examples_match_both_evidence_outcomes():
     assert len(samples)==2
     sufficient,insufficient=samples
     for sample in samples:
+        assert 'recallable' not in sample
         assert latest.validate_event_writer_result(sample)==[]
     sufficient['recallable']=False
     assert latest.validate_event_writer_result(sufficient)==[]
-    assert insufficient['evidence_sufficient'] is False and insufficient['recallable'] is False
+    assert insufficient['evidence_sufficient'] is False and 'recallable' not in insufficient
     assert insufficient['title']==insufficient['event_draft']==''
     assert insufficient['kept_details']==insufficient['discarded_details']==[]
 

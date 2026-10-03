@@ -23,6 +23,7 @@ import {
 } from "../data/basement.js";
 import {
   clearDomainPolicyDraft,
+  domainPolicyDraftVersion,
   clearServerSemanticRouteDraft,
   clearSemanticRouteDraft,
   hasDomainPolicyDraft,
@@ -962,28 +963,32 @@ function RecallSimulator({thresholdTrial,onClearThresholdTrial}) {
 }
 
 const domainPolicyLabels = {
-  normal: "正常召回",
+  normal: "允许自动浮现",
   explicit_only: "仅明确召回",
-  excluded: "完全排除",
+  excluded: "不浮现",
 };
 
 const domainPolicyDescriptions = {
   normal: "可以参与普通候选、证据放行与关系扩散。",
-  explicit_only: "只认 authored cue、标题、ID 或明确锚点，不接受纯 embedding 泛化。",
+  explicit_only: "只有明确提到标题、编号或已写入的召回线索时，才可参与召回。",
   excluded: "候选、加分、直召回与扩散全部禁止，恢复正常前不会进入注入。",
 };
 
-function DomainPolicyEditor() {
+export function DomainPolicyEditor() {
+  const [kind, setKind] = useState("event");
   const [editing, setEditing] = useState(false);
   const dialog = useRef(null);
   const [editingKey, setEditingKey] = useState(null);
   const [entry, setEntry] = useState({ key: "", label: "", description: "", policy: "normal" });
   const [entryError, setEntryError] = useState("");
-  const [snapshot, setSnapshot] = useState({ datasetVersion: 1, active: false, domains: canonicalDomainPolicies });
-  const [domains, setDomains] = useState(() => readDomainPolicyDraft(canonicalDomainPolicies));
+  const [snapshot, setSnapshot] = useState({ datasetVersion: 1, active: false, catalog: canonicalDomainPolicies, domains: {event: canonicalDomainPolicies, scene: canonicalDomainPolicies} });
+  const [drafts, setDrafts] = useState(() => Object.fromEntries(["event", "scene"].map(kind => [kind, readDomainPolicyDraft(canonicalDomainPolicies, kind)])));
+  const [versions, setVersions] = useState({event: null, scene: null});
+  const domains = drafts[kind];
+  const setDomains = next => setDrafts(previous => ({...previous, [kind]: next}));
   const [datasetState, setDatasetState] = useState({ status: "loading", message: "正在核对线上主域策略……" });
   const [publishState, setPublishState] = useState({ status: "idle", message: "" });
-  const baseline = JSON.stringify(snapshot.domains);
+  const baseline = JSON.stringify(snapshot.domains[kind]);
   const current = JSON.stringify(domains);
   const contentDirty = current !== baseline;
   const dirty = contentDirty || !snapshot.active;
@@ -1014,32 +1019,30 @@ function DomainPolicyEditor() {
   const setPolicy = (key, policy) => {
     const nextDomains = domains.map((domain) => domain.key === key ? { ...domain, policy } : domain);
     setDomains(nextDomains);
-    saveDomainPolicyDraft(nextDomains);
+    saveDomainPolicyDraft(nextDomains, kind, versions[kind]);
   };
 
   const loadPublishedPolicies = async () => {
+    setPublishState({ status: "idle", message: "" });
     setDatasetState({ status: "loading", message: "正在核对线上主域策略……" });
     try {
-      const response = await fetch("/__serein/gateway/domain-policies");
+      const response = await fetch("/__serein/settings");
       const payload = await response.json();
-      if (!response.ok || !Array.isArray(payload.policies)) {
+      if (!response.ok || !Array.isArray(payload.tagging?.domains)) {
         throw new Error(String(payload?.error || "domain_policy_dataset_unavailable"));
       }
-      const policyByKey = new Map(payload.policies.map((item) => [item?.key, item?.policy]));
-      const publishedDomains = payload.policies.map((item) => ({ ...canonicalDomainPolicies.find(domain=>domain.key===item.key), ...item, label:item.label || canonicalDomainPolicies.find(domain=>domain.key===item.key)?.label || item.key })).map((domain) => ({
-        ...domain,
-        policy: ["normal", "explicit_only", "excluded"].includes(policyByKey.get(domain.key))
-          ? policyByKey.get(domain.key)
-          : domain.policy,
-      }));
+      const publishedDomains = Object.fromEntries(["event", "scene"].map(kind => [kind, payload.tagging.domains.map(domain => ({
+        ...domain, policy: payload.tagging.policies?.[kind]?.[domain.key] ?? domain.policy ?? "normal",
+      }))]));
       const nextSnapshot = {
-        datasetVersion: Number(payload.dataset_version) || 1,
-        active: Boolean(payload.active),
+        datasetVersion: Number(payload.tagging_version) || 1,
+        active: true,
+        catalog: payload.tagging.domains,
         domains: publishedDomains,
       };
-      const keepDraft = hasDomainPolicyDraft();
       setSnapshot(nextSnapshot);
-      setDomains(keepDraft ? readDomainPolicyDraft(publishedDomains) : publishedDomains);
+      setDrafts(Object.fromEntries(["event", "scene"].map(kind => [kind, hasDomainPolicyDraft(kind) ? readDomainPolicyDraft(publishedDomains[kind], kind) : publishedDomains[kind]])));
+      setVersions(Object.fromEntries(["event", "scene"].map(kind => [kind, domainPolicyDraftVersion(kind) ?? nextSnapshot.datasetVersion])));
       setDatasetState({ status: "ready", message: `已核对线上 v${nextSnapshot.datasetVersion}` });
     } catch (error) {
       setDatasetState({ status: "error", message: error.message || "没有读到线上主域策略。" });
@@ -1051,8 +1054,9 @@ function DomainPolicyEditor() {
   }, []);
 
   const resetDraft = () => {
-    if (contentDirty && !window.confirm("放弃本机所有主域策略草稿？")) return;
-    setDomains(clearDomainPolicyDraft(snapshot.domains));
+    if (contentDirty && !window.confirm(`放弃 ${kind === "event" ? "Event" : "Scene"} 的主域规则草稿？`)) return;
+    setDomains(clearDomainPolicyDraft(snapshot.domains[kind], kind));
+    setVersions(previous => ({...previous, [kind]: snapshot.datasetVersion}));
     setPublishState({ status: "idle", message: "" });
   };
 
@@ -1060,32 +1064,43 @@ function DomainPolicyEditor() {
     const nextVersion = snapshot.datasetVersion + 1;
     setPublishState({ status: "publishing", message: `正在发布 v${nextVersion}……` });
     try {
-      const response = await fetch("/__serein/gateway/domain-policies", {
-        method: "POST",
+      const response = await fetch("/__serein/settings", {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          expected_dataset_version: snapshot.datasetVersion,
-          confirm: "PUBLISH_DOMAIN_RECALL_POLICIES",
-          domains: nextDomains.map(({ key, label, description, policy }) => ({ key, label, description: description || "", policy })),
+          expected_tagging_version: versions[kind],
+          tagging: {
+            policies: {[kind]: Object.fromEntries(nextDomains.map(({key, policy}) => [key, policy]))},
+            ...(nextDomains !== domains ? {domains: nextDomains.map(({key, label, description}) => ({key, label, description: description || "", policy: snapshot.catalog.find(domain => domain.key === key)?.policy ?? "normal"}))} : {}),
+          },
         }),
       });
       const payload = await response.json();
       if (!response.ok) {
         const raw = String(payload?.detail || payload?.error || "主域保存失败");
         if (raw.startsWith("domain_policy_publish_version_conflict")) {
-          throw new Error("线上主域策略已经变化。请重新核对后再发布。");
+          throw new Error("主域规则已在其他页面变化。草稿已保留；刷新后撤销当前草稿，再按最新规则修改。");
         }
         throw new Error(raw);
       }
-      const publishedDomains = payload.policies;
+      const publishedDomains = Object.fromEntries(["event", "scene"].map(kind => [kind, payload.tagging.domains.map(domain => ({
+        ...domain, policy: payload.tagging.policies?.[kind]?.[domain.key] ?? domain.policy ?? "normal",
+      }))]));
       const nextSnapshot = {
-        datasetVersion: Number(payload.dataset_version),
+        datasetVersion: Number(payload.tagging_version),
         active: true,
+        catalog: payload.tagging.domains,
         domains: publishedDomains,
       };
-      clearDomainPolicyDraft(publishedDomains);
+      clearDomainPolicyDraft(publishedDomains[kind], kind);
       setSnapshot(nextSnapshot);
-      setDomains(publishedDomains);
+      const otherKind = kind === "event" ? "scene" : "event";
+      const otherDraft = hasDomainPolicyDraft(otherKind);
+      const nextOther = otherDraft ? readDomainPolicyDraft(publishedDomains[otherKind], otherKind) : publishedDomains[otherKind];
+      setDrafts({[kind]: publishedDomains[kind], [otherKind]: nextOther});
+      const otherVersion = !otherDraft || versions[otherKind] === snapshot.datasetVersion ? nextSnapshot.datasetVersion : versions[otherKind];
+      if (otherDraft) saveDomainPolicyDraft(nextOther, otherKind, otherVersion);
+      setVersions({[kind]: nextSnapshot.datasetVersion, [otherKind]: otherVersion});
       setDatasetState({ status: "ready", message: `已核对线上 v${nextSnapshot.datasetVersion}` });
       setPublishState({ status: "success", message: `v${nextSnapshot.datasetVersion} 已切换生效。` });
       return true;
@@ -1102,7 +1117,7 @@ function DomainPolicyEditor() {
         <div>
           <span className="basement-kicker">标签与召回范围</span>
           <h2 id="domain-policy-title">主域边界</h2>
-          <p>管理主域名称、短描述与召回范围。保存后，打标模型会使用最新配置；已有记忆不会自动重打标。</p>
+          <p>Event 与 Scene 分别保存浮现规则。名称和短描述共用，供模型打标；程序按规则决定浮现，已有记忆不会重新打标。</p>
         </div>
         <div className="domain-policy-header-actions">
           <button className="domain-entry-action" type="button" aria-pressed={editing} onClick={() => setEditing(value => !value)} disabled={publishState.status === "publishing"}>{editing ? "完成" : "编辑"}</button>
@@ -1112,6 +1127,10 @@ function DomainPolicyEditor() {
           </div>
         </div>
       </header>
+
+      <div className="domain-policy-controls" role="group" aria-label="记忆类型">
+        {[["event", "Event"], ["scene", "Scene"]].map(([value, label]) => <button key={value} type="button" aria-pressed={kind === value} className={kind === value ? "is-active" : ""} onClick={() => {setKind(value); setPublishState({status:"idle", message:""});}} disabled={publishState.status === "publishing"}>{label}</button>)}
+      </div>
 
       <div className="domain-policy-list">
         {domains.map((domain) => (
@@ -1132,7 +1151,8 @@ function DomainPolicyEditor() {
                   className={domain.policy === policy ? "is-active" : ""}
                   key={policy}
                   onClick={() => setPolicy(domain.key, policy)}
-                  disabled={publishState.status === "publishing"}
+                  aria-pressed={domain.policy === policy}
+                  disabled={datasetState.status !== "ready" || publishState.status === "publishing"}
                 >
                   {label}
                 </button>
@@ -1140,8 +1160,6 @@ function DomainPolicyEditor() {
             </div>
             <p className="domain-policy-row__explanation">
               {domainPolicyDescriptions[domain.policy]}
-              {domain.policy === "explicit_only" && <code>domain_explicit_only</code>}
-              {domain.policy === "excluded" && <code>domain_excluded</code>}
             </p>
           </article>
         ))}
@@ -1152,19 +1170,19 @@ function DomainPolicyEditor() {
           <strong>{!snapshot.active
             ? "主域配置尚未启用"
             : dirty ? "召回范围尚未保存" : `已保存 · v${snapshot.datasetVersion}`}</strong>
-          <span>{publishState.message || datasetState.message || "保存后，打标与召回会使用同一套主域配置。"}</span>
+          <span>{publishState.message || datasetState.message || "保存后，当前类型的浮现规则立即生效。"}</span>
         </div>
         <div>
           <button type="button" onClick={loadPublishedPolicies} disabled={datasetState.status === "loading" || publishState.status === "publishing"}>刷新配置</button>
           {editing && <button type="button" onClick={() => openEntry()} disabled={datasetState.status !== "ready" || publishState.status === "publishing" || domains.length >= 50}>添加</button>}
-          <button type="button" onClick={resetDraft} disabled={!contentDirty}>撤销草稿</button>
+          <button type="button" onClick={resetDraft} disabled={publishState.status === "publishing" || (!contentDirty && versions[kind] === snapshot.datasetVersion)}>撤销草稿</button>
           <button
             type="button"
             className="basement-primary-action"
             onClick={() => publishPolicies()}
             disabled={!dirty || datasetState.status !== "ready" || publishState.status === "publishing"}
             title={datasetState.status === "ready" ? "保存主域配置并立即生效" : "先读取当前主域配置"}
-          >{publishState.status === "publishing" ? "正在保存" : "保存并应用"}</button>
+          >{publishState.status === "publishing" ? "正在保存" : `保存 ${kind === "event" ? "Event" : "Scene"} 规则`}</button>
         </div>
       </footer>
       <dialog ref={dialog} className="agent-guide domain-entry-dialog" aria-labelledby="domain-entry-title" onCancel={event => { if (publishState.status === "publishing") event.preventDefault(); }}>

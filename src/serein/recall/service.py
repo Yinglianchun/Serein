@@ -18,9 +18,11 @@ class Recall:
         import json
         with Store(settings.database,read_only=True) as store:
             saved=store.conn.execute("SELECT value_json FROM background_state WHERE name='deployment_settings'").fetchone()
-        domains=json.loads(saved[0]).get('tagging',{}).get('domains',[]) if saved else []
+        tagging=json.loads(saved[0]).get('tagging',{}) if saved else {}
+        domains=tagging.get('domains',[])
         self.policy = replace(self.policy, domains={**self.policy.domains,
-            **{item['key']:item['policy'] for item in domains}})
+            **{item['key']:item.get('policy','normal') for item in domains}},
+            domain_rules={**self.policy.domain_rules, **tagging.get('policies',{})})
         self.reranker = reranker
         if self.reranker is None and settings.reranker:
             from ..adapters.reranker import RerankerClient
@@ -120,14 +122,14 @@ class Recall:
         rejected, admitted = Counter(), {"event": [], "scene": []}
         scored = [hit for hit in candidates if mode == "surface" and method=='semantic' and hit['method']!='entity'
                   and admission.decide(hit, query, self.policy)[0] == "candidate"
-                  and not (hit["kind"] == "scene" and scene.domain_rejection(hit["object"]["document"], query, self.policy))]
+                  and not scene.domain_rejection(hit["object"]["document"], query, self.policy)]
         evidence = [{"ref": f"{hit['kind']}:{hit['id']}", "title": hit["object"]["document"]["title"],
                      "body": scene.evidence_text(hit["object"]["document"]) if hit["kind"] == "scene" else hit["object"]["document"]["body_md"]}
                     for hit in scored]
         scores = self.reranker(text, evidence) if self.reranker and scored else {}
         for hit in candidates:
             document = hit["object"]["document"]
-            reason = scene.domain_rejection(document, query, self.policy) if hit["kind"] == "scene" else None
+            reason = scene.domain_rejection(document, query, self.policy)
             disposition, reason = ("reject", reason) if reason else admission.decide(
                 hit, query, self.policy, scores.get(f"{hit['kind']}:{hit['id']}"))
             if disposition in {"direct", "lookup"}:
@@ -166,7 +168,7 @@ class Recall:
                 hit["object"] = obj
                 pools[hit["kind"]]["items"].append(hit)
                 result["selected_refs"].append(f"{hit['kind']}:{hit['id']}")
-            result["related_candidates"] = scene.related_candidates(reader, [hit["id"] for hit in pools["scene"]["items"]], query, self.policy)
+            result["related_candidates"] = scene.related_candidates(reader, [hit['id'] for pool in pools.values() for hit in pool['items']], query, self.policy)
             by_ref = {f"{hit['kind']}:{hit['id']}": hit for pool in pools.values() for hit in pool['items']}
             scope = result.get('surface_reranker_gate', {}).get('entity_scope', {})
             scope_key = (scope.get('scope_anchor') or {}).get('arc_key', '')
