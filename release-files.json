@@ -52,6 +52,7 @@
   "examples/route-examples.json",
   "pyproject.toml",
   "release-files.json",
+  "scripts/doctor.py",
   "scripts/event_agent_mcp.py",
   "scripts/install_shortcut.py",
   "scripts/local_runtime.py",

@@ -596,13 +596,23 @@ def legacy_source_access():
     print(f'只读来源已就绪：网页“旧库迁移”可以填写 {source} 或它下面的路径。')
 
 
+def doctor():
+    helper_spec=importlib.util.spec_from_file_location('serein_doctor',ROOT/'scripts'/'doctor.py')
+    helper=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(helper)
+    return helper.diagnose(sys.modules[__name__])
+
+
 def main():
     while True:
         try:
             print(f'\n安装目录：{ROOT}\n实例数据：{DEPLOY / "runtime"}')
             choice=choose('Serein · 安装与维护',[
-                ('0','设置前端用户名／密码'),('1','拉取上游代码并重建' if (DEPLOY/'config.toml').is_file() else '安装 Serein（全新安装／旧库迁移）'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('11','旧 Scene 补 cues'),('q','退出')])
+                ('0','设置前端用户名／密码'),('1','拉取上游代码并重建' if (DEPLOY/'config.toml').is_file() else '安装 Serein（全新安装／旧库迁移）'),('2','重启服务'),('3','向量重建与清理'),('4','启动／停止／状态／日志'),('5','访问入口：本机／局域网／公网'),('6','更换 Gateway Key'),('7','网页旧库目录只读授权'),('8','旧边转换补救（早期版本未转换成功）'),('9','旧备份清理'),('10','历史数据补漏（梦境／窗影／日记／暗房）'),('11','旧 Scene 补 cues'),('12','故障排查（环境／配置／服务／日志）'),('q','退出')])
             if choice=='q':return
+            if choice=='12':
+                doctor()
+                pause()
+                continue
             spec=importlib.util.spec_from_file_location('installer_lock',ROOT/'src'/'serein'/'file_lock.py')
             locks=importlib.util.module_from_spec(spec);spec.loader.exec_module(locks)
             with locks.exclusive_lock(DEPLOY/'runtime'/'installer.lock'):
