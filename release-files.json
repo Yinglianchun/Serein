@@ -10,6 +10,8 @@
   "deploy/Gateway.Dockerfile",
   "deploy/compose.yaml",
   "docs/automatic-events.md",
+  "docs/deployment-guide.md",
+  "docs/troubleshooting.md",
   "docs/memory-storage.md",
   "docs/companion.md",
   "docs/entity-tagging.md",
