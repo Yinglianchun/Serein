@@ -201,7 +201,7 @@ async def work(settings,key,arguments):
             raise
     if key=='pipeline':
         from .extensions.pipeline import _advance
-        events=0;deferred=0;skipped=0;protected=[]
+        events=0;deferred=0;skipped=0;protected=[];curator_omissions=[]
         # This worker is explicitly enqueued by Continue; scheduled_advance does
         # not set this flag. Recheck at most the first held batch per request.
         retry_repair=True
@@ -211,12 +211,17 @@ async def work(settings,key,arguments):
             events+=result.get('events',0)
             deferred+=result.get('deferred',0);skipped+=result.get('skipped',0)
             protected.extend(result.get('protected_deferrals',[]))
-            result={**result,'deferred':deferred,'skipped':skipped,'protected_deferrals':protected}
+            batch_curator_omissions=result.get('curator_omission_deferrals',[])
+            curator_omissions.extend(batch_curator_omissions)
+            result={**result,'deferred':deferred,'skipped':skipped,'protected_deferrals':protected,
+                    'curator_omission_deferrals':curator_omissions}
             progress(events=events)
             if result['status']=='paused' and result.get('job_id'):
                 continue  # The held scope is excluded; try independent chats.
             if result['status']!='processed':return {**result,'events':events}
             if not result.get('processed_originals',0):
+                if batch_curator_omissions:
+                    continue  # Host-retained scope is excluded today; process other ready scopes.
                 return {**result,'status':'current','events':events,'note':'本批需要后续上下文，原话仍待整理；不会反复请求同一批。'}
     from .imports import advance_import
     identifier=key.removeprefix('import:')
