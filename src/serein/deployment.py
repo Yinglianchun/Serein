@@ -51,7 +51,7 @@ def read_from_store(store):
             'tagging': saved.get('tagging', {'domains': DEFAULT_DOMAINS}),
             'tagging_version': saved.get('tagging_version', 1),
             'dream': {'main_prompt':'', 'daily_probability':0.4, **saved.get('dream', {})},
-            'pipeline': {'auto_enabled':True,'execution_mode':legacy_mode,'max_input_chars':12000,'max_prompt_chars':40000,'timeout_seconds':600,'event_writer_concurrency':1,'track_lookback_days':3,
+            'pipeline': {'auto_enabled':True,'execution_mode':legacy_mode,'max_input_chars':40000,'max_prompt_chars':200000,'timeout_seconds':600,'event_writer_concurrency':1,'track_lookback_days':3,
                          'joint_review_enabled':False,'material_review_enabled':False,'round_gate_enabled':False,
                          'append_protected_enabled':False,
                          **saved.get('pipeline',{})},

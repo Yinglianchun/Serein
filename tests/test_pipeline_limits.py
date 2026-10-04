@@ -13,6 +13,28 @@ from serein.imports import stage,advance_import
 from serein import work_tasks as work
 
 
+def test_larger_default_budgets_preserve_saved_limits(settings):
+    from serein.deployment import read_settings
+    from serein.extensions.pipeline_limits import DEFAULTS
+    policy = read_settings(settings.database)['pipeline']
+    assert policy['max_input_chars'] == DEFAULTS['max_input_chars'] == 40000
+    assert policy['max_prompt_chars'] == DEFAULTS['max_prompt_chars'] == 200000
+    save_settings(settings.database, {'pipeline': {'max_input_chars': 8000, 'max_prompt_chars': 50000}})
+    save_settings(settings.database, {'pipeline': {'timeout_seconds': 700}})
+    policy = read_settings(settings.database)['pipeline']
+    assert policy['max_input_chars'] == 8000
+    assert policy['max_prompt_chars'] == 50000
+
+
+def test_default_blocks_allow_longer_dialogue_without_truncation():
+    messages = pairs(4)
+    for message in messages:
+        message['content'] = '原' * 6000
+    result = blocks(messages)
+    assert [len(block) for block in result] == [6, 2]
+    assert [message for block in result for message in block] == messages
+
+
 def pairs(number,known=False):
     stamp=datetime(2025,1,1,tzinfo=timezone.utc)
     result=[]

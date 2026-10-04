@@ -2,10 +2,10 @@
 from datetime import datetime
 from .pipeline_rules import dialogue_units
 
-DEFAULTS={'max_input_chars':12000,'max_prompt_chars':40000,'timeout_seconds':600}
+DEFAULTS={'max_input_chars':40000,'max_prompt_chars':200000,'timeout_seconds':600}
 
 
-def blocks(messages, max_chars=12000):
+def blocks(messages, max_chars=40000):
     result=[];current=[];chars=0;turns=0;previous=None
     for unit in dialogue_units(messages):
         known=all(m.get('metadata',{}).get('timestamp_source')!='import_time' for m in unit)
