@@ -815,3 +815,48 @@ def test_curator_targeted_repair_can_finish(settings):
         return output
     result=asyncio.run(p.advance(settings.database, include_recent=True, runner=runner))
     assert result['events']==1 and len(calls)==2
+
+
+@pytest.mark.parametrize('api_mode', [False, True], ids=['agent', 'api'])
+def test_router_request_sends_complete_role_rules_once(settings, monkeypatch, api_mode):
+    if api_mode:
+        save_settings(settings.database, {'models': [{'id': 'local', 'model': 'synthetic',
+            'base_url': 'http://127.0.0.1:9/v1'}], 'assignments': {'track_router': 'local'}})
+    ingest(settings)
+    captured = []
+    async def complete(model, payload):
+        with Store(settings.database, read_only=True) as store:
+            request = json.loads(store.conn.execute(
+                "SELECT request_json FROM pipeline_jobs WHERE role LIKE 'track_router%' "
+                "AND output_json IS NULL ORDER BY rowid DESC LIMIT 1").fetchone()[0])
+        captured.append((request, payload))
+        return {'choices': [{'message': {'content': json.dumps(output_for('track_router', request))}}]}
+    monkeypatch.setattr('serein.model_runtime.complete', complete)
+    task = asyncio.run(p.advance(settings.database, include_recent=True))
+    request = captured[0][0] if api_mode else task['request']
+    with latest.identity_scope(request['identity']):
+        rules = latest.materialize_agent_rules('track_router')
+    assert request['rules'] == rules
+    assert rules not in request['prompt']
+    assert (request['rules'] + request['prompt']).count(rules) == 1
+    assert '<raw_messages_json>' in request['prompt']
+    if api_mode:
+        assert captured
+        for _, payload in captured:
+            assert payload['messages'][0] == {'role': 'system', 'content': rules}
+            assert sum(str(message['content']).count(rules) for message in payload['messages']) == 1
+    else:
+        assert task['role'] == 'track_router' and not captured
+
+
+def test_standalone_router_prompt_keeps_rules_and_preserves_data_when_separated():
+    message = {'id': 1, 'session_id': 1, 'role': 'user', 'content': '原文 空格\n第二行'}
+    rules = latest.materialize_agent_rules('track_router')
+    standalone = latest.build_event_track_message_prompt('2026-10-04', [message], [])
+    separated = latest.build_event_track_message_prompt('2026-10-04', [message], [], include_role_rules=False)
+    assert standalone.count(rules) == 1
+    assert rules not in separated
+    assert len(standalone) - len(separated) == len(rules)
+    for tag in ('active_tracks_json', 'raw_messages_json', 'bounded_recent_context_json'):
+        extract = lambda prompt: json.loads(prompt.split(f'<{tag}>\n', 1)[1].split(f'\n</{tag}>', 1)[0])
+        assert extract(standalone) == extract(separated)

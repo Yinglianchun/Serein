@@ -716,7 +716,7 @@ def request_for(database,batch,role,**fields):
         if role=='track_router':
             request.update(messages=data['routing_messages'],active_tracks=track_state.parked(data['tracks']),
                            next_track_ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],data['tracks'])))
-            prompt=latest.build_event_track_message_prompt(data['day'],request['messages'],request['active_tracks'],recent_context_messages=data['recent'])
+            prompt=latest.build_event_track_message_prompt(data['day'],request['messages'],request['active_tracks'],recent_context_messages=data['recent'],include_role_rules=False)
         elif role=='event_curator':
             component=fields['component']
             image_messages=image_source_messages(database,component['context_messages'])
