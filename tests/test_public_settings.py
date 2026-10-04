@@ -616,3 +616,24 @@ def test_persona_task_replaces_legacy_thinking_with_provider_option(deployment,m
     private={key:captured[0][key] for key in ('thinking','reasoning','enable_thinking') if key in captured[0]}
     assert private==expected
     assert captured[0]['response_format']=={'type':'json_object'}
+
+
+def test_legacy_models_explicit_null_clears_tokenizer_but_omission_preserves_it(deployment):
+    from serein.api.settings import SettingsPatch
+    from serein.deployment import save_settings
+    settings,client=deployment
+    model={'id':'embed','label':'Embedding','model':'synthetic','base_url':'http://127.0.0.1',
+           'tokenizer':{'path':'synthetic-local','max_tokens':24}}
+    assert client.patch('/v1/settings',json={'models':[model]}).status_code==200
+    omitted={k:v for k,v in model.items() if k!='tokenizer'}
+    assert client.patch('/v1/settings',json={'models':[omitted]}).status_code==200
+    assert read_settings(settings.database)['models'][0]['tokenizer']==model['tokenizer']
+    cleared={**model,'tokenizer':None}
+    serialized=SettingsPatch(models=[cleared]).model_dump(exclude_none=True)
+    assert serialized['models'][0]['tokenizer'] is None
+    assert client.patch('/v1/settings',json={'models':[cleared]}).status_code==200
+    assert read_settings(settings.database)['models'][0].get('tokenizer') is None
+    # Same legacy serialization/storage contract without HTTP, as reported.
+    save_settings(settings.database,SettingsPatch(models=[model]).model_dump(exclude_none=True))
+    save_settings(settings.database,SettingsPatch(models=[cleared]).model_dump(exclude_none=True))
+    assert read_settings(settings.database)['models'][0].get('tokenizer') is None

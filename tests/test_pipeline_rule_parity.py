@@ -197,14 +197,26 @@ def test_pause_budget_persists_api_attempts_and_retry_route_is_authenticated(set
     assert paused['status'] == 'paused' and len(calls) == 3
     assert asyncio.run(p.advance(settings.database, include_recent=True))['status'] == 'current'
     assert len(calls) == 3
+    with Store(settings.database, read_only=True) as store:
+        attempts_before_retry = [dict(row) for row in store.conn.execute('SELECT * FROM pipeline_attempts ORDER BY id')]
+    assert len(attempts_before_retry) == 3
     app = create_app(settings, token='test', live=True)
     assert TestClient(app).post('/v1/pipeline/retry-batch', json={'batch_id': paused['batch_id']}).status_code == 401
     client = TestClient(app, headers={'Authorization': 'Bearer test'})
     assert client.get('/v1/pipeline/status').json()['paused_batches'][0]['batch_id'] == paused['batch_id']
     assert client.post('/v1/pipeline/retry-batch', json={'batch_id': paused['batch_id']}).json()['status'] == 'resumed'
+    assert len(calls) == 3  # Resuming resets the budget without calling the model.
     with Store(settings.database, read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM pipeline_job_failures').fetchone()[0] == 0
-        assert store.conn.execute('SELECT count(*) FROM pipeline_attempts').fetchone()[0] == 3
+        attempts = [dict(row) for row in store.conn.execute('SELECT * FROM pipeline_attempts ORDER BY id')]
+    resets = [row for row in attempts if row['error'] == 'curator_omission_retry_reset']
+    model_attempts = [row for row in attempts if row['error'] != 'curator_omission_retry_reset']
+    assert len(model_attempts) == 3
+    assert model_attempts == attempts_before_retry  # Preserve the original attempt history.
+    assert len(resets) == 1
+    assert resets[0]['output_text'] == ''
+    assert resets[0]['job_id'] == attempts_before_retry[-1]['job_id']
+    assert resets[0]['id'] > attempts_before_retry[-1]['id']
 
 
 def test_continue_worker_moves_to_independent_chat_after_pausing_failed_batch(settings, monkeypatch):

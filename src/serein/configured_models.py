@@ -19,6 +19,8 @@ def recall_resource_version():
 
 def model_index(settings, model):
     profile = {key:model.get(key) for key in ('id','model','base_url','dimension','query_instruction','document_instruction')}
+    if model.get('tokenizer'):
+        profile['tokenizer'] = model['tokenizer']
     key = hashlib.sha256(json.dumps(profile,sort_keys=True).encode()).hexdigest()[:24]
     return settings.database.parent / 'model-indexes' / key
 
@@ -39,11 +41,13 @@ def effective_settings(settings, *, preparing=False):
             if ready.get('recall_resources') != recall_resource_version() or not (root/'scope.sqlite').is_file() or not (root/'policy.json').is_file():
                 raise ValueError('Prepare the selected embedding model in Settings before recall or indexing')
         changes.update(index=root/'index.sqlite',
-            embedding={'endpoint':embedding['base_url']+'/embeddings','api_key':embedding.get('api_key','')},
+            embedding={'endpoint':embedding['base_url']+'/embeddings','api_key':embedding.get('api_key',''),
+                       **({'tokenizer':embedding['tokenizer']} if embedding.get('tokenizer') else {})},
             recall={**changes['recall'],'routing_file':str(root/'routes.json'),
                     'germany_policy_file':str(root/'policy.json')})
     if reranker:
-        changes['reranker']={'endpoint':reranker['base_url']+'/rerank','model':reranker['model'],'api_key':reranker.get('api_key','')}
+        changes['reranker']={'endpoint':reranker['base_url']+'/rerank','model':reranker['model'],'api_key':reranker.get('api_key',''),
+                            **({'tokenizer':reranker['tokenizer']} if reranker.get('tokenizer') else {})}
     return replace(settings,**changes)
 
 

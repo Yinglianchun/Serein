@@ -65,7 +65,7 @@ def feature_enabled(database, name):
 def grouped_upstreams(state):
     """Present legacy connections in the same editor without losing credentials."""
     groups = deepcopy(state['upstreams'])
-    route_keys = ('id','label','dimension','query_instruction','document_instruction')
+    route_keys = ('id','label','dimension','query_instruction','document_instruction','tokenizer')
     for model in state['models']:
         connection = {key:value for key,value in model.items() if key not in (*route_keys,'model')}
         group = next((item for item in groups if all(item.get(key, '') == connection.get(key, '')

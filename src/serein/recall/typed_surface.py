@@ -512,7 +512,12 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
             remaining=deadline_at-time.monotonic() if deadline_at is not None else None
             if remaining is not None and remaining < 1.8:
                 return {**result,'status':'skipped','reason':'hook_deadline_before_reranker','admission':admission}
-            documents=[{'ref':upstream._typed_owner_ref(row),'title':'', 'body':'',
+            from .passages import regions
+            documents=[{'ref':upstream._typed_owner_ref(row),'title':snapshot.objects[row['owner_id']]['document']['title'], 'body':'',
+                        'source_body':snapshot.objects[row['owner_id']]['document']['body_md'],
+                        'source_regions':regions(snapshot.objects[row['owner_id']]['document']),
+                        'body_char_limit':body_char_limit,
+                        'source_passages':snapshot.passages.get(row['owner_id'], []),
                         'rerank_text':memory_document(snapshot.objects[row['owner_id']]['document'],
                             snapshot.passages.get(row['owner_id'], []))} for row in rows]
             from ..adapters.reranker import RerankerClient, RerankerProviderError
@@ -565,7 +570,8 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
                 suppressed['revision_changed_before_read']+=1;continue
             hits.append({'id':row['owner_id'],'kind':row['owner_kind'],'object':obj,'score':row['score'],
                          'method':'cosine','admission':reasons[ref],'freshness':row.get('freshness'),
-                         'rerank_score':scores.get(ref),'score_channels':row.get('score_components',{})})
+                         'rerank_score':scores.get(ref),'score_channels':row.get('score_components',{}),
+                         'body_excerpt':getattr(scores,'evidence',{}).get(ref)})
         result['selected_refs']=[hit['kind']+':'+hit['id'] for hit in hits]
         result['pools']={kind:{'method':'cosine','items':[h for h in hits if h['kind']==kind]} for kind in ('event','scene')}
         result['suppressed']=dict(suppressed)

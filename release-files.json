@@ -540,5 +540,7 @@
   "web/src/pages/ResumePage.jsx",
   "web/src/pages/resume-page.css",
   "web/src/utils/resumePages.js",
-  "web/tests/resume-pages.test.mjs"
+  "web/tests/resume-pages.test.mjs",
+  "src/serein/adapters/token_window.py",
+  "tests/test_token_windows.py"
 ]

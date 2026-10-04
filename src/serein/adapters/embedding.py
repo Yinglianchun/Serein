@@ -8,7 +8,7 @@ from serein.recall.index import Search, unit_vector
 
 
 class EmbeddingClient:
-    def __init__(self, database, index, endpoint, api_key_env=None, api_key=None):
+    def __init__(self, database, index, endpoint, api_key_env=None, api_key=None, tokenizer=None):
         with Search(database, index) as search:
             settings = dict(search.conn.execute("SELECT key,value FROM settings WHERE key LIKE 'embedding_%'"))
         if "embedding_profile" not in settings or "embedding_dimension" not in settings:
@@ -21,6 +21,8 @@ class EmbeddingClient:
             raise ValueError("Embedding endpoint must use HTTPS and match the cached provider host")
         self.endpoint, self.api_key_env = endpoint, api_key_env
         self.api_key = api_key
+        from .token_window import TokenWindow
+        self.window = TokenWindow(tokenizer) if tokenizer else None
 
     def query(self, text, *, client=None):
         prepared = self.prepare(text, self.profile["query_instruction"])
@@ -31,7 +33,11 @@ class EmbeddingClient:
         if not text.strip() or not self.dimension:
             raise ValueError("Text and a cached embedding dimension are required")
         prepared = f"Instruct: {instruction}\n{kind}: {text}" if instruction else text
-        return prepared[:self.profile["max_chars"]]
+        if self.window and not self.window.fits(prepared):
+            raise ValueError('Embedding input exceeds token window; prepare source passages first')
+        if self.window and len(prepared) > self.profile['max_chars']:
+            raise ValueError('Embedding input exceeds character budget; prepare source passages first')
+        return prepared[:self.profile['max_chars']]
 
     def documents(self, texts, *, client=None):
         """Embed body inputs in batch; response positions, not array order, own IDs."""
