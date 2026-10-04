@@ -5,6 +5,7 @@ import {upstreamModels,taskModelOptions} from "../modelOptions.js";
 import {AgentGuide} from './AgentGuide.jsx';
 import {RecallThresholdSettings} from './RecallThresholdSettings.jsx';
 import {upstreamsForSave} from '../upstreamSecrets.js';
+import {memoryAvailabilitySummary,prepareMemoryIndex} from '../memoryPreparation.js';
 
 const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranker",
   relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
@@ -83,13 +84,14 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
     finally{setBusy(false);}
   }
   async function prepare() {
+    if(busy)return;
     setBusy(true);setStatus("正在准备路由和记忆向量，这会调用你选择的 embedding 模型…");
+    setConfig(current=>({...current,memory_ready:false}));
     try {
-      const response=await fetch("/__serein/settings/prepare-memory",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
-      if(!response.ok)throw new Error("准备失败，请核对 embedding 模型、接口和密钥后重试。");
-      const result=await response.json();setConfig(await instanceSettings());setStatus(`记忆检索已准备好，向量维度 ${result.dimension}。`);
-    } catch(error){setStatus(error.message);}
-    finally{setBusy(false);}
+      const result=await prepareMemoryIndex({loadSettings:instanceSettings});
+      if(result.config)setConfig(result.config);
+      setStatus(result.message);
+    } finally{setBusy(false);}
   }
   return <>
     <div role="tabpanel" id="settings-content-models" aria-labelledby="settings-tab-models" aria-hidden={page!=="models"} inert={page!=="models"}>
@@ -129,7 +131,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
         <small>作为梦境模型的背景设定，保存后下一次做梦生效。梦境写作规则会一同发送。</small></label></>}
           <button type="button" className="settings-link" onClick={onOpenCatalog}>管理上游与模型</button>
       <label className="settings-toggle"><span><strong>启用 API Writer</strong><small>{config.features.narrative_tools?'已由主模型通过工具读写叙事卷，自动 Writer 已关闭。':'生成预览，确认保存后才写入叙事卷。使用自己的 Agent，可打开“配置”页的接入说明。'}</small></span><input type="checkbox" role="switch" disabled={config.features.narrative_tools} checked={config.upstream.writer_enabled} onChange={event=>option("writer_enabled",event.target.checked)} /></label>
-      <label className="settings-toggle"><span><strong>聊天时自动带入记忆</strong><small>{config.memory_ready?"检索已就绪。":"选择并保存 embedding 和 reranker 后，点击下方建立 / 补齐检索索引。"}</small></span>
+      <label className="settings-toggle"><span><strong>聊天时自动带入记忆</strong><small>{memoryAvailabilitySummary(config)}</small></span>
         <input type="checkbox" role="switch" disabled={!config.memory_ready} checked={config.upstream.memory_enabled} onChange={event=>option("memory_enabled",event.target.checked)} /></label>
       <div className="settings-group__heading"><h3>长文分段</h3></div>
       <label className="settings-toggle"><span><strong>长文分段检索（Passage）</strong>
@@ -181,3 +183,4 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
     </div>
   </>;
 }
+
