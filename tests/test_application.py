@@ -81,3 +81,39 @@ def test_cli_profile_uses_same_core_as_explicit_paths(tmp_path):
     assert run("--config", config, "search", "归航") == run("search", database, index, "归航")
     assert run("--config", config, "materials", "narrative_missing")["status"] == "missing"
     assert run("--config", config, "capabilities")["extensions"] == []
+
+
+def test_automatic_recall_method_uses_one_effective_snapshot(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from serein.application import Services
+
+    settings = Settings(tmp_path / 'unused.db')
+    effective = replace(settings, embedding={'endpoint':'https://synthetic.example/embeddings'})
+    resolved, calls = [], []
+
+    def resolve(base):
+        resolved.append(base)
+        return effective
+
+    class FakeRecall:
+        policy = SimpleNamespace(direct_threshold=.65)
+
+        def __init__(self, current):
+            assert current is effective
+
+        def run(self, query, **options):
+            calls.append(options)
+            return {'status':'no_match'}
+
+    monkeypatch.setattr('serein.configured_models.effective_settings', resolve)
+    monkeypatch.setattr('serein.application.Recall', FakeRecall)
+    services = Services(settings)
+    services.recall('synthetic', method=None, min_cosine=.5)
+    assert resolved == [settings]
+    assert calls[-1]['method'] == 'semantic'
+    services.recall('synthetic', method='lexical')
+    assert calls[-1]['method'] == 'lexical'
+    # Internal callers that omit method keep the engine's historical default.
+    services.recall('synthetic')
+    assert 'method' not in calls[-1]
