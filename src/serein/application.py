@@ -61,7 +61,7 @@ class Services:
         from dataclasses import replace
         settings = effective_settings(self._settings)
         # Only an explicit automatic-method sentinel opts in; other callers that
-        # omit method retain Recall.run\'s lexical default. Resolve against the
+        # omit method retain Recall.run's lexical default. Resolve against the
         # same effective snapshot used to construct the engine, including UI saves.
         if "method" in options and options["method"] is None:
             options["method"] = "semantic" if settings.embedding else "lexical"
