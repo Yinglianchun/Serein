@@ -546,5 +546,7 @@
   "web/src/utils/resumePages.js",
   "web/tests/resume-pages.test.mjs",
   "src/serein/adapters/token_window.py",
-  "tests/test_token_windows.py"
+  "tests/test_token_windows.py",
+  "src/serein/recall/manual.py",
+  "tests/test_manual_recall_fallback.py"
 ]

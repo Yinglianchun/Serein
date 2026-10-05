@@ -299,7 +299,7 @@ def test_mcp_omitted_recall_arguments_follow_provider_configuration(tmp_path, co
 
         def run(self, query, **options):
             calls.append((self.settings, query, options))
-            return {'status':'no_match'}
+            return {'status':'matched', 'selected_refs':['scene:synthetic']}
 
     monkeypatch.setattr('serein.application.Recall', FakeRecall)
     server = create_server(app)
@@ -342,7 +342,7 @@ def test_mcp_automatic_method_tracks_saved_ui_embedding_without_restart(tmp_path
 
         def run(self, query, **options):
             calls.append((self.settings, options))
-            return {'status':'no_match'}
+            return {'status':'matched', 'selected_refs':['scene:synthetic']}
 
     # Keep the real Services.recall/effective_settings path; never call a provider.
     monkeypatch.setattr('serein.application.Recall', FakeRecall)
@@ -389,3 +389,4 @@ def test_mcp_automatic_method_tracks_saved_ui_embedding_without_restart(tmp_path
         assert calls[-1][1]['method'] == 'lexical'
 
     asyncio.run(exercise())
+
