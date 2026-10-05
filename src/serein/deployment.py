@@ -52,6 +52,7 @@ def read_from_store(store):
             'tagging_version': saved.get('tagging_version', 1),
             'dream': {'main_prompt':'', 'daily_probability':0.4, **saved.get('dream', {})},
             'pipeline': {'auto_enabled':True,'execution_mode':legacy_mode,'max_input_chars':40000,'max_prompt_chars':200000,'timeout_seconds':600,'event_writer_concurrency':1,'track_lookback_days':3,
+                         'track_candidates_enabled':False,'track_direct_hours':12,'track_candidate_limit':8,
                          'joint_review_enabled':False,'material_review_enabled':False,'round_gate_enabled':False,
                          'append_protected_enabled':False,
                          **saved.get('pipeline',{})},
@@ -211,7 +212,13 @@ def save_settings(database, changes):
         lookback_days=current['pipeline'].get('track_lookback_days',3)
         if type(lookback_days) is not int or not 1<=lookback_days<=365:
             raise ValueError('Track lookback must be an integer between 1 and 365 days')
-        for key in ('joint_review_enabled','material_review_enabled','round_gate_enabled','append_protected_enabled'):
+        direct_hours=current['pipeline'].get('track_direct_hours',12)
+        if type(direct_hours) is not int or direct_hours not in (12,24,48,72):
+            raise ValueError('Track direct window must be 12, 24, 48 or 72 hours')
+        candidate_limit=current['pipeline'].get('track_candidate_limit',8)
+        if type(candidate_limit) is not int or not 1<=candidate_limit<=50:
+            raise ValueError('Track candidate limit must be an integer between 1 and 50')
+        for key in ('track_candidates_enabled','joint_review_enabled','material_review_enabled','round_gate_enabled','append_protected_enabled'):
             if type(current['pipeline'].get(key,False)) is not bool:
                 raise ValueError(f'{key} must be a boolean')
         mode=current['pipeline']['execution_mode']

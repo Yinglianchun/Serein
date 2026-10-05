@@ -716,6 +716,8 @@ def request_for(database,batch,role,**fields):
         if role=='track_router':
             request.update(messages=data['routing_messages'],active_tracks=track_state.parked(data['tracks']),
                            next_track_ordinal=data.get('next_track_ordinal',track_state.next_ordinal(data['scope'],data['tracks'])))
+            from .pipeline_track_candidates import select
+            request['active_tracks']=select(request['active_tracks'],request['messages'],data['recent'],data.get('input_policy',{}))
             prompt=latest.build_event_track_message_prompt(data['day'],request['messages'],request['active_tracks'],recent_context_messages=data['recent'],include_role_rules=False)
         elif role=='event_curator':
             component=fields['component']
@@ -1567,7 +1569,7 @@ async def _flush_routes_frozen(database):
                 tracks,ordinal=track_state.load_tracks(store,source,session,messages[0]['id'],task_message,
                                                        lookback_days=config['policy'].get('track_lookback_days',3))
             recent=[task_message(r) for r in store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND id<? ORDER BY id DESC LIMIT 6',(source,session,messages[0]['id']))][::-1]
-            data={'contract':CONTRACT,'runtime_revision':runtime_revision(),'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
+            data={'contract':CONTRACT,'runtime_revision':runtime_revision(),'input_policy':config['policy'],'routing_messages':messages,'tracks':tracks,'next_track_ordinal':ordinal,'scope':scope,'recent':recent,'day':current.astimezone(TZ).date().isoformat()}
             key='route:'+digest(encode(data));batch={'id':key,'input_json':encode(data)}
             store.conn.execute("INSERT OR IGNORE INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,'routing_only')",(key,scope,batch['input_json']))
         output=await route_batch(database,batch,data,None)

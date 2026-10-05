@@ -67,14 +67,15 @@ def test_unanswered_proactive_message_reopens_silence_without_counting_a_round()
     assert all(proactive not in unit for unit in ready)
 
 
-def test_daytime_gate_accumulates_within_session_and_keeps_originals(settings, monkeypatch):
+@pytest.mark.parametrize('retrieval_enabled',[False,True])
+def test_daytime_gate_accumulates_within_session_and_keeps_originals(settings, monkeypatch, retrieval_enabled):
     current = datetime(2026, 9, 14, 2, tzinfo=timezone.utc)
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
             return current.astimezone(tz)
     monkeypatch.setattr(p, 'datetime', Clock)
-    save_settings(settings.database, {'models': [{'id': 'local', 'model': 'synthetic',
+    save_settings(settings.database, {'pipeline':{'track_candidates_enabled':retrieval_enabled},'models': [{'id': 'local', 'model': 'synthetic',
                        'base_url': 'http://127.0.0.1:9/v1'}], 'assignments': {'track_router': 'local'}})
     requests = []
     async def complete(model, payload):
@@ -101,6 +102,8 @@ def test_daytime_gate_accumulates_within_session_and_keeps_originals(settings, m
     asyncio.run(p.flush_routes(settings.database))
     assert sum(len(request['messages']) for request in requests) == 10
     with Store(settings.database, read_only=True) as store:
+        frozen_policy=json.loads(store.conn.execute("SELECT input_json FROM pipeline_batches WHERE id LIKE 'route:%' LIMIT 1").fetchone()[0])['input_policy']
+        assert frozen_policy['track_candidates_enabled'] is retrieval_enabled
         assert store.conn.execute('SELECT COUNT(*) FROM pipeline_routes').fetchone()[0] == 10
         assert store.conn.execute('SELECT COUNT(*) FROM raw_processing').fetchone()[0] == 0
         assert store.conn.execute("SELECT COUNT(*) FROM documents WHERE kind='event'").fetchone()[0] == 0

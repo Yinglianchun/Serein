@@ -10,6 +10,7 @@ const FIELD_LABELS = {
   max_prompt_chars: "完整提示词字符上限", max_input_chars: "原话批次字符上限",
   timeout_seconds: "模型读取超时（秒）", event_writer_concurrency: "Event Writer 首轮并发数",
   track_lookback_days: "归线 Track 回看天数", execution_mode: "执行方式", auto_enabled: "自动整理",
+  track_candidates_enabled: "检索归线候选", track_direct_hours: "直接带入小时数", track_candidate_limit: "额外检索候选上限",
   joint_review_enabled: "跨线联合审阅", material_review_enabled: "逐条材料取舍",
   round_gate_enabled: "普通交流轮次门槛", append_protected_enabled: "受保护 Event 后续追加",
   direct_threshold: "直接召回阈值", body_candidate_threshold: "正文候选扩展门槛",

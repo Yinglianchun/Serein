@@ -162,6 +162,12 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
       <small>“完整提示词字符上限”是最终模型调用保护，可按所用模型上下文提高到 4000000；修改后下一次继续当前批次即可生效。</small>
       <small>只并发 Curator 已冻结计划后的第一轮 Event Writer；Router、Curator、补读与最终结算保持串行。Agent 模式仍一次领取一个 Writer 任务。默认 1。</small>
       <small>默认回看 3 天（72 小时）：归线读取这段时间内实际归入过原话的 Track，不依赖聊天窗口。旧 Event 不按时间过期；同一 Track 超过 8 条 active leaves 时只 defer 该 Track，避免截断候选后误写。天数修改对新批次生效，已冻结任务保持原材料。</small>
+      <label className="settings-toggle"><span><strong>检索归线候选（实验）</strong><small>默认关闭，完整带入回看范围内的旧卡。开启后，近线完整带入，较早的卡由程序检索补充；可能漏接或改变分线。</small></span><input type="checkbox" role="switch" checked={config.pipeline.track_candidates_enabled ?? false} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,track_candidates_enabled:event.target.checked}}))}/></label>
+      {config.pipeline.track_candidates_enabled && <>
+        <label className="settings-field"><span>直接带入最近活动的 Track</span><select value={config.pipeline.track_direct_hours ?? 12} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,track_direct_hours:Number(event.target.value)}}))}>{[12,24,48,72].map(hours=><option key={hours} value={hours}>最近 {hours} 小时</option>)}</select></label>
+        <label className="settings-field"><span>额外检索候选上限（默认 8 张）</span><input type="number" min="1" max="50" value={config.pipeline.track_candidate_limit ?? 8} onChange={event=>setConfig(current=>({...current,pipeline:{...current.pipeline,track_candidate_limit:Number(event.target.value)}}))}/></label>
+        <small>使用整批新原文和附近前文，搜索旧卡的标题、续接线索及近期原文；程序排除已直接带入的卡并去重。只筛选本次输入，卡片和原文仍完整保存。对新批次生效，已冻结任务保留原输入。</small>
+      </>}
       <button type="button" className="settings-link" onClick={onOpenPipeline}>查看整理进度与导入原话</button>
     </details>
           <AgentGuide label="配置 Agent 整理 Event" />

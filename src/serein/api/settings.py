@@ -205,6 +205,9 @@ class PipelinePatch(BaseModel):
     timeout_seconds: int | None = Field(default=None,ge=30,le=1800)
     event_writer_concurrency: int | None = Field(default=None,ge=1,le=8,strict=True)
     track_lookback_days: int | None = Field(default=None,ge=1,le=365,strict=True)
+    track_candidates_enabled: bool | None = Field(default=None,strict=True)
+    track_direct_hours: Literal[12,24,48,72] | None = None
+    track_candidate_limit: int | None = Field(default=None,ge=1,le=50,strict=True)
     joint_review_enabled: bool | None = None
     material_review_enabled: bool | None = None
     round_gate_enabled: bool | None = None
