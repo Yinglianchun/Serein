@@ -4,6 +4,7 @@ Also runnable without pytest:
     PYTHONPATH=src python -m unittest discover -s tests -p test_manual_recall_fallback.py
 """
 import asyncio
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 import sqlite3
@@ -209,7 +210,7 @@ class ManualFallbackTests(unittest.TestCase):
                              lifecycle='archived' if state == 'archived' else 'active')
                 if state == 'hidden': store.set_manual_surface('entity_'+state, False)
         self.rebuild()
-        with sqlite3.connect(self.settings.index) as conn, Store(self.settings.database, read_only=True) as store:
+        with closing(sqlite3.connect(self.settings.index)) as conn, conn, Store(self.settings.database, read_only=True) as store:
             ensure_tables(conn)
             for state in ('active','archived','hidden'):
                 key = 'entity_'+state
