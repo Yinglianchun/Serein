@@ -31,12 +31,18 @@ class Recall:
     def run(self, text, *, mode="surface", limit=5, with_evidence=False, method="lexical", min_cosine=None,
             topic=None, intent="direct", exclude_ids=(), delivered_ids=(), use_passages=None,
             body_char_limit=1200, delivered_menu_keys=(), recall_ablation='normal', deadline_at=None,
-            user_utterance=False):
+            user_utterance=False, surface_only=False):
         if recall_ablation not in ('normal','without_cues','without_embedding'):
             raise ValueError('Unsupported recall ablation')
         if method not in {"lexical", "semantic"} or not 1 <= limit <= 100:
             raise ValueError("Invalid recall method or limit")
+        if surface_only and (mode != "lookup" or method != "lexical"):
+            raise ValueError("surface_only is reserved for lexical lookup")
         query = Query(text, topic, intent, mode, tuple(exclude_ids), tuple(delivered_ids), user_utterance)
+        # Manual fallback relaxes evidence admission, never visibility. Discovery
+        # and final reads retain the same lifecycle/access surface restrictions.
+        discovery_query = replace(query, mode="surface") if surface_only else query
+        visibility_mode = "surface" if surface_only else mode
         result = {"query": text, "topic": query.search_text, "intent": intent, "method": method,
                   "status": "no_match", "pools": {}, "selected_refs": [], "candidates": [],
                   "injected": False, "suppressed": {}, "selection_scope": "retrieved_candidates"}
@@ -91,7 +97,7 @@ class Recall:
         pools, candidates = {}, []
         with Search(self.settings.database, self.settings.index) as search:
             for kind in ("event", "scene"):
-                pool = search.search(text if method == "semantic" else query.search_text, kind=kind, mode=mode,
+                pool = search.search(text if method == "semantic" else query.search_text, kind=kind, mode=visibility_mode,
                                      limit=self.policy.candidate_limit, with_evidence=False,
                                      use_passages=self.policy.passages_enabled and use_passages is not False,
                                      **({} if recall_ablation=='without_embedding' else options))
@@ -106,12 +112,12 @@ class Recall:
                     if row["id"] in known:
                         continue
                     obj = search.reader.read(row["id"], with_evidence=False)
-                    if obj["readable"] and (mode == "lookup" or obj["surface_state"]["can_surface"]) and scene.cue_matches(obj["document"], query):
+                    if obj["readable"] and (visibility_mode == "lookup" or obj["surface_state"]["can_surface"]) and scene.cue_matches(obj["document"], query):
                         candidates.append({"id": row["id"], "kind": "scene", "object": obj, "score": None, "method": "cue"})
                         scene_count += 1
             from .entities import candidates as entity_candidates
             known={hit['id']:hit for hit in candidates}
-            for hit in entity_candidates(search,query,self.policy,self.policy.candidate_limit):
+            for hit in entity_candidates(search,discovery_query,self.policy,self.policy.candidate_limit):
                 if hit['id'] in known:
                     known[hit['id']]['entity_handles']=hit['entity_handles']
                 else: candidates.append(hit)
@@ -159,7 +165,7 @@ class Recall:
                     continue
                 # Materialization always uses current canonical access state.
                 obj = reader.read(hit["id"], with_evidence=with_evidence)
-                if not obj["readable"] or (mode == "surface" and not obj["surface_state"]["can_surface"]):
+                if not obj["readable"] or (visibility_mode == "surface" and not obj["surface_state"]["can_surface"]):
                     rejected["state_changed_before_read"] += 1
                     continue
                 if obj["document"]["revision"] != hit["object"]["document"]["revision"]:
@@ -172,7 +178,8 @@ class Recall:
             by_ref = {f"{hit['kind']}:{hit['id']}": hit for pool in pools.values() for hit in pool['items']}
             scope = result.get('surface_reranker_gate', {}).get('entity_scope', {})
             scope_key = (scope.get('scope_anchor') or {}).get('arc_key', '')
-            result.update(render([by_ref[ref] for ref in result['selected_refs']], reader=reader, scope_arc_key=scope_key,
+            # Fallback never expands into an Arc menu with broader lookup visibility.
+            result.update(render([by_ref[ref] for ref in result['selected_refs']], reader=None if surface_only else reader, scope_arc_key=scope_key,
                                  body_char_limit=body_char_limit,delivered_menu_keys=delivered_menu_keys))
         for pool in pools.values():
             pool["status"] = "matched" if pool["items"] else "no_match"
@@ -211,3 +218,4 @@ class Recall:
         return {"query": text, "status": "matched" if cards else "no_match", "items": cards,
                 "match_mode": match_mode,
                 "scope_only": True, "narrative_body_included": False, "injected": False}
+

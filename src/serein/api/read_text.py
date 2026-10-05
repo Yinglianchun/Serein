@@ -94,9 +94,23 @@ def memory_text(result: dict[str, Any], *, with_evidence: bool) -> str:
 
 
 def recall_text(result: dict[str, Any], *, with_evidence: bool) -> str:
+    notices = []
+    fallback = result.get("manual_fallback")
+    if fallback:
+        notices.extend(("Manual fallback: lexical lookup (surface-eligible memories only).",
+                        f"primary_status: {fallback['primary_status']}"))
+        if fallback.get("primary_reason"):
+            notices.append(f"primary_reason: {fallback['primary_reason']}")
+        notices.append("These are lookup matches, not automatic relevance approval or an injection record.")
+        for label, counts in (("primary_suppressed", fallback.get("primary_suppressed", {})),
+                              ("lookup_suppressed", result.get("suppressed", {}))):
+            if counts:
+                notices.append(label + ": " + ", ".join(f"{key}={value}" for key, value in sorted(counts.items())))
+    if result.get("reranker_error"):
+        notices.append(f"Recall incomplete: reranker_error={result['reranker_error']}; no fallback was attempted.")
     context = str(result.get("context") or "").strip()
     if context:
-        lines = [context]
+        lines = [*notices, context]
         for pool in (result.get("pools") or {}).values():
             for hit in pool.get("items") or []:
                 obj = hit.get("object") or {}
@@ -111,7 +125,10 @@ def recall_text(result: dict[str, Any], *, with_evidence: bool) -> str:
         return "This request needs a Narrative lookup. Use find_arc(query=...) first."
     if status == "use_evidence_reader":
         return "This request needs an exact memory read. Use read_memory(identifier=..., with_evidence=true)."
-    return f"No matching memory.\nstatus: {status}"
+    summary = "Recall incomplete." if result.get("reranker_error") else "No matching memory."
+    if result.get("reason"):
+        notices.append(f"reason: {result['reason']}")
+    return "\n".join([*notices, summary, f"status: {status}"])
 
 
 def find_arc_text(result: dict[str, Any]) -> str:
@@ -182,3 +199,4 @@ def favorites_text(result: dict[str, Any], *, with_evidence: bool) -> str:
     lines.extend((f"has_more: {str(bool(result.get('has_more'))).lower()}",
                   f"next_offset: {result.get('next_offset')}", "[/favorites]"))
     return "\n".join(lines)
+

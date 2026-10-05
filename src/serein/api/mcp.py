@@ -103,16 +103,18 @@ def create_server(app: Application, *, private=False, http=False):
         return memory_text(services.read_with_menus(identifier, kind=kind, revision=revision, with_evidence=True),
                            with_evidence=with_evidence)
 
-    def recall_memory(query: str, mode: Literal["surface", "lookup"] = "surface", limit: int = 5,
+    def recall_memory(query: str, mode: Literal["surface", "lookup"] | None = None, limit: int = 5,
                       with_evidence: bool = False, method: Literal["lexical", "semantic"] | None = None,
                       min_cosine: float | None = .5, topic: str | None = None,
                       intent: Literal["direct", "latest", "progress", "timeline", "narrative", "exact"] = "direct",
-                      exclude_ids: list[str] | None = None, use_passages: bool | None = None) -> str:
-        """Recall with separate Event/Scene rules. Omit method (or pass null) to follow the current effective embedding configuration on every call: semantic when configured, lexical otherwise, with cosine cutoff 0.5. Lexical/cue matches stay candidates unless named by full title. Lookup permits intentional browsing; Narrative/quote intent redirects to dedicated reads."""
+                      exclude_ids: list[str] | None = None, use_passages: bool | None = None,
+                      fallback: bool = True) -> str:
+        """Recall with separate Event/Scene rules. Omit method (or pass null) to follow the current effective embedding configuration on every call: semantic when configured, lexical otherwise, with cosine cutoff 0.5. With default mode/method and direct intent, an empty result or published route skip tries one labelled lexical lookup, restricted to currently surface-eligible memories. Set fallback=false, or explicitly choose mode/method, to disable this retry. Errors never trigger fallback. Explicit surface keeps lexical/cue matches as candidates unless named by full title; explicit lookup permits intentional browsing. Narrative/quote intent redirects to dedicated reads."""
         if method in (None, "semantic") and min_cosine is None:
             min_cosine = .5
-        result = services.recall(query, mode=mode, limit=limit, with_evidence=True, method=method, min_cosine=min_cosine,
-                                 topic=topic, intent=intent, exclude_ids=exclude_ids or [], use_passages=use_passages)
+        result = services.recall(query, mode=mode or "surface", limit=limit, with_evidence=True, method=method, min_cosine=min_cosine,
+                                 topic=topic, intent=intent, exclude_ids=exclude_ids or [], use_passages=use_passages,
+                                 manual_fallback=fallback and mode is None and method is None and intent == "direct")
         return recall_text(result, with_evidence=with_evidence)
 
     def find_arc(query: str, limit: int = 5) -> str:
@@ -312,3 +314,4 @@ def create_server(app: Application, *, private=False, http=False):
     server._setup_handlers()
     refresh_optional()
     return server
+
