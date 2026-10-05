@@ -282,21 +282,110 @@ def test_retired_index_sync_is_rejected_from_allowlist(tmp_path):
 
 @pytest.mark.parametrize('configured,method', [(False,'lexical'), (True,'semantic')])
 def test_mcp_omitted_recall_arguments_follow_provider_configuration(tmp_path, configured, method, monkeypatch):
+    from types import SimpleNamespace
+
     monkeypatch.setenv('SEREIN_SNAPSHOT_ID', 'test-snapshot')
-    app = Application(Settings(tmp_path/'not-opened.db', embedding={'endpoint':'https://example.test'} if configured else {}))
+    database = tmp_path / 'memory.db'
+    with Store(database):
+        pass
+    app = Application(Settings(database, embedding={'endpoint':'https://example.test'} if configured else {}))
     calls = []
-    app.services.recall = lambda query, **options: calls.append((query, options)) or {'status':'no_match'}
+
+    class FakeRecall:
+        policy = SimpleNamespace(direct_threshold=.65)
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def run(self, query, **options):
+            calls.append((self.settings, query, options))
+            return {'status':'no_match'}
+
+    monkeypatch.setattr('serein.application.Recall', FakeRecall)
     server = create_server(app)
 
     async def exercise():
         tool = next(t for t in await server.list_tools() if t.name == 'recall_memory')
-        assert tool.inputSchema['properties']['method']['default'] == method
-        await server.call_tool('recall_memory', {'query':'a memory'})
-        assert calls[-1][1]['method'] == method
-        assert calls[-1][1]['min_cosine'] == .5
+        assert tool.inputSchema['properties']['method']['default'] is None
+        for arguments in ({'query':'a memory'}, {'query':'a memory', 'method':None, 'min_cosine':None}):
+            await server.call_tool('recall_memory', arguments)
+            assert calls[-1][2]['method'] == method
+            assert calls[-1][2]['min_cosine'] == .5
         await server.call_tool('recall_memory', {'query':'a memory','method':'lexical'})
-        assert calls[-1][1]['method'] == 'lexical'
+        assert calls[-1][2]['method'] == 'lexical'
         await server.call_tool('recall_memory', {'query':'a memory','method':'semantic','min_cosine':None})
-        assert calls[-1][1]['min_cosine'] == .5
+        assert calls[-1][2]['method'] == 'semantic'
+        assert calls[-1][2]['min_cosine'] == .5
+        await server.call_tool('recall_memory', {'query':'a memory','method':'semantic','min_cosine':.7})
+        assert calls[-1][2]['min_cosine'] == .7
     asyncio.run(exercise())
     assert 'read-only' in server.instructions and 'test-snapshot' in server.instructions
+
+
+def test_mcp_automatic_method_tracks_saved_ui_embedding_without_restart(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from serein.configured_models import model_index, recall_resource_version
+    from serein.deployment import save_settings, task_model
+
+    database = tmp_path / 'memory.db'
+    with Store(database):
+        pass
+    app = Application(Settings(database))
+    calls = []
+
+    class FakeRecall:
+        policy = SimpleNamespace(direct_threshold=.65)
+
+        def __init__(self, settings):
+            self.settings = settings
+
+        def run(self, query, **options):
+            calls.append((self.settings, options))
+            return {'status':'no_match'}
+
+    # Keep the real Services.recall/effective_settings path; never call a provider.
+    monkeypatch.setattr('serein.application.Recall', FakeRecall)
+    server = create_server(app)
+    save_settings(database, {'models':[
+        {'id':name, 'label':name, 'model':name, 'protocol':'openai',
+         'base_url':f'https://{name}.example/v1'} for name in ('embedding-a','embedding-b')
+    ]})
+
+    def prepare_fixture(name):
+        save_settings(database, {'assignments':{'embedding':name}})
+        root = model_index(app.settings, task_model(database, 'embedding'))
+        root.mkdir(parents=True, exist_ok=True)
+        # These only satisfy the configuration readiness guard. FakeRecall
+        # deliberately avoids opening indexes, routing data or model endpoints.
+        (root / 'scope.sqlite').touch()
+        (root / 'policy.json').write_text('{}', encoding='utf-8')
+        (root / 'ready.json').write_text(json.dumps({
+            'recall_resources':recall_resource_version()}), encoding='utf-8')
+        return root
+
+    async def exercise():
+        await server.call_tool('recall_memory', {'query':'synthetic'})
+        assert calls[-1][1]['method'] == 'lexical'
+        for name in ('embedding-a','embedding-b'):
+            root = prepare_fixture(name)
+            # Same server, no list_tools refresh: call-time selection is required.
+            await server.call_tool('recall_memory', {'query':'synthetic'})
+            effective, options = calls[-1]
+            assert options['method'] == 'semantic'
+            assert effective.index == root / 'index.sqlite'
+            assert effective.embedding['endpoint'] == f'https://{name}.example/v1/embeddings'
+            assert app.settings.embedding == {}
+            await server.call_tool('recall_memory', {'query':'synthetic', 'method':'lexical'})
+            assert calls[-1][1]['method'] == 'lexical'
+        # A newly selected but unprepared model must not silently fall back.
+        (root / 'ready.json').unlink()
+        previous = len(calls)
+        with pytest.raises(Exception, match='Prepare the selected embedding model'):
+            await server.call_tool('recall_memory', {'query':'synthetic'})
+        assert len(calls) == previous
+        save_settings(database, {'assignments':{'embedding':''}})
+        await server.call_tool('recall_memory', {'query':'synthetic'})
+        assert calls[-1][1]['method'] == 'lexical'
+
+    asyncio.run(exercise())
