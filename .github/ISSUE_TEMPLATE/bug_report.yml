@@ -1,0 +1,107 @@
+name: 问题报告
+description: 写清环境、复现步骤和实际结果，附上相关的脱敏原始信息。
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先查看[排错指南](https://github.com/Yinglianchun/Serein/blob/main/docs/troubleshooting.md)和[提交说明](https://github.com/Yinglianchun/Serein/blob/main/CONTRIBUTING.md)，并搜索已有 Issue。
+
+        标题写出功能与现象，例如“保存功能设置后开关状态未更新”；尽量一条 Issue 描述一个问题。
+
+        只提供能说明问题的最小脱敏样例，不要公开密钥、Cookie、带认证信息的 URL、完整私聊或数据库。截图和 AI 分析可补充，不能代替实测步骤与原始证据。
+
+        信息不足时会请你补齐，补齐前暂不排查。使用中转、自改源码或部署/配置时须声明，不能直接将异常认定为项目缺陷；维护者不承诺逐个环境适配。
+  - type: input
+    id: version
+    attributes:
+      label: Serein 版本或最后更新日期
+      description: 优先填写提交号或版本；不清楚时可写“不知道”，补充你记得的安装或更新日期。
+      placeholder: "例如：提交 c673cb6；或不知道提交号，最后更新于 2026-10-06"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: 操作系统与部署方式
+      description: 写明系统及版本、一键脚本/Docker/手动部署等；界面问题请补浏览器及版本。
+      placeholder: |
+        系统及版本：
+        部署方式：
+        浏览器及版本（界面问题）：
+    validations:
+      required: true
+  - type: textarea
+    id: entry_client
+    attributes:
+      label: 使用入口与客户端
+      description: 网页、聊天网关、MCP 或 Hook；如使用客户端，填写名称与版本。无需公开真实实例地址。
+      placeholder: "例如：网页的设置 → 功能；或通过 Serein 网关使用某客户端（版本……）"
+    validations:
+      required: true
+  - type: textarea
+    id: models_upstream
+    attributes:
+      label: 相关模型与上游接口
+      description: 只填与问题相关的模型，注明阶段、完整模型 ID/版本、上游类型及接口协议/兼容格式。中转或本地服务须说明；不涉及的项写“不涉及”，不知道则说明。
+      placeholder: |
+        生成模型（如聊天、Curator、Writer；完整模型 ID/版本）：
+        Embedding / Reranker（召回或索引问题；完整模型 ID/版本）：
+        上游服务名称与类型（厂商直连/中转/本地）：
+        接口协议或兼容格式：
+    validations:
+      required: true
+  - type: textarea
+    id: modifications
+    attributes:
+      label: 自改源码、部署与配置
+      description: 写明修改过的源码、部署步骤及相关功能/模型配置；没有修改写“无”。使用 AI 辅助部署也可以报告，请说明实际执行了哪些改动。
+      placeholder: "例如：无源码改动；手动更改网关端口；或按某部署脚本修改了……（脱敏）"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 从什么页面或入口开始、做了什么、在哪一步出现问题；偶发问题请写频率和最近一次发生时间。
+      placeholder: |
+        1. 打开……
+        2. 点击/发送……
+        3. 出现……
+    validations:
+      required: true
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: 预期结果与实际结果
+      description: 分别写明你期望发生什么，以及实际看到什么。
+      placeholder: |
+        预期结果：
+        实际结果：
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 原始错误与相关诊断
+      description: 只贴相关的脱敏片段；无报错可写“无”。接口问题附请求路径、状态码及错误响应，摘要/召回问题附对应任务或轮次诊断。界面问题可附控制台错误（如有），无需 SQL 或数据库导出。
+      placeholder: |
+        原始错误（无报错写“无”）：
+        相关请求/日志/诊断（不涉及写“不涉及”）：
+        已实测的排查及结果（如有）：
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或录屏（可选）
+      description: 可拖入附件补充说明；先遮挡账号、真实地址、凭据与私人内容。
+    validations:
+      required: false
+  - type: textarea
+    id: ai_analysis
+    attributes:
+      label: AI 分析或建议（可选）
+      description: 请将 AI 推测单独放在这里，标明哪些已经实测、哪些尚未验证；不能代替上面的步骤、实际结果和原始证据。
+    validations:
+      required: false

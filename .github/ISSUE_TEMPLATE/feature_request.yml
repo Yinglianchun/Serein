@@ -1,0 +1,30 @@
+name: 功能建议
+description: 说明使用场景、遇到的困难和希望增加的行为。
+title: "[建议] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索已有 Issue，并阅读[提交说明](https://github.com/Yinglianchun/Serein/blob/main/CONTRIBUTING.md)。一条建议尽量围绕一个使用场景。
+        示例和附件请脱敏，不要公开密钥、Cookie、带认证信息的 URL、完整私聊或数据库。
+  - type: textarea
+    id: use_case
+    attributes:
+      label: 使用场景与当前困难
+      description: 你在什么场景下想完成什么，现有功能哪里不够用？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望增加或调整的行为
+      description: 描述期望的操作和结果，可以用最小脱敏例子说明。
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 尝试过的办法与补充材料（可选）
+      description: 可补现有替代方案、相关 Issue、脱敏截图或草图；AI 建议请标明来源和未验证部分。
+    validations:
+      required: false
