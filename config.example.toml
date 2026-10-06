@@ -8,6 +8,8 @@ writable = true
 direct_threshold = 0.65
 max_cards = 2
 candidate_limit = 50
+# Automatic mixed recall candidates before reranking (6–100); independent of candidate_limit.
+direct_pool_limit = 20
 passages_enabled = false
 passage_min_chars = 500
 # Required when semantic recall is configured; generated using prepare-routes.

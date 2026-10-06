@@ -219,11 +219,12 @@ class RecallPatch(BaseModel):
     direct_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
     body_candidate_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
     cue_candidate_threshold: float | None = Field(default=None, ge=0, le=1, strict=True)
+    direct_pool_limit: int | None = Field(default=None, ge=6, le=100, strict=True)
     passages_enabled: bool | None = Field(default=None, strict=True)
     passage_min_chars: int | None = Field(default=None, ge=1, le=100000, strict=True)
 
     @field_validator('direct_threshold', 'body_candidate_threshold', 'cue_candidate_threshold',
-                     'passages_enabled', 'passage_min_chars', mode='before')
+                     'direct_pool_limit', 'passages_enabled', 'passage_min_chars', mode='before')
     @classmethod
     def reject_null(cls, value):
         if value is None: raise ValueError('Recall settings cannot be null')
@@ -415,7 +416,7 @@ def routes(settings, auth):
         policy=RecallPolicy.from_config(recall_settings(settings))
         return {**read_settings(settings.database, public=True), 'recall':{key:getattr(policy,key) for key in
                 ('direct_threshold','body_candidate_threshold','cue_candidate_threshold',
-                 'passages_enabled','passage_min_chars')},
+                 'direct_pool_limit','passages_enabled','passage_min_chars')},
                 'memory_ready': status['ready'], 'memory_status':status}
 
     @router.patch('/v1/settings')

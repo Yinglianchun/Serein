@@ -80,6 +80,50 @@ def test_configured_body_candidate_threshold_applies_on_next_recall(legacy):
     assert result['candidate_policy']['tail_body_or_passage_floor']==.47
 
 
+def test_saved_pool_limit_admits_target_beyond_twenty_without_lowering_rerank_threshold(legacy):
+    from serein.configured_models import effective_settings
+    settings,build=legacy
+    engine,_=build([(f's{i}','scene',.90-i*.01,'2026-09-01') for i in range(20)]+
+                   [('target','scene',.59,'2026-09-01')])
+    seen=[]
+    def score(query,docs):
+        seen.extend(d['ref'] for d in docs)
+        return {d['ref']:(.95 if d['ref']=='scene:target' else .1) for d in docs}
+    engine.reranker=score
+    before=engine.run('手机维修',method='semantic',min_cosine=.5)
+    assert len(seen)==20 and 'scene:target' not in seen
+    assert before['selected_refs']==[]
+    save_settings(settings.database,{'recall':{'direct_pool_limit':30}})
+    seen.clear()
+    engine=Recall(effective_settings(settings),reranker=score)
+    after=engine.run('手机维修',method='semantic',min_cosine=.5)
+    assert len(seen)==21 and 'scene:target' in seen
+    assert after['selected_refs']==['scene:target']
+    assert after['candidate_policy']['direct_pool_limit']==30
+    assert after['candidate_policy']['pool_limit']==30
+    assert after['candidate_policy']['base_vector_pool_limit']==6
+    assert engine.policy.direct_threshold==.65
+
+
+@pytest.mark.parametrize('limit',[6,30])
+def test_configured_pool_stays_bounded_with_one_extra_relation(legacy,limit):
+    from serein.configured_models import effective_settings
+    settings,build=legacy
+    _,calls=build([(f's{i}','scene',.90-i*.005,'2026-09-01') for i in range(32)]+
+                  [('neighbor','scene',.4,'2026-09-01'),('other','scene',.3,'2026-09-01')])
+    link_scenes(settings,[('a','s0','neighbor',1),('b','s0','other',1)])
+    save_settings(settings.database,{'recall':{'direct_pool_limit':limit}})
+    def score(query,docs):
+        calls.extend(docs)
+        return {d['ref']:.9 for d in docs}
+    result=Recall(effective_settings(settings),reranker=score).run('手机维修',method='semantic',min_cosine=.5)
+    assert len(calls)==limit+1
+    assert result['candidate_retrieval']['actual_candidate_count']==limit+1
+    assert result['candidate_policy']['pool_limit']==limit+1
+    assert sum(row['candidate_origin']=='relation' for row in result['candidate_scores'])==1
+    assert result['candidate_retrieval']['base_pool_count']==6
+
+
 @pytest.mark.parametrize('cooled,expected',[(['scene:s0'],['scene:s1']),(['scene:s0','scene:s1'],[])])
 def test_old_winners_are_cooled_without_refilling(legacy,cooled,expected):
     _,build=legacy

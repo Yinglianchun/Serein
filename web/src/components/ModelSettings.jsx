@@ -32,6 +32,7 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
   const threshold=recallThreshold ?? config?.recall?.direct_threshold ?? 0.65;
   const bodyCandidateThreshold=candidateThresholdDraft.body_candidate_threshold ?? config?.recall?.body_candidate_threshold ?? 0.50;
   const cueCandidateThreshold=candidateThresholdDraft.cue_candidate_threshold ?? config?.recall?.cue_candidate_threshold ?? 0.55;
+  const directPoolLimit=candidateThresholdDraft.direct_pool_limit ?? config?.recall?.direct_pool_limit ?? 20;
   const validThreshold=threshold!=='' && Number.isFinite(Number(threshold)) && Number(threshold)>=0 && Number(threshold)<=1;
   const validCandidateThresholds=[bodyCandidateThreshold,cueCandidateThreshold].every(value=>
     value!=='' && Number.isFinite(Number(value)) && Number(value)>=0 && Number(value)<=1);
@@ -72,6 +73,8 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
       const upstreams=upstreamsForSave(config.upstreams || [],upstreamForm.current);
       if(!validThreshold)throw new Error('召回阈值需填写 0 到 1 之间的数字。');
       if(!validCandidateThresholds)throw new Error('候选扩展门槛需填写 0 到 1 之间的数字。');
+      if(directPoolLimit===''||!Number.isInteger(Number(directPoolLimit))||Number(directPoolLimit)<6||Number(directPoolLimit)>100)
+        throw new Error('候选池上限需填写 6 到 100 之间的整数。');
       if(passageMinChars===''||!Number.isInteger(Number(passageMinChars))||Number(passageMinChars)<1||Number(passageMinChars)>100000)
         throw new Error('长文起切字数需填写 1 到 100000 之间的整数。');
       const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:config.assignments,pipeline:Object.fromEntries(Object.entries(config.pipeline).filter(([key])=>key!=='auto_enabled')),dream:config.dream,

@@ -8,6 +8,7 @@ class RecallPolicy:
     direct_threshold: float = 0.65
     body_candidate_threshold: float = 0.50
     cue_candidate_threshold: float = 0.55
+    direct_pool_limit: int = 20
     max_cards: int = 2
     candidate_limit: int = 50
     domains: dict[str, str] = field(default_factory=dict)
@@ -19,10 +20,12 @@ class RecallPolicy:
 
     @classmethod
     def from_config(cls, raw):
-        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "max_cards", "candidate_limit", "domains", "domain_rules", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars"}
+        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "direct_pool_limit", "max_cards", "candidate_limit", "domains", "domain_rules", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars"}
         if unknown:
             raise ValueError(f"Unknown recall policy fields: {', '.join(sorted(unknown))}")
         policy = cls(**raw)
+        if type(policy.direct_pool_limit) is not int or not 6 <= policy.direct_pool_limit <= 100:
+            raise ValueError('direct_pool_limit must be an integer between 6 and 100')
         thresholds=(policy.direct_threshold,policy.body_candidate_threshold,policy.cue_candidate_threshold)
         if any(type(value) not in (int,float) for value in thresholds):
             raise ValueError('Recall thresholds must be numbers')

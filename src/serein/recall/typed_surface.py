@@ -369,7 +369,7 @@ def select_candidate_pool(snapshot, found, ranked, entity_matches, query, *, lim
         row['entry_reasons']=reasons
         return row
 
-    for rank,row in enumerate(ranked[:20],1):
+    for rank,row in enumerate(ranked[:limit],1):
         key=(row['owner_kind'],row['owner_id'])
         if rank<=6:
             chosen.append(prepare(row,'base_vector_rank'));seen.add(key);counts['base_pool']+=1
@@ -466,14 +466,15 @@ def run(engine, query, result, gate, decision, embedding, *, cutoff, limit, use_
             all_entity_matches=_entity_matches(entity_index,query.text,
                 {(row['owner_kind'],row['owner_id']) for row in ranked})
             rows,entry_counts=select_candidate_pool(snapshot,found,ranked,all_entity_matches,query,
+                limit=engine.policy.direct_pool_limit,
                 body_threshold=engine.policy.body_candidate_threshold,
                 cue_threshold=engine.policy.cue_candidate_threshold) if strategy=='mixed' else (ranked,Counter())
         scope=found.get('entity_scope',{})
         result['candidate_policy']={**found.get('policy',{}),'selection_strategy':strategy}
         if strategy=='mixed':
             result['candidate_policy'].update(lane_quotas=None,cross_lane_score_comparison=True,
-                freshness_rerank='bounded_across_mixed_pool',pool_limit=21 if association_enabled else 20,
-                direct_pool_limit=20,base_vector_pool_limit=6,relation_pool_limit=int(association_enabled),
+                freshness_rerank='bounded_across_mixed_pool',pool_limit=engine.policy.direct_pool_limit+int(association_enabled),
+                direct_pool_limit=engine.policy.direct_pool_limit,base_vector_pool_limit=6,relation_pool_limit=int(association_enabled),
                 association_enabled=association_enabled,final_order='reranker_descending',vector_floor=None if cutoff == -1 else cutoff,
                 tail_body_or_passage_floor=engine.policy.body_candidate_threshold,
                 cue_semantic_floor=engine.policy.cue_candidate_threshold,

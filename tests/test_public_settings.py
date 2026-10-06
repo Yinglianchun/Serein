@@ -53,7 +53,7 @@ def test_passage_settings_are_optional_strict_and_independent(deployment):
     settings,client=deployment
     initial=client.get('/v1/settings').json()
     assert initial['recall']=={'direct_threshold':.65,'body_candidate_threshold':.5,
-                               'cue_candidate_threshold':.55,'passages_enabled':False,'passage_min_chars':500}
+                               'cue_candidate_threshold':.55,'direct_pool_limit':20,'passages_enabled':False,'passage_min_chars':500}
     enabled=client.patch('/v1/settings',json={'recall':{'passages_enabled':True,'passage_min_chars':800}})
     assert enabled.status_code==200
     client.patch('/v1/settings',json={'recall':{'direct_threshold':.6}})
@@ -108,7 +108,7 @@ def test_candidate_thresholds_default_persist_and_survive_old_client_updates(dep
     client.patch('/v1/settings',json={'recall':{'direct_threshold':.61}}).raise_for_status()
     current=client.get('/v1/settings').json()['recall']
     assert current=={'direct_threshold':.61,'body_candidate_threshold':.47,
-                     'cue_candidate_threshold':.59,'passages_enabled':False,'passage_min_chars':500}
+                     'cue_candidate_threshold':.59,'direct_pool_limit':20,'passages_enabled':False,'passage_min_chars':500}
     assert effective_settings(settings).recall['body_candidate_threshold']==.47
     assert not (settings.database.parent/'model-indexes').exists()
     for field in ('body_candidate_threshold','cue_candidate_threshold'):
@@ -124,6 +124,31 @@ def test_unset_recall_threshold_preserves_toml(deployment):
     assert effective_settings(settings).recall==settings.recall
     client=TestClient(create_app(settings,token='synthetic',live=True),headers={'Authorization':'Bearer synthetic'})
     assert client.get('/v1/settings').json()['recall']['direct_threshold']==.78
+
+
+def test_direct_pool_limit_persists_validates_and_overrides_toml(deployment):
+    from dataclasses import replace
+    from serein.configured_models import effective_settings
+    from serein.deployment import save_settings
+    from serein.recall.policy import RecallPolicy
+    settings,client=deployment
+    assert client.get('/v1/settings').json()['recall']['direct_pool_limit']==20
+    configured=replace(settings,recall={'direct_pool_limit':30})
+    assert RecallPolicy.from_config(effective_settings(configured).recall).direct_pool_limit==30
+    for limit in (6,50,100):
+        saved=client.patch('/v1/settings',json={'recall':{'direct_pool_limit':limit}})
+        assert saved.status_code==200,saved.text
+        assert saved.json()['recall']['direct_pool_limit']==limit
+        assert RecallPolicy.from_config(effective_settings(configured).recall).direct_pool_limit==limit
+    client.patch('/v1/settings',json={'recall':{'direct_threshold':.61}}).raise_for_status()
+    assert client.get('/v1/settings').json()['recall']['direct_pool_limit']==100
+    version=read_settings(settings.database)['settings_version']
+    for value in (0,5,101,20.5,True,'30',None):
+        assert client.patch('/v1/settings',json={'recall':{'direct_pool_limit':value}}).status_code==422
+        with pytest.raises(ValueError,match='direct_pool_limit'):
+            save_settings(settings.database,{'recall':{'direct_pool_limit':value}})
+    assert read_settings(settings.database)['settings_version']==version
+    assert not (settings.database.parent/'model-indexes').exists()
 
 
 def test_pipeline_prompt_budget_accepts_large_context_models(deployment):
