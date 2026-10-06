@@ -17,7 +17,7 @@ const features = {
   association:['联想','沿已确认的 Scene 关系，最多补一条记忆参与召回筛选。关闭后仅直接召回，已有关系保留。'],
   write_context:['写入时找前情','新建 Scene 后，至多提示一条可能相关的旧 Scene，以及它可能所属的 Arc。只返回候选，不建关系或加入 Arc；没有可靠线索就不提示。'],
   relations_auto_accept:['关系提案自动通过','新提案写完后自动通过；仍需通过当前记忆与证据校验。'],
-  resume:['开窗续接（resume）','按保存的选择读取续接资料。发送 /resume 和通过 MCP 读取只能选择一个。'],
+  resume:['开窗续接（resume）','按保存的选择读取续接资料。发送 /resume 和通过 MCP 读取只能选择一个。通过网关聊天时，建议使用 /resume 指令，不建议开启此 MCP 工具；此工具主要供官方客户端使用。'],
 };
 
 const fallbackTimeZones = ['Asia/Shanghai','UTC','Asia/Tokyo','Asia/Singapore','Europe/London','Europe/Berlin','America/New_York','America/Chicago','America/Denver','America/Los_Angeles','Australia/Sydney'];
