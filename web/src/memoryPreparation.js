@@ -98,3 +98,9 @@ export async function resumeIndex(state, {fetchImpl = fetch} = {}) {
   if (!response.ok) throw new Error('恢复未生效，请刷新索引状态后重试。');
   return response.json();
 }
+
+export async function readIndexStatus({fetchImpl = fetch} = {}) {
+  const response = await fetchImpl('/__serein/settings/index-status', {cache:'no-store'});
+  if (!response.ok) throw new Error('无法读取索引状态，请稍后刷新。');
+  return response.json();
+}

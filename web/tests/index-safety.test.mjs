@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {indexSafetySummary,resumeIndex} from '../src/memoryPreparation.js';
+import {indexSafetySummary,resumeIndex,readIndexStatus} from '../src/memoryPreparation.js';
 import {Readable} from 'node:stream';
 import config from '../vite.config.mjs';
 
@@ -57,4 +57,14 @@ test('web recovery uses server credential proxy, same-origin JSON and state toke
       if(value===undefined)delete process.env[key];else process.env[key]=value;
     }
   }
+});
+
+
+test('index polling uses an uncached authenticated proxy read',async()=>{
+  const result=await readIndexStatus({fetchImpl:async(path,options)=>{
+    assert.equal(path,'/__serein/settings/index-status');
+    assert.equal(options.cache,'no-store');
+    return {ok:true,json:async()=>({status:'paused',attempts:3})};
+  }});
+  assert.equal(result.status,'paused');
 });
