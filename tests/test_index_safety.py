@@ -265,3 +265,10 @@ def test_same_assignment_with_changed_model_cannot_clear_failed_budget(indexed):
         operation(settings)
     assert calls == [1]
     assert index_status(settings.database)['reason'] == 'index_configuration_changed'
+
+
+def test_uninitialized_status_is_stable_and_read_only(indexed):
+    settings, _ = indexed
+    assert index_status(settings.database) == index_status(settings.database)
+    with Store(settings.database, read_only=True) as store:
+        assert not store.conn.execute("SELECT 1 FROM background_state WHERE name='embedding_index_safety'").fetchone()

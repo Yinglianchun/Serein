@@ -24,7 +24,7 @@ class IndexBlocked(ValueError):
 
 def _initial():
     return dict(status='ready', attempts=0, max_attempts=MAX_ATTEMPTS,
-                retry_at=None, reason=None, recovery_token=uuid4().hex)
+                retry_at=None, reason=None, recovery_token=None)
 
 
 def _read(store):
