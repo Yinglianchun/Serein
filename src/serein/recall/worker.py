@@ -1,5 +1,6 @@
 """Persistent changed-owner queue; provider failures leave work pending."""
 
+from .index_safety import guarded_index, IndexBlocked
 import logging
 import threading
 
@@ -11,6 +12,7 @@ from .entities import rebuild_entities
 from .policy import RecallPolicy
 
 
+@guarded_index
 def update_pending(settings, *, client=None):
     with Store(settings.database,read_only=True) as store:
         rows=store.conn.execute('SELECT * FROM index_outbox ORDER BY sequence LIMIT 100').fetchall()
@@ -53,6 +55,8 @@ class IndexWorker:
         while not self.stop.is_set():
             try:
                 update_pending(self.settings)
+            except IndexBlocked:
+                pass  # Durable pause/backoff/busy state is exposed in Settings.
             except Exception:
-                logging.getLogger(__name__).exception('Index update failed; retaining pending owners')
+                logging.getLogger(__name__).warning('Index update deferred; inspect persisted index status')
             self.stop.wait(5)

@@ -56,9 +56,11 @@ def test_provider_failure_resumes_completed_batches_and_changed_input_is_not_cac
             raise ValueError('provider unavailable')
         return original(texts)
     client.documents = fail_second
-    with pytest.raises(ValueError, match='unavailable'):
+    with pytest.raises(ValueError, match='contract_error'):
         fill_vectors(settings, client=client, batch_size=1)
     assert coverage(settings.database, settings.index)['event']['covered'] == 1
+    from serein.recall.index_safety import index_status, resume_index
+    resume_index(settings.database, index_status(settings.database)["recovery_token"])
     client.documents = original
     assert fill_vectors(settings, client=client)['embedded'] == 2
     with Store(settings.database) as store:

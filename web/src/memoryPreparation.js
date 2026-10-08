@@ -76,3 +76,25 @@ export async function prepareMemoryIndex({fetchImpl = fetch, loadSettings}) {
     return {config: null, message: `${message} 最新配置读取失败，请刷新页面确认检索状态；上面的结果仅代表本次请求。`};
   }
 }
+
+export function indexSafetySummary(state = {}) {
+  const reasons = {
+    interrupted_operation: '上次操作中断，请先核对提供方用量。',
+    index_configuration_changed: '失败后配置或操作入口已变更，请明确恢复。',
+    transient_provider_error: '提供方暂时不可用。',
+    index_configuration_or_contract_error: '配置、鉴权或响应校验失败，请修正后恢复。',
+    attempt_limit: '已达到尝试上限。',
+  };
+  if (!state.status || state.status === 'ready') return '后台索引可用。';
+  const status = {paused:'已暂停', backoff:'等待退避', running:'处理中'}[state.status] || '状态待确认';
+  return `后台索引${status}；尝试 ${state.attempts ?? 0} / ${state.max_attempts ?? 3}，待处理 ${state.pending ?? 0}。${reasons[state.reason] || ''} 已有向量仍可使用。`;
+}
+
+export async function resumeIndex(state, {fetchImpl = fetch} = {}) {
+  const response = await fetchImpl('/__serein/settings/resume-index', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({confirm:'RESUME_INDEX_EMBEDDING', recovery_token:state.recovery_token}),
+  });
+  if (!response.ok) throw new Error('恢复未生效，请刷新索引状态后重试。');
+  return response.json();
+}

@@ -379,6 +379,7 @@ def _link_candidates(conn, kind, query='', date_filter='', offset=0, limit=30, i
 def routes(settings, auth):
     router = APIRouter(dependencies=auth)
     from ..configured_models import memory_ready, memory_status, prepare_selected
+    from ..recall.index_safety import index_status, resume_index, IndexBlocked
 
     @router.get('/v1/settings/resume-candidates')
     def resume_candidates(response: Response, kind: Literal['event','scene','diary','darkroom','upload',''] = 'event', q: str = Query('',max_length=200),
@@ -417,7 +418,8 @@ def routes(settings, auth):
         return {**read_settings(settings.database, public=True), 'recall':{key:getattr(policy,key) for key in
                 ('direct_threshold','body_candidate_threshold','cue_candidate_threshold',
                  'direct_pool_limit','passages_enabled','passage_min_chars')},
-                'memory_ready': status['ready'], 'memory_status':status}
+                'memory_ready': status['ready'], 'memory_status':status,
+                'index_status':index_status(settings.database)}
 
     @router.patch('/v1/settings')
     def save(body: SettingsPatch, response: Response):
@@ -439,6 +441,22 @@ def routes(settings, auth):
             return await discover(settings, request)
         except ValueError as error:
             raise HTTPException(400, str(error)) from None
+
+    @router.get('/v1/settings/index-status')
+    def read_index_status(response: Response):
+        response.headers['Cache-Control'] = 'no-store'
+        return index_status(settings.database)
+
+    @router.post('/v1/settings/resume-index')
+    def recover_index(body: dict):
+        if not settings.writable:
+            raise HTTPException(403, 'This deployment is read-only')
+        if body.get('confirm') != 'RESUME_INDEX_EMBEDDING':
+            raise HTTPException(400, 'Explicit index recovery confirmation required')
+        try:
+            return resume_index(settings.database, body.get('recovery_token'))
+        except IndexBlocked as error:
+            raise HTTPException(409, str(error)) from None
 
     @router.post('/v1/settings/prepare-memory')
     def prepare_memory():

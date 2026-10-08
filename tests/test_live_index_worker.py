@@ -30,10 +30,12 @@ def test_failed_provider_is_retried_and_old_backlog_does_not_block_new_event(tmp
             return [[1,0] for _ in texts]
     client=Client();client.profile=profile;client.fail=True
     key=events.write_many([item()])['items'][0]['item_id']
-    with pytest.raises(ValueError,match='offline'):
+    with pytest.raises(ValueError,match='contract_error'):
         update_pending(settings,client=client)
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM index_outbox').fetchone()[0]>0
+    from serein.recall.index_safety import index_status, resume_index
+    resume_index(settings.database, index_status(settings.database)["recovery_token"])
     client.fail=False;client.inputs=[]
     assert update_pending(settings,client=client)['updated']==1
     assert client.inputs==[item()['body']] # Short Event has no passage request.

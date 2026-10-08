@@ -1,0 +1,35 @@
+name: Index embedding safety
+on:
+  pull_request:
+  push:
+    branches: [fix/issue52-bounded-embedding]
+permissions:
+  contents: read
+jobs:
+  offline-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: python -m pip install -e '.[test,http,background]'
+      - name: Offline index and API regression tests
+        run: >-
+          python -m pytest -q tests/test_index_safety.py tests/test_embedding.py
+          tests/test_vectors.py tests/test_live_index_worker.py tests/test_public_settings.py
+          tests/test_passages_entities.py tests/test_token_windows.py tests/test_release_boundaries.py tests/test_file_lock.py
+      - run: python -m compileall -q src
+      - run: npm ci --ignore-scripts
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: python scripts/release.py /tmp/serein-public.zip

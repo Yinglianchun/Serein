@@ -5,7 +5,7 @@ import {upstreamModels,taskModelOptions} from "../modelOptions.js";
 import {AgentGuide} from './AgentGuide.jsx';
 import {RecallThresholdSettings} from './RecallThresholdSettings.jsx';
 import {upstreamsForSave} from '../upstreamSecrets.js';
-import {memoryAvailabilitySummary,prepareMemoryIndex} from '../memoryPreparation.js';
+import {memoryAvailabilitySummary,prepareMemoryIndex,indexSafetySummary,resumeIndex} from '../memoryPreparation.js';
 
 const tasks = {writer:"Narrative Writer",embedding:"Embedding",reranker:"Reranker",
   relations:"Scene 关系",dreams:"梦境",narrative_scout:"叙事卷找材料",persona:"心绪/防撤退",
@@ -83,6 +83,16 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
           ...Object.fromEntries(Object.entries(candidateThresholdDraft).map(([key,value])=>[key,Number(value)]))},upstream:{
         writer_enabled:config.upstream.writer_enabled,memory_enabled:config.upstream.memory_enabled,operit_enabled:config.upstream.operit_enabled}});
       setConfig(result);setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
+    } catch(error){setStatus(error.message);}
+    finally{setBusy(false);}
+  }
+  async function recoverIndex() {
+    if(busy || !window.confirm('恢复将授权最多三次索引尝试，可能产生 embedding 费用。请先修正错误；若上次操作中断，请核对提供方用量。'))return;
+    setBusy(true);
+    try {
+      await resumeIndex(config.index_status);
+      setConfig(await instanceSettings());
+      setStatus('索引已恢复。未完成队列保留，后台将继续处理。');
     } catch(error){setStatus(error.message);}
     finally{setBusy(false);}
   }
@@ -178,7 +188,12 @@ export function ModelSettings({page,summaryRequest=0,onOpenPipeline,onOpenCatalo
           <AgentGuide label="配置 Agent 整理 Event" />
           <AgentGuide initial="writer" label="配置 Agent 撰写叙事卷" />
           <div className="settings-actions"><button disabled={busy} type="submit">{busy?"处理中…":"保存配置"}</button>
-            <button disabled={busy || !config.assignments.embedding} type="button" onClick={prepare}>建立 / 补齐检索索引</button></div>
+            <button disabled={busy || !config.assignments.embedding || (config.index_status && config.index_status.status !== "ready")} type="button" onClick={prepare}>建立 / 补齐检索索引</button></div>
+          <p role="status">{indexSafetySummary(config.index_status)}</p>
+          {config.index_status && config.index_status.status !== 'ready' && <div className="settings-actions">
+            <button type="button" disabled={busy} onClick={async()=>{try{setConfig(await instanceSettings());}catch(error){setStatus(error.message);}}}>刷新索引状态</button>
+            {(config.index_status.status === 'paused' || config.index_status.status === 'running') && <button type="button" disabled={busy} onClick={recoverIndex}>修正后恢复索引</button>}
+          </div>}
           <p className="model-connection-help">首次使用建立索引；再次点击检查并补齐，已有有效向量会复用。先保存配置；日常新增、修改记忆由后台处理，不用每次按。</p>
           <details className="settings-disclosure"><summary>再次点击，会重建吗？</summary>
             <p>同一模型下，会复用当前有效的正文向量、已有分段和分段向量，只补缺失内容；不会重写记忆，也不会全库重切分段。已有空分段布局同样保留，降低起切门槛后再按也不会自动把旧短文重切。</p>
