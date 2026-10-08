@@ -244,7 +244,7 @@ def create_server(app: Application, *, private=False, http=False):
     # Optional features are supplied only by enabled factories; never scan modules.
     app.refresh_optional()
     # Keep internal/UI implementations available without exposing retired MCP tools.
-    internal_tools = {'resume', 'window_shadow_read', 'list_source_messages', 'read_source_messages',
+    internal_tools = {'resume', 'list_source_messages', 'read_source_messages',
                       'handoff', 'narrative_revision_inbox', 'review_narrative_revision', 'publish_narrative'}
     builtins = internal_tools | {"memory_read", "memory_materials", "memory_search", "memory_write", "memory_candidates", "memory_recall", "source_messages", "source_read"}
     for name, function in app.contributions.tools.items():
@@ -254,8 +254,8 @@ def create_server(app: Application, *, private=False, http=False):
             if name in registered:
                 raise ValueError(f"Extension tool collides with MCP tool: {name}")
             exposed = favorite_text_tool(function) if name == 'read_favorites' else function
-            server.add_tool(exposed, name=name, annotations=read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read'} else None,
-                            structured_output=False if name == 'read_favorites' else None)
+            server.add_tool(exposed, name=name, annotations=read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read','window_shadow_read'} else None,
+                            structured_output=False if name in {'read_favorites','dream_read','window_shadow_read'} else None)
     if private:
         if not app.settings.writable:raise ValueError('Private live MCP requires writable storage')
         from .private_mcp import add_tools
@@ -266,7 +266,7 @@ def create_server(app: Application, *, private=False, http=False):
         if not private and 'save_memory' in selected:
             selected.remove('save_memory')
             selected.update({'write_scene', 'edit_scene'})
-        optional_catalog = internal_tools | {'dream_read','memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene'}
+        optional_catalog = internal_tools | {'window_shadow_read','dream_read','memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene'}
         if selected - available - optional_catalog:
             raise ValueError('Selected MCP tools are unavailable: '+', '.join(sorted(selected-available-optional_catalog)))
         for name in available-selected:
@@ -291,10 +291,10 @@ def create_server(app: Application, *, private=False, http=False):
                 from ..extensions.handoff import resume_text_tool
                 exposed=resume_text_tool(function)
             else:exposed = favorite_text_tool(function) if name == 'read_favorites' else function
-            annotation=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False) if name=='resume' else read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read'} else None
+            annotation=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False) if name=='resume' else read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read','window_shadow_read'} else None
             server.add_tool(exposed, name=name, annotations=annotation,
-                            structured_output=False if name in {'read_favorites','resume'} else None)
-            if name=='resume':server._tool_manager.get_tool(name).parameters['additionalProperties']=False
+                            structured_output=False if name in {'read_favorites','resume','dream_read','window_shadow_read'} else None)
+            if name in {'resume','dream_read','window_shadow_read'}:server._tool_manager.get_tool(name).parameters['additionalProperties']=False
 
     async def list_tools():
         refresh_optional()
@@ -302,10 +302,10 @@ def create_server(app: Application, *, private=False, http=False):
 
     async def call_tool(name, arguments):
         refresh_optional()
-        if name=='resume':
+        if name=='resume' or (not private and name in {'dream_read','window_shadow_read'}):
             tool=server._tool_manager.get_tool(name)
             if tool and set(arguments or {})-tool.parameters['properties'].keys():
-                raise ValueError('Unexpected resume arguments; refresh the tool schema')
+                raise ValueError('Unexpected '+name+' arguments; refresh the tool schema')
         if not private and name in authored_names:
             tool = server._tool_manager.get_tool(name)
             legacy = legacy_server._tool_manager.get_tool(name)

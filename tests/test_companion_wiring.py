@@ -10,6 +10,48 @@ from serein.compat.memo_store import ReminderStore
 from serein.core.store import Store, encode
 
 
+@pytest.mark.parametrize('name,kind,feature',[('dream_read','dream','dream_read'),('window_shadow_read','shadow','window_shadows')])
+def test_work_positions_multi_read_schema_and_no_writes(deployment,name,kind,feature):
+    from serein.core.store import digest
+    settings,client=deployment
+    stamp_field='generated_at' if kind=='dream' else 'created_at'
+    with Store(settings.database) as store, store.transaction():
+        for suffix,stamp in [('old','2030-01-01T10:00:00+08:00'),('new','2030-01-01T03:00:00Z'),('deleted','2030-01-02T03:00:00Z')]:
+            key=kind+'-secret-'+suffix
+            body='Synthetic '+suffix+' body'
+            store.conn.execute('INSERT INTO historical_works VALUES (?,?,?,?,?,?,?,?,?)',
+                (key,kind,1,'Synthetic work',body,digest(body),encode({stamp_field:stamp,'dream_id' if kind=='dream' else 'window_id':key}),'synthetic',''))
+        store.record_deletion(kind+'-secret-deleted','test',{})
+    client.patch('/v1/settings',json={'features':{feature:True}}).raise_for_status()
+    app=Application(settings);server=create_server(app)
+    catalog={t.name:t for t in asyncio.run(server.list_tools())}
+    assert set(catalog[name].inputSchema['properties'])=={'index'}
+    assert catalog[name].annotations.readOnlyHint
+    before=settings.database.read_bytes()
+    read=app.contributions.tools[name]
+    assert 'Synthetic new body' in read() and 'Synthetic old body' in read(2)
+    text=read('2, 1,2,3')
+    assert text.count('Synthetic old body')==1 and text.count('Synthetic new body')==1
+    assert text.index('Synthetic old body')<text.index('Synthetic new body')
+    assert 'index: 3\nstatus: not_found' in text
+    assert 'secret-' not in text and 'Synthetic deleted body' not in text
+    result=client.post('/v1/extensions/'+name,json={'index':'1,2'})
+    assert result.status_code==200 and result.json()==read('1,2')
+    async def exercise():
+        result=await server.call_tool(name,{'index':'1,2'})
+        blocks=result[0] if isinstance(result,tuple) else result
+        assert 'Synthetic new body' in blocks[0].text and 'Synthetic old body' in blocks[0].text
+        with pytest.raises(ValueError,match='Unexpected'):
+            await server.call_tool(name,{'dream_id':'anything'})
+    asyncio.run(exercise())
+    for bad in (0,-1,True,1.5,10001,'','1,','1,,2','x','1.5','-1','0','1;2',[1,2],','.join(['1']*21)):
+        with pytest.raises(ValueError):read(bad)
+    assert settings.database.read_bytes()==before
+    client.patch('/v1/settings',json={'features':{feature:False}}).raise_for_status()
+    assert name not in {t.name for t in asyncio.run(server.list_tools())}
+    assert client.post('/v1/extensions/'+name,json={}).status_code==404
+
+
 def test_dream_read_is_optional_non_consuming_and_hides_deleted(deployment):
     from serein.compat.dreams import Dreams
     settings, client = deployment
@@ -24,14 +66,13 @@ def test_dream_read_is_optional_non_consuming_and_hides_deleted(deployment):
     catalog = {tool.name:tool for tool in asyncio.run(server.list_tools())}
     assert catalog['dream_read'].annotations.readOnlyHint
     read = app.contributions.tools['dream_read']
-    assert read()['items'][0]['dream_id']=='dream_read_test'
-    assert 'body' not in read()['items'][0]
-    assert read('dream_read_test')['dream']['body']=='合成梦境'
+    assert 'index: 1' in read() and 'dream_read_test' not in read()
+    assert '合成梦境' in read(1)
     assert '合成梦境' in memory_read('dream:dream_read_test')
     assert engine.list_records()[0].surfaced is False
-    assert read(limit=1,offset=1)['items']==[]
+    assert 'status: not_found' in read(2)
     engine._delete_record(engine.list_records()[0], 'test')
-    assert read('dream_read_test')['status']=='not_found'
+    assert 'status: not_found' in read()
     client.patch('/v1/settings',json={'features':{'dream_read':False}}).raise_for_status()
     assert 'dream_read' not in {tool.name for tool in asyncio.run(server.list_tools())}
     with pytest.raises(ValueError,match='disabled'):read()

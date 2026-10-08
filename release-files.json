@@ -158,6 +158,7 @@
   "src/serein/compat/scenes.py",
   "src/serein/compat/scout.py",
   "src/serein/compat/window_shadows.py",
+  "src/serein/compat/work_reads.py",
   "src/serein/config.py",
   "src/serein/configured_models.py",
   "src/serein/core/__init__.py",

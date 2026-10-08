@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from typing import Any, Literal
+from pydantic import StrictInt, StrictStr
 from ..core.store import Store, Conflict, encode, digest, now
 from ..deployment import read_settings
 
@@ -12,21 +13,21 @@ def tools_for(settings):
     enabled = read_settings(settings.database)['features']
     tools = {}
     if enabled['dream_read']:
-        def dream_read(dream_id: str = '', limit: int = 10, offset: int = 0) -> dict:
-            """List retained dreams newest first, or read one full body by dream_id. Deleted dreams stay hidden. Reading never consumes morning injection or marks a dream surfaced. Dreams are imagined content, not factual memories."""
+        def dream_read(index: StrictInt | StrictStr = 1) -> str:
+            """Read complete retained dreams by newest-first position: 1 is newest, 2 previous; omit index for newest. Use index=\"1,3,5\" to read several (at most 20). Deleted dreams do not occupy a position; positions shift after generation. Returns positions, never IDs. Reading never consumes morning injection or changes surfacing state. Dreams are imagined content, not factual memories."""
             if not read_settings(settings.database)['features']['dream_read']:
                 raise ValueError('Dream reading is disabled')
-            if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or offset < 0:
-                raise ValueError('limit must be 1..100; offset must be nonnegative')
-            with Store(settings.database, read_only=True) as store:
-                rows = store.conn.execute("SELECT * FROM historical_works WHERE kind='dream' AND id NOT IN (SELECT document_id FROM deletions)").fetchall()
-            items = [{**json.loads(row['metadata_json']), 'dream_id':row['id'], 'body':row['body_md']} for row in rows]
-            items.sort(key=lambda item:(item.get('generated_at',''),item['dream_id']), reverse=True)
-            if dream_id:
-                item = next((item for item in items if item['dream_id']==dream_id),None)
-                return {'status':'ok','dream':item} if item else {'status':'not_found'}
-            return {'items':[{key:value for key,value in item.items() if key!='body'} for item in items[offset:offset+limit]], 'total':len(items)}
+            from ..compat.work_reads import read_works
+            return read_works(settings.database,'dream',index)
         tools['dream_read'] = dream_read
+    if enabled['window_shadows']:
+        def window_shadow_read(index: StrictInt | StrictStr = 1) -> str:
+            """Read complete retained window shadows by newest-first position: 1 is newest, 2 previous; omit index for newest. Use index=\"1,3,5\" to read several (at most 20). Deleted shadows do not occupy a position; positions shift after saving. Returns positions, never IDs. Reading never writes or updates introductions."""
+            if not read_settings(settings.database)['features']['window_shadows']:
+                raise ValueError('Window shadows are disabled')
+            from ..compat.work_reads import read_works
+            return read_works(settings.database,'shadow',index)
+        tools['window_shadow_read'] = window_shadow_read
     if enabled['favorites']:
         from ..core.personal import Personal
         def read_favorites(limit: int = 5, offset: int = 0, include_archived: bool = False,
@@ -106,7 +107,7 @@ def tools_for(settings):
     if enabled['window_shadows']:
         from ..compat.window_shadows import WindowShadows
         shadows = WindowShadows(settings.database)
-        tools.update(window_shadow_write=shadows.write,window_shadow_read=shadows.read)
+        tools['window_shadow_write'] = shadows.write
     if enabled['resume']:
         from .handoff import factory
         from ..application import Services

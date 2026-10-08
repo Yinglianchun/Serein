@@ -58,7 +58,7 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 接续资料总量限制为160000字符，超过时在调用模型前返回413，要求减少勾选内容，不截断正文；这不是对任意上游上下文容量的保证。上游明确返回上下文超限时，流式和非流式都提示减少接续选项/历史或换更大上下文模型。HTTP 响应头 X-Serein-Resume=loaded 与 X-Serein-Resume-Items 用于核对；读取材料和保存快照不推进原话整理游标、不新建 Scene/Event。
 
-`window_shadow_read` 不再作为 MCP 工具注册，旧客户端缓存的调用也会被拒绝；窗影仍可通过命令方式 `/resume` 注入完整接续资料，或作为 MCP `resume` 的一部分读取。`window_shadow_write` 保留，落库的分节数据、画像同步与窗影写入格式保持不变。内部及 HTTP 读取入口保留。
+开启窗影时注册只读 MCP / HTTP 扩展 `window_shadow_read`。与 `dream_read` 一样，只接受倒数序号 `index`：默认 1 为最新一篇；`index="1,3,5"` 读取多篇全文，不列内部 ID。删除记录不占序号，新增记录会使旧序号移动，阅读不改变画像或梦境送达状态。窗影也仍可通过 `/resume` 或 MCP `resume` 接续。窗影写入格式与内部按 ID 读取入口保留。
 
 开窗续接只有一个功能开关；`resume.mode` 在 `command`（默认）与 `mcp` 之间二选一。命令模式不注册 MCP `resume`；MCP 模式注册只读、文本返回的 `resume` 工具，拒绝聊天 `/resume`（409），也不再续带旧命令快照。工具列表和调用都即时核对开关、方式及既有工具白名单。读取不调用模型、不记录注入、不消耗召回冷却，不写入新的记忆。HTTP 结构化预览入口在两种方式下共用，关闭续接后不可调用。
 
@@ -70,7 +70,7 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 ## 开关与名字
 
-`features.current_time`、`image_transcription_async`、`image_eyes`、`memos`、`persona`、`anti_retreat`、`window_shadows`、`association`、`write_context`、`relations_auto_accept`、`resume`、`originals`、`favorites`、`narrative_tools`、`event_to_scene` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止调用或注入而不清空原有记录。自动摘要另由 `pipeline.auto_enabled` 控制；梦境由模型选择、每日概率和 Prompt 配置控制，不属于这组布尔开关。
+`features.current_time`、`image_transcription_async`、`image_eyes`、`memos`、`persona`、`anti_retreat`、`window_shadows`、`dream_read`、`dream_morning`、`association`、`write_context`、`relations_auto_accept`、`resume`、`originals`、`favorites`、`narrative_tools`、`event_to_scene` 默认 false，写入实例数据库。备忘的界面名称统一为“备忘”，描述为“留给未来的话”。保存后后续请求直接读取，停止调用或注入而不清空原有记录。自动摘要另由 `pipeline.auto_enabled` 控制；梦境生成由模型选择、每日概率和 Prompt 配置控制，读取与晨间注入分别由独立开关控制。
 
 “异步图片转录”（`features.image_transcription_async`）与“眼睛”（`features.image_eyes`）只作用于经过 Serein 聊天网关的新图片消息，二者互斥，开启前必须选择 `assignments.image_transcription`。异步模式让原图照常进入主模型，回复完成后在后台转录并写回同一条 `raw_events` 原话，不注入当前聊天且不因转录失败阻塞回复。“眼睛”供不能识图的主模型使用：网关先保存原话和原图，由独立模型转录，随后把转录作为明确标注的来源材料注入聊天，并从发往主模型的消息中移除原图；失败会写入 failed 状态并在调用主模型前返回错误。两种模式的完成结果都绑定原话、图序和 SHA-256，写入同一原话行的专用状态、JSON 和更新时间列；关闭开关不删除已有转录，自动摘要仍可复用完成且字节匹配的结果。旧 `features.image_transcription=true` 自动迁移为“眼睛”。
 
@@ -78,7 +78,7 @@ Scene 和日记的新建调用会独立创建内容；内部随机操作编号�
 
 “写入时找前情”（`features.write_context`）只在新 Scene 已经成功保存后运行一次辅助查找，最多返回一条可能相关的旧 Scene 和它可能所属的 Arc。结果是写入回执里的提示，不创建关系、不修改 Arc，也不影响刚刚完成的 Scene 写入；检索不可用或没有可靠线索时不返回提示。它与自动召回、联想和关系提案自动通过分别启停。
 
-备忘开启时注册 `memo_create`、`memo_list`、`memo_update`；窗影开启时只注册 `window_shadow_write`；开窗续接按所选方式使用 `/resume` 指令或 MCP `resume`；原话查阅开启时注册 `source_message_search`、`source_message_read`。MCP 的 tools/list 和 tools/call 都重新核对开关，HTTP 同样处理关闭状态。客户端应刷新工具列表；即使缓存着旧列表，关闭的工具也不能调用。白名单继续限制可以出现的工具。
+备忘开启时注册 `memo_create`、`memo_list`、`memo_update`；窗影开启时注册 `window_shadow_write`、`window_shadow_read`；梦境读取开启时注册 `dream_read`，晨间注入为独立开关；开窗续接按所选方式使用 `/resume` 指令或 MCP `resume`；原话查阅开启时注册 `source_message_search`、`source_message_read`。MCP 的 tools/list 和 tools/call 都重新核对开关，HTTP 同样处理关闭状态。客户端应刷新工具列表；即使缓存着旧列表，关闭的工具也不能调用。白名单继续限制可以出现的工具。
 
 备忘独立于普通记忆召回，保留单次、每日、每 N 轮、晨晚时段和每天次数限制。聊天上游完整返回最终回复后才登记提醒；工具续轮或失败流不消耗提醒。心绪和防撤退共用“心绪/防撤退”模型（assignments.persona），功能开关独立。防撤退在完整回复结束后异步判断，不等待它才发送上游回复。信号仅供下一轮使用，过期或迟到不补发；同一窗口两次提示至少相隔 6 轮且 10 分钟，冷却与待提示内容持久化。检测失败不影响已返回的正文。关闭的功能不调用其模型。
 

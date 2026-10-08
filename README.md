@@ -330,7 +330,8 @@ OAuth 按规范只在 HTTPS 域名（或本机 localhost）上授权；直接使
 | 将 Event 写成 Scene | `promote_event_to_scene` | 可写实例且开启“Event 升为 Scene”；主窗口编辑后提交，保留 Event 原件并停止其自动浮现和修订箱候选 |
 | 读取收藏 | `read_favorites` | 开启“收藏工具”；分页读收藏的 Event / Scene，可附原文证据 |
 | 照顾备忘 | `memo_create`、`memo_list`、`memo_update` | 可写实例且开启备忘；创建、查询、修改安排或标完成，独立于 Scene / Event |
-| 写窗影 | `window_shadow_write` | 可写实例且开启窗影；保存供之后续接的窗口记录 |
+| 读写窗影 | `window_shadow_read`、`window_shadow_write` | 开启窗影后按倒数序号读取；`index="1,3,5"` 一次读多篇，写入需可写实例 |
+| 读梦境 | `dream_read` | 开启梦境读取；默认最新一篇，可用 `index="1,3,5"` 读多篇，不消耗晨间注入 |
 | 读取续接资料 | `resume` | 开启开窗续接并选择 MCP 方式；只读，按游标读完全部资料；聊天 `/resume` 同时停用 |
 | 主模型读写叙事卷 | `narrative_volume` | 可写实例且开启对应功能；查卷、读材料、预览、确认保存，不另调用 Writer 模型 |
 

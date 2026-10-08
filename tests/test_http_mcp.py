@@ -235,18 +235,21 @@ def test_window_shadow_returns_each_section_once_over_http_and_mcp(tmp_path):
     assert shadows.read('missing')['status'] == 'not_found'
     with TestClient(create_app(settings, token='shadow-test', live=True),
                     headers={'Authorization':'Bearer shadow-test'}) as client:
-        assert client.post('/v1/extensions/window_shadow_read', json={}).json() == expected
+        text = client.post('/v1/extensions/window_shadow_read', json={}).json()
+        assert 'index: 1' in text and 'test-window' not in text
+        assert all(text.count(value)==1 for value in sections.values())
         def rpc(method, params=None):
             return client.post('/mcp', headers={'Accept':'application/json, text/event-stream'}, json={
                 'jsonrpc':'2.0', 'id':1, 'method':method, 'params':params or {}}).json()['result']
         names = {t['name'] for t in rpc('tools/list')['tools']}
-        assert 'window_shadow_write' in names and 'window_shadow_read' not in names
-        assert rpc('tools/call', {'name':'window_shadow_read', 'arguments':{}})['isError']
+        assert {'window_shadow_write','window_shadow_read'} <= names
+        result = rpc('tools/call', {'name':'window_shadow_read', 'arguments':{}})
+        assert not result.get('isError') and result['content'][0]['text']==text
     with Store(settings.database, read_only=True) as store:
         assert tuple(store.conn.execute('select * from historical_works').fetchone()) == original
 
 
-def test_shadow_writer_survives_retired_reader_and_feature_refresh(tmp_path):
+def test_shadow_reader_and_writer_follow_feature_refresh(tmp_path):
     import asyncio
     from serein.api.mcp import create_server
     from serein.application import Application
@@ -259,11 +262,11 @@ def test_shadow_writer_survives_retired_reader_and_feature_refresh(tmp_path):
     server = create_server(Application(settings))
 
     async def exercise():
-        assert {t.name for t in await server.list_tools()} == {'window_shadow_write'}
+        assert {t.name for t in await server.list_tools()} == {'window_shadow_write','window_shadow_read'}
         await server.call_tool('window_shadow_write', {'window_id':'synthetic', 'title':'Test', 'content':'Full authored shadow'})
         assert WindowShadows(settings.database).read('synthetic')['content'] == 'Full authored shadow'
         save_settings(settings.database, {'features':{'window_shadows':False}})
         assert not await server.list_tools()
         save_settings(settings.database, {'features':{'window_shadows':True}})
-        assert {t.name for t in await server.list_tools()} == {'window_shadow_write'}
+        assert {t.name for t in await server.list_tools()} == {'window_shadow_write','window_shadow_read'}
     asyncio.run(exercise())
