@@ -155,9 +155,14 @@ class Services:
             if self._settings.index is None:
                 return {"status": "pending", "note": "No index configured"}
             refresh_index(self._settings.database, self._settings.index, [row["document_id"] for row in rows])
-            if (layouts['status'] != 'disabled' or self._settings.embedding or
+            from .deployment import read_settings
+            selected_embedding = read_settings(self._settings.database, public=True)['assignments'].get('embedding')
+            if (layouts['status'] != 'disabled' or self._settings.embedding or selected_embedding or
                     writer.store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='event_projection_pending' AND type='table'").fetchone()):
                 return {"status":"queued","note":"Lexical view updated; persistent worker owns vectors and queue acknowledgement"}
+            from .recall.index_safety import index_status
+            if index_status(self._settings.database)['status'] != 'ready':
+                return {'status':'queued','note':'Index safety state retains pending work'}
             writer.store.conn.executemany("DELETE FROM index_outbox WHERE sequence=?", [(row['sequence'],) for row in rows])
             return {"status": "current", "updated": len({row["document_id"] for row in rows})}
 

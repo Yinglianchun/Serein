@@ -1,4 +1,5 @@
 """Resolve saved task selections without mutating TOML or reusing foreign vectors."""
+from .recall.index_safety import guarded_index
 import hashlib
 import json
 import threading
@@ -85,6 +86,7 @@ def memory_status(settings):
         return {'ready':False,'stage':stage,'reason':reason}
 
 
+@guarded_index
 def prepare_selected(settings, *, before_fill=None):
     import httpx
     from .recall.index import build_index
@@ -102,7 +104,8 @@ def prepare_selected(settings, *, before_fill=None):
         with httpx.Client(timeout=30,follow_redirects=False) as client:
             response=client.post(model['base_url']+'/embeddings',json={'model':model['model'],'input':'dimension probe','encoding_format':'float'},
                 headers={'Authorization':'Bearer '+model['api_key']} if model.get('api_key') else {})
-        if not response.is_success:raise ValueError(f'Embedding provider returned HTTP {response.status_code}')
+        from .adapters.embedding import check_response
+        check_response(response)
         dimension=len(response.json()['data'][0]['embedding'])
         if model.get('dimension') and model['dimension']!=dimension:raise ValueError('Configured dimension differs from the provider')
         profile={'model':model['model'],'provider_host':urlsplit(model['base_url']).hostname,'dimension':dimension,

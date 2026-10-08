@@ -548,5 +548,8 @@
   "src/serein/adapters/token_window.py",
   "tests/test_token_windows.py",
   "src/serein/recall/manual.py",
-  "tests/test_manual_recall_fallback.py"
+  "tests/test_manual_recall_fallback.py",
+  "src/serein/recall/index_safety.py",
+  "tests/test_index_safety.py",
+  "web/tests/index-safety.test.mjs"
 ]

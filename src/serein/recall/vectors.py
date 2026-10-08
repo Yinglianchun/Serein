@@ -1,6 +1,7 @@
 """Resumable whole-body vector coverage in the disposable index only."""
 
 from collections import Counter
+from .index_safety import guarded_index
 import json
 from pathlib import Path
 import sqlite3
@@ -30,6 +31,7 @@ def coverage(database, index):
     return {kind: dict(count) for kind, count in counts.items()}
 
 
+@guarded_index
 def fill_vectors(settings, *, batch_size=16, limit=None, client=None, progress=None, document_ids=None):
     """Reuse current vectors, commit completed batches, and reject changed bodies.
 

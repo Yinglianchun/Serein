@@ -1,4 +1,5 @@
 """Create provider-matched routing vectors from authored, deployment-owned examples."""
+from .recall.index_safety import guarded_index
 import json
 import os
 import re
@@ -13,6 +14,7 @@ def render_example(text, names):
     return re.sub(r'\{(user_name|ai_name)\}', lambda match: names[match[1]], text)
 
 
+@guarded_index
 def prepare(settings, profile_path, examples_path):
     profile=json.loads(Path(profile_path).read_text('utf-8'))
     dimension=profile.pop('dimension')

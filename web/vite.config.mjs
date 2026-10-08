@@ -784,9 +784,11 @@ function sereinMemoryBridge() {
         response.setHeader("Cache-Control", "no-store");
         const candidates = request.url?.split("?")[0] === "/resume-candidates";
         const prepare = request.url?.split("?")[0] === "/prepare-memory";
+        const indexStatus = request.url?.split("?")[0] === "/index-status";
+        const resumeIndex = request.url?.split("?")[0] === "/resume-index";
         const discovery = request.url?.split("?")[0] === "/models/discover";
         const template = request.url?.split("?")[0] === "/upstreams-template";
-        if (!(candidates ? ["GET"] : prepare || template || discovery ? ["POST"] : ["GET", "PATCH"]).includes(request.method)) {
+        if (!(candidates || indexStatus ? ["GET"] : prepare || resumeIndex || template || discovery ? ["POST"] : ["GET", "PATCH"]).includes(request.method)) {
           response.statusCode = 405; response.end(JSON.stringify({ error: "method_not_allowed" })); return;
         }
         // Mutations are same-origin JSON requests, never cross-site form posts.
@@ -795,9 +797,9 @@ function sereinMemoryBridge() {
           response.statusCode = 403; response.end(JSON.stringify({ error: "origin_not_allowed" })); return;
         }
         try {
-          const result = await callSereinBackend(candidates ? "/v1/settings" + request.url : prepare ? "/v1/settings/prepare-memory" : discovery ? "/v1/settings/models/discover" : template ? "/v1/settings/upstreams-template" : "/v1/settings", {
+          const result = await callSereinBackend(candidates || indexStatus || resumeIndex ? "/v1/settings" + request.url : prepare ? "/v1/settings/prepare-memory" : discovery ? "/v1/settings/models/discover" : template ? "/v1/settings/upstreams-template" : "/v1/settings", {
             method: request.method,
-            ...(request.method === "PATCH" || template || discovery ? { body: await readJsonBody(request, 256_000) } : {}),
+            ...(request.method === "PATCH" || resumeIndex || template || discovery ? { body: await readJsonBody(request, 256_000) } : {}),
           }, {timeout: prepare ? 600_000 : 30_000});
           response.statusCode = result.status; response.end(JSON.stringify(result.payload));
         } catch {

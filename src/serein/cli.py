@@ -23,6 +23,10 @@ def main():
     parser = argparse.ArgumentParser(description="Serein local storage and offline memory import")
     parser.add_argument("--config", type=Path, help="Explicit deployment TOML for read/materials/search/capabilities")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser('index-status', help='Read durable indexing safety status without provider calls')
+    recovery = sub.add_parser('resume-index', help='Authorize a new finite indexing budget')
+    recovery.add_argument('--recovery-token', required=True)
+    recovery.add_argument('--confirm', choices=['RESUME_INDEX_EMBEDDING'], required=True)
     sub.add_parser('setup', help='Initialize an empty standalone deployment from explicit --config')
     semantic = sub.add_parser('prepare-routes', help='Configure the index profile and embed authored route examples')
     semantic.add_argument('--profile',type=Path,required=True)
@@ -117,7 +121,7 @@ def main():
     passage_fill.add_argument('--batch-size',type=int,default=16)
     sub.add_parser('rebuild-entities', help='Recheck entity vocabulary against current bound original snapshots')
     args = parser.parse_args()
-    configured_commands = {"import-chat", "prepare-routes", "setup", "read", "materials", "search", "capabilities", "mcp", "mcp-live", "http", "vector-coverage", "fill-vectors", 'prepare-passages','passage-coverage','fill-passages','rebuild-entities'}
+    configured_commands = {"index-status", "resume-index", "import-chat", "prepare-routes", "setup", "read", "materials", "search", "capabilities", "mcp", "mcp-live", "http", "vector-coverage", "fill-vectors", 'prepare-passages','passage-coverage','fill-passages','rebuild-entities'}
     if args.config and args.command not in configured_commands:
         parser.error("--config is for read/materials/search/capabilities; imports and writes require explicit paths")
     if args.command in configured_commands:
@@ -131,6 +135,13 @@ def main():
             if not getattr(args, "database", None):
                 parser.error("Provide a database path or --config")
             settings = Settings(args.database, getattr(args, "index", None))
+        if args.command in ('index-status', 'resume-index'):
+            from .recall.index_safety import index_status, resume_index
+            if args.command == 'resume-index' and not settings.writable:
+                raise ValueError('This deployment is read-only')
+            result = index_status(settings.database) if args.command == 'index-status' else resume_index(settings.database, args.recovery_token)
+            print(json.dumps(result))
+            return
         if args.command == 'setup':
             from .bootstrap import initialize
             print(json.dumps(initialize(settings)))

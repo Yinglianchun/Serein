@@ -1,6 +1,7 @@
 """Exact canonical body slices and their disposable document-space vectors."""
 
 from collections import Counter
+from .index_safety import guarded_index
 import json
 from pathlib import Path
 import re
@@ -182,6 +183,7 @@ def passage_coverage(settings):
                 'owners':search.conn.execute('SELECT count(DISTINCT document_id) FROM passages').fetchone()[0]}
 
 
+@guarded_index
 def fill_passages(settings, *, client=None, batch_size=16, progress=None, document_ids=None):
     from ..configured_models import recall_settings
     from .policy import RecallPolicy
