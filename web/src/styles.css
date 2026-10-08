@@ -1559,7 +1559,13 @@ label:has(input:focus-visible) {
   line-height: 1.7;
 }
 .fact-event-timeline .scene-entry__button time { margin-bottom: 8px; }
-.fact-event-timeline .scene-entry__excerpt:not(.is-fact) { max-width: min(820px, calc(100% - 60px)); }
+.fact-event-timeline .scene-entry__excerpt:not(.is-fact) {
+  max-width: min(820px, calc(100% - 60px));
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
 .scene-entry__meta {
   display: inline-flex;
   flex-wrap: wrap;
