@@ -13,6 +13,8 @@ const features = {
   window_shadows:['窗影','由 agent 主动写下窗口侧影，也可按倒数第几篇读取；1 是最新一篇，多个数字用逗号分隔。关闭后不注册窗影工具。'],
   originals:['原话查阅','按文字、日期、角色找原话，默认最多返回 10 条；按 ID 读全文和同会话前后文。关闭后不注册这两个工具。'],
   event_to_scene:['Event 升为 Scene','让主模型读过 Event 和原话后，自己编辑并保存为 Scene。默认关闭；关闭后不再提供工具，已有记忆保留。'],
+  memory_candidates:['记忆候选工具','允许模型提出、查看和审核 Scene 候选。关闭后隐藏 propose_memory、list_candidates、review_memory，已有候选保留。'],
+  pipeline_agent:['自动摘要 Agent 工具','允许外部 Agent 用 pipeline_next、pipeline_submit 领取任务并提交结果，同时提供 pipeline_rebuild 修复工具。与自动摘要开关独立；使用 Agent 前请在“配置”页阅读接入指南。'],
   favorites:['收藏工具','让模型读取、收藏或取消收藏 Event 和 Scene。读取默认每页 10 条；写入和状态工具可传 favorite。关闭不影响页面收藏。'],
   narrative_tools:['主模型读写叙事卷','注册叙事卷读写工具，让聊天主模型自己阅读、起草和保存。同时关闭自动 Narrative Writer；关闭此开关不会自动重启 Writer。'],
   narrative_nightly_organize:['夜间整理叙事卷','每天凌晨四点后，用“叙事卷找材料”模型把新增 Event、Scene 和可读日记接入旧 Arc，或建立空白 collecting Arc。没有新增材料不调用模型，也不会自动写正文。'],

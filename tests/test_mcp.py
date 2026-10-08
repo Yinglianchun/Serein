@@ -49,6 +49,8 @@ def test_stdio_mcp_write_read_recall_and_retry(tmp_path):
         source = store.add_source('message/1', '原文')
         store.bind('event_stdio', source)
     build_index(database, index)
+    from serein.deployment import save_settings
+    save_settings(database, {'features':{'memory_candidates':True}})
     config.write_text('[storage]\ndatabase="runtime.db"\nindex="index.db"\n[runtime]\nwritable=true\n', encoding="utf-8")
 
     async def exercise():
@@ -161,6 +163,8 @@ def test_scene_only_schema_edit_preservation_and_proposal_boundary(tmp_path):
         store.create('scene_immutable', 'scene', 'Imported original', 'Immutable body',
                      metadata={'source_record_immutable':True})
     app = Application(Settings(database, writable=True))
+    from serein.deployment import save_settings
+    save_settings(database, {'features':{'memory_candidates':True}})
     server = create_server(app)
     draft = {'title':'Updated Scene', 'body_md':'My authored prose', 'cues':['new cue'], 'date':'2026-09-14'}
 

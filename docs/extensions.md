@@ -8,6 +8,8 @@
 
 在“配置”页选择执行方式和三个角色 `track_router`、`event_curator`、`event_writer` 的模型。API 模式需要三个模型配置完整；Agent 模式领取和提交任务，不调用这些模型；旧版混合配置中未选模型的阶段等待 Agent。在“功能”页开启自动摘要后，后台白天归线，默认北京时间 03:00 结算 Event。配置页“继续整理”可立即处理最近已完成的对话。
 
+外部 Agent 使用前，先在“功能”页开启「自动摘要 Agent 工具」并保存，默认关闭。此开关统一控制 MCP 和 HTTP 扩展的 `pipeline_next`、`pipeline_submit`、`pipeline_rebuild`；关闭后缓存的工具调用也被拒绝，已有任务和结果保留。自动摘要自身的启停、配置页整理和修复操作仍由各自入口控制。
+
 HTTP `POST /v1/extensions/pipeline_next` 接受 `{"include_recent":true}`，返回下一份任务或本批结果。任务含 `job_id`、`role` 和冻结 `request`，其中 `prompt` 为最新完整提示、`rules` 为对应 AGENTS.md。提交到 `POST /v1/extensions/pipeline_submit`，body 为 `{"job_id":"...","output":{...}}`，之后再调用 next。MCP 同名工具使用同样参数。重试相同结果幂等；不同结果不能覆盖已接收阶段。
 
 设置页的“配置 Agent 整理 Event”弹窗提供 MCP 配置示例。使用发行包内 `scripts/event_agent_mcp.py` 连接已运行的 HTTP 后端；它只暴露领取、提交两个工具，不启动另一份后台任务。配置 `SEREIN_AGENT_URL` 与 `SEREIN_AGENT_TOKEN`，并把 Python 和脚本路径替换成实际安装位置。Agent 完整读取 prompt，完成对应角色，提交 JSON，再领下一阶段；不是打开弹窗就自动运行 Agent。
