@@ -100,6 +100,13 @@ def create_server(app: Application, *, private=False, http=False):
     def read_memory(identifier: str, kind: Literal["scene", "event", "narrative", "diary", "darkroom", "upload", "shadow", "dream"] | None = None,
                     revision: int | None = None, with_evidence: bool = False) -> str:
         """Read a memory by its own ID from recall or /resume (typed Event/Scene IDs are accepted). Default reads return the memory body without bound evidence. Set with_evidence=True to return its body and all currently active bound original evidence in one call; do not collect separate original-message IDs first. For independent chat transcripts use source_message_search then source_message_read. Deleted/locked bodies stay hidden; historical revisions may not have evidence membership."""
+        if not private:
+            from ..core.reader import Reader
+            from ..deployment import feature_enabled
+            with Reader(app.settings.database) as reader:
+                resolved_kind, _ = reader._identity(identifier, kind)
+            if resolved_kind == 'dream' and not feature_enabled(app.settings.database,'dream_read'):
+                raise ValueError('Dream reading is disabled')
         return memory_text(services.read_with_menus(identifier, kind=kind, revision=revision, with_evidence=True),
                            with_evidence=with_evidence)
 
@@ -247,7 +254,7 @@ def create_server(app: Application, *, private=False, http=False):
             if name in registered:
                 raise ValueError(f"Extension tool collides with MCP tool: {name}")
             exposed = favorite_text_tool(function) if name == 'read_favorites' else function
-            server.add_tool(exposed, name=name, annotations=read_only if name in {'source_message_search','source_message_read','read_favorites'} else None,
+            server.add_tool(exposed, name=name, annotations=read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read'} else None,
                             structured_output=False if name == 'read_favorites' else None)
     if private:
         if not app.settings.writable:raise ValueError('Private live MCP requires writable storage')
@@ -259,7 +266,7 @@ def create_server(app: Application, *, private=False, http=False):
         if not private and 'save_memory' in selected:
             selected.remove('save_memory')
             selected.update({'write_scene', 'edit_scene'})
-        optional_catalog = internal_tools | {'memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene'}
+        optional_catalog = internal_tools | {'dream_read','memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene'}
         if selected - available - optional_catalog:
             raise ValueError('Selected MCP tools are unavailable: '+', '.join(sorted(selected-available-optional_catalog)))
         for name in available-selected:
@@ -284,7 +291,7 @@ def create_server(app: Application, *, private=False, http=False):
                 from ..extensions.handoff import resume_text_tool
                 exposed=resume_text_tool(function)
             else:exposed = favorite_text_tool(function) if name == 'read_favorites' else function
-            annotation=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False) if name=='resume' else read_only if name in {'source_message_search','source_message_read','read_favorites'} else None
+            annotation=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False) if name=='resume' else read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read'} else None
             server.add_tool(exposed, name=name, annotations=annotation,
                             structured_output=False if name in {'read_favorites','resume'} else None)
             if name=='resume':server._tool_manager.get_tool(name).parameters['additionalProperties']=False

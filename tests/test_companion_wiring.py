@@ -10,6 +10,117 @@ from serein.compat.memo_store import ReminderStore
 from serein.core.store import Store, encode
 
 
+def test_dream_read_is_optional_non_consuming_and_hides_deleted(deployment):
+    from serein.compat.dreams import Dreams
+    settings, client = deployment
+    engine = Dreams(settings)
+    engine._write_record({'dream_id':'dream_read_test','generated_at':'2030-01-01T04:00:00+08:00','surfaced':False}, '合成梦境')
+    app = Application(settings)
+    server = create_server(app)
+    assert 'dream_read' not in {tool.name for tool in asyncio.run(server.list_tools())}
+    memory_read = server._tool_manager.get_tool('read_memory').fn
+    with pytest.raises(ValueError,match='disabled'):memory_read('dream:dream_read_test')
+    client.patch('/v1/settings',json={'features':{'dream_read':True}}).raise_for_status()
+    catalog = {tool.name:tool for tool in asyncio.run(server.list_tools())}
+    assert catalog['dream_read'].annotations.readOnlyHint
+    read = app.contributions.tools['dream_read']
+    assert read()['items'][0]['dream_id']=='dream_read_test'
+    assert 'body' not in read()['items'][0]
+    assert read('dream_read_test')['dream']['body']=='合成梦境'
+    assert '合成梦境' in memory_read('dream:dream_read_test')
+    assert engine.list_records()[0].surfaced is False
+    assert read(limit=1,offset=1)['items']==[]
+    engine._delete_record(engine.list_records()[0], 'test')
+    assert read('dream_read_test')['status']=='not_found'
+    client.patch('/v1/settings',json={'features':{'dream_read':False}}).raise_for_status()
+    assert 'dream_read' not in {tool.name for tool in asyncio.run(server.list_tools())}
+    with pytest.raises(ValueError,match='disabled'):read()
+
+
+def test_morning_candidate_time_freshness_and_daily_delivery(deployment):
+    from datetime import datetime
+    from serein.compat.dreams import Dreams
+    from serein.chat_features import morning_dream, delivered
+    from serein.deployment import read_settings
+    settings, client = deployment
+    assert not client.get('/v1/settings').json()['features']['dream_morning']
+    client.patch('/v1/settings',json={'features':{'dream_morning':True}}).raise_for_status()
+    state=read_settings(settings.database)
+    engine=Dreams(settings)
+    for key,stamp,surfaced in [('old','2029-12-30T04:00:00+08:00',False),('new','2030-01-01T04:00:00+08:00',False),('future','2030-01-02T04:00:00+08:00',False),('used','2030-01-01T05:00:00+08:00',True)]:
+        engine._write_record({'dream_id':'dream_'+key,'generated_at':stamp,'surfaced':surfaced}, '合成梦境 '+key)
+    assert morning_dream(settings.database,state,datetime.fromisoformat('2030-01-01T03:59:00+08:00'))==('',{})
+    text,receipt=morning_dream(settings.database,state,datetime.fromisoformat('2030-01-01T09:00:00+08:00'))
+    assert receipt['dream_id']=='dream_new' and '不是事实记忆' in text
+    assert not next(r for r in engine.list_records() if r.dream_id=='dream_new').surfaced
+    receipt['round']=1
+    delivered(settings.database,'first',receipt)
+    delivered(settings.database,'first',receipt)
+    assert morning_dream(settings.database,state,datetime.fromisoformat('2030-01-01T23:00:00+08:00'))==('',{})
+    with Store(settings.database) as store:
+        assert store.conn.execute("SELECT COUNT(*) FROM historical_work_events WHERE work_id='dream_new' AND event='surfaced'").fetchone()[0]==1
+    assert next(r for r in engine.list_records() if r.dream_id=='dream_new').surfaced
+    text,next_receipt=morning_dream(settings.database,state,datetime.fromisoformat('2030-01-02T09:00:00+08:00'))
+    assert next_receipt['dream_id']=='dream_future'
+
+
+def test_morning_without_dream_and_disabled_feature(deployment):
+    from datetime import datetime
+    from serein.chat_features import morning_dream, delivered
+    from serein.deployment import read_settings
+    settings,client=deployment
+    text,receipt=asyncio.run(prepare(settings.database,'off','早安',[]))
+    assert text=='' and 'dream_morning_day' not in receipt
+    client.patch('/v1/settings',json={'features':{'dream_morning':True},'clock':{'timezone':'UTC'}}).raise_for_status()
+    state=read_settings(settings.database)
+    assert morning_dream(settings.database,state,datetime.fromisoformat('2030-01-01T09:00:00+08:00'))==('',{})
+    at=datetime.fromisoformat('2030-01-01T09:00:00+00:00')
+    text,receipt=morning_dream(settings.database,state,at)
+    assert text=='' and receipt=={'dream_morning_day':'2030-01-01'}
+    delivered(settings.database,'empty',{**receipt,'round':1})
+    assert morning_dream(settings.database,state,at)==('',{})
+
+
+@pytest.mark.parametrize('ending',['complete','truncated','tool','failure'])
+def test_morning_proxy_consumes_only_final_success(deployment,monkeypatch,ending):
+    from datetime import datetime
+    from serein.compat.dreams import Dreams
+    from serein.chat_features import morning_dream
+    settings,client=deployment
+    configure(client,False)
+    client.patch('/v1/settings',json={'features':{'persona':False,'dream_morning':True}}).raise_for_status()
+    engine=Dreams(settings)
+    engine._write_record({'dream_id':'dream_proxy','generated_at':'2030-01-01T04:00:00+08:00','surfaced':False},'合成晨间梦')
+    monkeypatch.setattr('serein.chat_features.morning_dream',lambda db,state:morning_dream(db,state,datetime.fromisoformat('2030-01-01T09:00:00+08:00')))
+    calls=[]
+    def handle(request):
+        body=json.loads(request.content);calls.append(body)
+        assert '合成晨间梦' in json.dumps(body,ensure_ascii=False)
+        if ending=='failure':return httpx.Response(500,json={'error':{'message':'synthetic'}})
+        delta={'content':'合成答复'} if ending!='tool' else {'tool_calls':[{'index':0,'id':'t1','type':'function','function':{'name':'lookup','arguments':'{}'}}]}
+        raw='data: '+json.dumps({'choices':[{'index':0,'delta':delta}]})+'\n\n'
+        if ending!='truncated':raw+='data: [DONE]\n\n'
+        return httpx.Response(200,text=raw,headers={'content-type':'text/event-stream'})
+    original=httpx.AsyncClient
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handle),**kw))
+    body={'messages':[{'role':'user','content':'早安'}],'stream':True}
+    response=client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'dream-window'},json=body)
+    assert response.status_code==(502 if ending=='failure' else 200)
+    assert engine.list_records()[0].surfaced==(ending=='complete')
+    if ending!='complete':
+        retry=client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'dream-window'},json=body)
+        assert retry.headers.get('x-serein-context-replayed')=='true' or ending=='failure'
+        assert calls[0]['messages']==calls[1]['messages']
+    if ending=='tool':
+        ending='complete'
+        continuation={**body,'messages':[*body['messages'],
+            {'role':'assistant','content':None,'tool_calls':[{'id':'t1','type':'function','function':{'name':'lookup','arguments':'{}'}}]},
+            {'role':'tool','tool_call_id':'t1','content':'合成工具结果'}]}
+        final=client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'dream-window'},json=continuation)
+        assert final.status_code==200 and final.headers['x-serein-context-replayed']=='true'
+        assert engine.list_records()[0].surfaced
+
+
 def configure(client, memos=True):
     client.patch('/v1/settings',json={
         'models':[{'id':'chat','label':'Chat','model':'chat-model','base_url':'http://127.0.0.1:9/v1'},

@@ -4,6 +4,8 @@ import asyncio
 import logging
 import time
 from uuid import uuid4
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from .deployment import read_settings, task_model, feature_enabled
 from .core.store import Store, encode
 from .chat_context import ClientContext
@@ -42,10 +44,43 @@ def current_round(database, window_id):
     return json.loads(row[0]) if row else 0
 
 
+def morning_dream(database, state, at=None):
+    stamp = (at or datetime.now(ZoneInfo(state['clock']['timezone']))).astimezone(ZoneInfo(state['clock']['timezone']))
+    if stamp.hour < 4:
+        return '', {}
+    day = stamp.date().isoformat()
+    with Store(database, read_only=True) as store:
+        saved = store.conn.execute("SELECT value_json FROM background_state WHERE name='dream_morning_day'").fetchone()
+        if saved and json.loads(saved[0]) == day:
+            return '', {}
+        rows = store.conn.execute("SELECT * FROM historical_works WHERE kind='dream' AND id NOT IN (SELECT document_id FROM deletions)").fetchall()
+    candidates = []
+    for row in rows:
+        meta = json.loads(row['metadata_json'])
+        try:
+            generated = datetime.fromisoformat(meta.get('generated_at', '').replace('Z','+00:00'))
+            if generated.tzinfo is None:
+                continue
+        except (ValueError, TypeError):
+            continue
+        if not meta.get('surfaced') and stamp - timedelta(hours=24) <= generated <= stamp:
+            candidates.append((generated, row['id'], row['body_md']))
+    receipt = {'dream_morning_day':day}
+    if not candidates:
+        return '', receipt
+    generated, key, body = max(candidates)
+    receipt['dream_id'] = key
+    return f'晨间梦境（想象内容，不是事实记忆） · {generated.isoformat()} · {key}\n{body}', receipt
+
+
 async def prepare(database, window_id, query, messages):
     state = read_settings(database)
     features = state['features']
     parts, receipt = [], {'memo_ids':[],'round':current_round(database,window_id)+1,'user_query':query}
+    if features['dream_morning']:
+        text, dream_receipt = morning_dream(database, state)
+        if text: parts.append(text)
+        receipt.update(dream_receipt)
     if features['memos']:
         from .compat.memo_store import ReminderStore
         memos = ReminderStore({'serein_database':database})
@@ -70,7 +105,22 @@ def delivered(database, window_id, receipt):
         memos = ReminderStore({'serein_database':database})
         for key in receipt.get('memo_ids',[]):
             memos.mark_reminded(key,round_id=receipt['round'])
-    with Store(database) as store,store.transaction():
+    with Store(database) as store,store.transaction(immediate=True):
+        if receipt.get('dream_morning_day') and feature_enabled(database,'dream_morning'):
+            day = receipt['dream_morning_day']
+            saved = store.conn.execute("SELECT value_json FROM background_state WHERE name='dream_morning_day'").fetchone()
+            if not saved or json.loads(saved[0]) != day:
+                from .compat.dreams import Dreams
+                from .core.store import now
+                key = receipt.get('dream_id')
+                row = store.conn.execute("SELECT * FROM historical_works WHERE id=? AND kind='dream' AND id NOT IN (SELECT document_id FROM deletions)", (key,)).fetchone() if key else None
+                if row:
+                    meta = json.loads(row['metadata_json'])
+                    if not meta.get('surfaced'):
+                        meta.update(surfaced=True, surfaced_at=now())
+                        Dreams.save_record(store, meta, row['body_md'])
+                        Dreams.log_event(store,'surfaced',{'dream_id':key,'generated_at':meta.get('generated_at'),'surfaced_at':meta['surfaced_at'],'reason':'morning'})
+                store.conn.execute('INSERT INTO background_state VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value_json=excluded.value_json', ('dream_morning_day',encode(day)))
         row=store.conn.execute('SELECT value_json FROM background_state WHERE name=?',('anti_retreat:'+window_id,)).fetchone()
         if row:
             saved=json.loads(row[0]);pending=saved.get('pending',{})

@@ -6,6 +6,8 @@ const features = {
   image_eyes:['眼睛（主模型不能识图时）','先由图片转录模型看图，把转录注入当前聊天，再移除发往主模型的原图；原始消息仍保存原图和转录。与“异步图片转录”只能开启一个。'],
   current_time:['当前日期时间','每个新用户轮次向聊天主模型注入所选时区的日期和时间；工具续轮沿用该轮时间。只保证当轮请求能看到时间，Serein 无法修改客户端已落盘的消息记录。'],
   memos:['备忘','留给未来的话。到期时带入聊天；关闭后不注册备忘工具。'],
+  dream_read:['梦境读取','让模型通过 dream_read 列出或阅读保存的梦境。阅读不消耗晨间注入；关闭后不注册此工具。'],
+  dream_morning:['晨间梦境注入','每天所选时区凌晨四点后，随第一条新消息带入最近 24 小时内最新未带入的梦。成功回复后记为已带入，每天最多一次；没有梦时不调用模型。'],
   persona:['心绪','记录并延续对话状态。请在“配置”页选择“心绪/防撤退”使用的模型。'],
   anti_retreat:['防撤退','使用“心绪/防撤退”模型，回复后异步判断、下一轮提示。同一窗口冷却 6 轮且至少 10 分钟。'],
   window_shadows:['窗影','由 agent 主动写下窗口侧影。关闭后不注册窗影工具。'],
@@ -42,7 +44,7 @@ export function FeatureSettings({onOpenSummary,onOpenEventGuide}) {
       <span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" aria-label={label} disabled={busy} checked={!!values[key]}
         onChange={event=>setValues(current=>({...current,[key]:event.target.checked,
           ...(event.target.checked&&key==='image_transcription_async'?{image_eyes:false}:event.target.checked&&key==='image_eyes'?{image_transcription_async:false}:{})}))}/></label>)}
-      {values.current_time&&<label className="settings-field time-context-zone"><span>时间戳时区</span><select disabled={busy} value={clock.timezone}
+      {(values.current_time||values.dream_morning)&&<label className="settings-field time-context-zone"><span>时间戳时区</span><select disabled={busy} value={clock.timezone}
         onChange={event=>setClock({timezone:event.target.value})}>{timeZones.map(zone=><option value={zone} key={zone}>{zone}</option>)}</select>
         <small>默认 Asia/Shanghai（东八区）；注入内容也会写明当时的 UTC 偏移。</small></label>}
       {values.resume&&<label className="settings-field"><span>续接方式</span><select aria-label="续接方式" disabled={busy} value={resumeMode} onChange={event=>setResumeMode(event.target.value)}>

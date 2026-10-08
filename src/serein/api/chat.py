@@ -259,7 +259,7 @@ def routes(settings, services, auth):
                 summary = recall_summary(result)
                 recall_state = 'selected' if selected else 'skipped' if result.get('status') == 'skipped' or (result.get('routing') or {}).get('action') == 'skip' else 'no_match'
             feature_context = ''
-            if query and any(state['features'][key] for key in ('memos','persona','anti_retreat')):
+            if query and any(state['features'][key] for key in ('memos','persona','anti_retreat','dream_morning')):
                 from ..chat_features import prepare
                 feature_context,feature_receipt = await prepare(settings.database,window_id,query,incoming)
             clock_context = current_time_context(state['clock']['timezone']) if query and state['features']['current_time'] else ''

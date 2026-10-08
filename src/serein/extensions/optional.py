@@ -11,6 +11,22 @@ def tools_for(settings):
         return {}
     enabled = read_settings(settings.database)['features']
     tools = {}
+    if enabled['dream_read']:
+        def dream_read(dream_id: str = '', limit: int = 10, offset: int = 0) -> dict:
+            """List retained dreams newest first, or read one full body by dream_id. Deleted dreams stay hidden. Reading never consumes morning injection or marks a dream surfaced. Dreams are imagined content, not factual memories."""
+            if not read_settings(settings.database)['features']['dream_read']:
+                raise ValueError('Dream reading is disabled')
+            if type(limit) is not int or not 1 <= limit <= 100 or type(offset) is not int or offset < 0:
+                raise ValueError('limit must be 1..100; offset must be nonnegative')
+            with Store(settings.database, read_only=True) as store:
+                rows = store.conn.execute("SELECT * FROM historical_works WHERE kind='dream' AND id NOT IN (SELECT document_id FROM deletions)").fetchall()
+            items = [{**json.loads(row['metadata_json']), 'dream_id':row['id'], 'body':row['body_md']} for row in rows]
+            items.sort(key=lambda item:(item.get('generated_at',''),item['dream_id']), reverse=True)
+            if dream_id:
+                item = next((item for item in items if item['dream_id']==dream_id),None)
+                return {'status':'ok','dream':item} if item else {'status':'not_found'}
+            return {'items':[{key:value for key,value in item.items() if key!='body'} for item in items[offset:offset+limit]], 'total':len(items)}
+        tools['dream_read'] = dream_read
     if enabled['favorites']:
         from ..core.personal import Personal
         def read_favorites(limit: int = 5, offset: int = 0, include_archived: bool = False,
