@@ -1,5 +1,7 @@
 # Public frontend
 
+Event list body previews show at most three lines before opening; the detail reader preserves the full body (Xiaoyu, 2026-10-09).
+
 Use the approved S-and-raindrop SVG for the tab favicon and sidebar mark. Show the full serif Serein wordmark only when the sidebar is expanded; preserve the existing compact mobile navigation.
 Preserve the existing layout and interaction. All default data is empty or synthetic.
 Browser credentials must never contain backend bearer tokens. Node proxies use an explicit SEREIN_MEMORY_URL and SEREIN_MEMORY_TOKEN.
