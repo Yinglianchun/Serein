@@ -29,7 +29,7 @@ function CandidateContent({row,enabled,busy,onDecide}){
       {document?<div className="mailbox-original"><MarkdownProjection content={document.body_md||''}/></div>:<p>这条 Event 当前不可读取。</p>}
       {evidence[0]&&<blockquote className="mailbox-quote">{evidence[0].content}</blockquote>}
       <div className="mailbox-evidence">
-        <button type="button" className="mailbox-evidence-toggle" aria-expanded={evidenceOpen} onClick={()=>setEvidenceOpen(value=>!value)}>{evidenceOpen?'收起原文':`查看原文 · ${evidence.length} 条`}<span aria-hidden="true">{evidenceOpen?'⌄':'›'}</span></button>
+        <button type="button" className="mailbox-evidence-toggle" aria-expanded={evidenceOpen} onClick={()=>setEvidenceOpen(value=>!value)}>{evidenceOpen?'收起原文':`查看原文 · ${evidence.length} 条`}</button>
         {evidenceOpen&&<div className="mailbox-evidence-list">{evidence.map((source,index)=><article key={source.binding_id||index}><header><span>{source.metadata?.role?identityName(source.metadata.role):'原文'}</span><time>{dateText(source.metadata?.timestamp||source.metadata?.created_at||source.metadata?.occurred_at)}</time></header><p>{source.content}</p></article>)}{!evidence.length&&<p>没有保留的原文。</p>}</div>}
       </div>
       <footer className="mailbox-decision-actions">
