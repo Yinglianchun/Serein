@@ -886,7 +886,7 @@ label:has(input:focus-visible) {
 .sidebar__mark { justify-self: center; }
 .sidebar__name { padding-left: 9px; white-space: nowrap; opacity: 0; transform: translateX(-6px); transition: opacity var(--sidebar-duration) var(--sidebar-ease), transform var(--sidebar-duration) var(--sidebar-ease); }
 .sidebar:hover .sidebar__name, .sidebar:focus-within .sidebar__name { opacity: 1; transform: translateX(0); }
-.sidebar__nav { display: grid; gap: 4px; }
+.sidebar__nav { display: grid; gap: 4px; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
 .nav-item {
   width: 168px;
   min-height: 38px;
@@ -907,7 +907,7 @@ label:has(input:focus-visible) {
 .sidebar:hover .nav-item span, .sidebar:focus-within .nav-item span { opacity: 1; transform: translateX(0); }
 .nav-item:hover { color: #40504c; background: rgba(96, 124, 117, 0.07); }
 .nav-item.is-active { color: #35564f; background: rgba(96, 124, 117, 0.1); }
-.sidebar__footer { margin-top: auto; display: grid; gap: 4px; }
+.sidebar__footer { margin-top: auto; display: grid; gap: 4px; flex-shrink: 0; }
 .sidebar__garden { border-bottom: 1px solid var(--line); border-radius: 0; }
 .memory-page > .sidebar, .narrative-page > .sidebar, .diary-page > .sidebar, .basement-page > .sidebar { animation: sidebar-arrive var(--sidebar-duration) var(--sidebar-ease) both; }
 @keyframes sidebar-arrive { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }

@@ -1,3 +1,4 @@
+import { EventMailboxPage } from "./pages/EventMailboxPage.jsx";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { UsageGuide } from "./components/UsageGuide.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
@@ -11,8 +12,9 @@ import "./garden-page.css";
 import { PersonaPage, MemosPage } from "./pages/CompanionPages.jsx";
 import { ResumePage } from "./pages/ResumePage.jsx";
 
-const availableAreas = new Set(["醒来", "记忆", "叙事卷", "日记", "地下室", "花园", "设置", "心绪", "备忘", "使用说明", "换窗"]);
+const availableAreas = new Set(["信箱", "醒来", "记忆", "叙事卷", "日记", "地下室", "花园", "设置", "心绪", "备忘", "使用说明", "换窗"]);
 const areaHashes = {
+  信箱: "#mailbox",
   心绪: "#persona",
   备忘: "#memos",
   换窗: "#resume",
@@ -27,6 +29,7 @@ const areaHashes = {
 };
 
 const readAreaFromHash = () => {
+  if (window.location.hash === "#mailbox") return "信箱";
   if (window.location.hash === "#resume") return "换窗";
   if (window.location.hash === "#persona") return "心绪";
   if (window.location.hash === "#memos") return "备忘";
@@ -95,6 +98,10 @@ export function App() {
   };
 
   const navigateTo = (label, scroll = 0, entry = "content") => {
+    if (activeArea === "信箱" && label !== activeArea && !window.dispatchEvent(new Event("serein:before-navigation", {cancelable:true}))) {
+      window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#mailbox`);
+      return;
+    }
     if (!availableAreas.has(label)) {
       showUnavailable(label);
       return;
@@ -130,7 +137,7 @@ export function App() {
                 ? "diary"
                 : activeArea === "地下室"
                   ? "basement"
-                  : activeArea === "换窗" ? "resume" : ["设置", "使用说明"].includes(activeArea) ? "settings" : ["心绪", "备忘"].includes(activeArea) ? "companion" : "garden"
+                  : activeArea === "信箱" ? "mailbox" : activeArea === "换窗" ? "resume" : ["设置", "使用说明"].includes(activeArea) ? "settings" : ["心绪", "备忘"].includes(activeArea) ? "companion" : "garden"
       }`}
     >
       <AwakePage
@@ -144,6 +151,11 @@ export function App() {
         onSettingsOpenChange={setSettingsOpen}
         onOpenEventGuide={() => { navigateTo("使用说明"); setHelpPage("events"); }}
       />
+
+      {activeArea === "信箱" && <section className="mailbox-page" aria-label="信箱">
+        <EventMailboxPage onOpenMemory={() => navigateTo("记忆")} onOpenSettings={() => {window.dispatchEvent(new CustomEvent("serein:open-settings-tab", {detail:"features"}));navigateTo("设置");}} />
+        <Sidebar activeArea={activeArea} onNavigate={navigateTo} onOpenSettings={() => setSettingsOpen(true)} />
+      </section>}
 
       {activeArea === "换窗" && <section className="resume-page" aria-label="换窗">
         <ResumePage onOpenSettings={() => { window.dispatchEvent(new CustomEvent("serein:open-settings-tab", {detail:"features"})); navigateTo("设置"); }}/>

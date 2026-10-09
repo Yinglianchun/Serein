@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { eventMailboxBridge } from './server/eventMailboxBridge.mjs';
 import { appearanceBridge } from './server/appearanceBridge.mjs';
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -694,6 +695,7 @@ function sereinMemoryBridge() {
     configureServer(server) {
       const narrativePreviewJobs = createNarrativePreviewJobs();
       appearanceBridge(server, callSereinBackend, readJsonBody);
+      eventMailboxBridge(server, callSereinBackend, readJsonBody);
       server.middlewares.use("/__serein/export/markdown", async (request,response)=>{
         if(request.method!=="GET"){response.statusCode=405;response.end();return;}
         try {

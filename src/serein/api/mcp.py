@@ -257,7 +257,7 @@ def create_server(app: Application, *, private=False, http=False):
             if name in registered:
                 raise ValueError(f"Extension tool collides with MCP tool: {name}")
             exposed = favorite_text_tool(function) if name == 'read_favorites' else function
-            server.add_tool(exposed, name=name, annotations=read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read','window_shadow_read'} else None,
+            server.add_tool(exposed, name=name, annotations=read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read','window_shadow_read','list_event_mailbox','read_event_mailbox'} else None,
                             structured_output=False if name in {'read_favorites','dream_read','window_shadow_read'} else None)
     if private:
         if not app.settings.writable:raise ValueError('Private live MCP requires writable storage')
@@ -269,7 +269,7 @@ def create_server(app: Application, *, private=False, http=False):
         if not private and 'save_memory' in selected:
             selected.remove('save_memory')
             selected.update({'write_scene', 'edit_scene'})
-        optional_catalog = internal_tools | set(gated_tools) | {'window_shadow_read','dream_read','memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene'}
+        optional_catalog = internal_tools | set(gated_tools) | {'window_shadow_read','dream_read','memo_create','memo_list','memo_update','window_shadow_write','source_message_search','source_message_read','narrative_volume','read_favorites','promote_event_to_scene','list_event_mailbox','read_event_mailbox','save_event_mailbox_draft'}
         if selected - available - optional_catalog:
             raise ValueError('Selected MCP tools are unavailable: '+', '.join(sorted(selected-available-optional_catalog)))
         for name in available-selected:
@@ -298,7 +298,7 @@ def create_server(app: Application, *, private=False, http=False):
                 from ..extensions.handoff import resume_text_tool
                 exposed=resume_text_tool(function)
             else:exposed = favorite_text_tool(function) if name == 'read_favorites' else function
-            annotation=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False) if name=='resume' else read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read','window_shadow_read'} else None
+            annotation=ToolAnnotations(readOnlyHint=True,destructiveHint=False,idempotentHint=True,openWorldHint=False) if name=='resume' else read_only if name in {'source_message_search','source_message_read','read_favorites','dream_read','window_shadow_read','list_event_mailbox','read_event_mailbox'} else None
             if name in candidate_tools:
                 annotation = read_only if name=='list_candidates' else write
             server.add_tool(exposed, name=name, annotations=annotation,
