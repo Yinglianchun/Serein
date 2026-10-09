@@ -72,7 +72,7 @@ def feature_enabled(database, name):
 def grouped_upstreams(state):
     """Present legacy connections in the same editor without losing credentials."""
     groups = deepcopy(state['upstreams'])
-    route_keys = ('id','label','dimension','query_instruction','document_instruction','tokenizer')
+    route_keys = ('id','label','dimension','query_instruction','document_instruction','tokenizer','reasoning_content_compat')
     for model in state['models']:
         connection = {key:value for key,value in model.items() if key not in (*route_keys,'model')}
         group = next((item for item in groups if all(item.get(key, '') == connection.get(key, '')
@@ -206,6 +206,8 @@ def save_settings(database, changes):
         if changes.get('features',{}).get('anti_retreat') is False:
             store.conn.execute("UPDATE background_state SET value_json=json_set(value_json,'$.pending',json('{}'),'$.token','','$.running_until',0) WHERE name LIKE 'anti_retreat:%'")
         catalog = configured_models(current)
+        if any(item.get('reasoning_content_compat', 'auto') not in ('auto', 'on', 'off') for item in catalog):
+            raise ValueError('Unknown reasoning content compatibility policy')
         known = {item['id'] for item in catalog}
         if len(known) != len(catalog):
             raise ValueError('Client model IDs must be unique; use aliases for models offered by multiple upstreams')

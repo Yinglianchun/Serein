@@ -610,8 +610,8 @@ def test_deepseek_tool_requests_fill_only_missing_reasoning_content_without_muta
     unchanged,count=deepseek_tool_reasoning_compat(
         {'model':'ordinary','base_url':'https://provider.example/v1','protocol':'openai'},payload)
     assert unchanged is payload and count==0
-    unchanged,count=deepseek_tool_reasoning_compat(model,{**payload,'tools':[]})
-    assert count==0 and unchanged['messages'] is payload['messages']
+    patched,count=deepseek_tool_reasoning_compat(model,{**payload,'tools':[]})
+    assert count==2 and patched['messages'][2]['reasoning_content']==''
     _,_,forwarded=request_for({**model,'api_key':'synthetic'},payload,window_id='operit-window')
     assert [message.get('reasoning_content') for message in forwarded['messages'] if message.get('role')=='assistant']==[
         '', '', 'actual reasoning']
@@ -841,3 +841,162 @@ def test_reasoning_cache_does_not_store_partially_malformed_tool_batches():
     replay = reasoning_tool_message('call-a')
     restore_reasoning(context, replay)
     assert 'reasoning_content' not in replay
+
+
+def configure_reasoning_routes(client):
+    routes = [
+        {'id':'auto-ds','upstream_model':'deepseek-synthetic','label':'auto route'},
+        {'id':'opaque-on','upstream_model':'opaque-chat','label':'on route','reasoning_content_compat':'on'},
+        {'id':'ds-off','upstream_model':'deepseek-synthetic-off','label':'off route','reasoning_content_compat':'off'},
+        {'id':'opaque-auto','upstream_model':'opaque-default','label':'deepseek display only'},
+    ]
+    result = client.patch('/v1/settings', json={'upstreams':[{'id':'compat','name':'Compat',
+        'base_url':'https://synthetic.invalid/v1','protocol':'openai','models':routes}],
+        'assignments':{'chat':'opaque-auto'}})
+    assert result.is_success, result.text
+    return routes
+
+
+def mock_reasoning_upstream(monkeypatch, captured, *, stream=False, responses=None, require_reasoning=False):
+    original_client = httpx.AsyncClient
+    def handler(request):
+        payload = json.loads(request.content)
+        captured.append(payload)
+        if require_reasoning and any(m.get('role')=='assistant' and m.get('tool_calls')
+                and ('reasoning_content' not in m or m['reasoning_content'] is None) for m in payload['messages']):
+            return httpx.Response(400,json={'error':{'message':'synthetic missing reasoning_content'}})
+        message = (responses[len(captured)-1] if responses else {'role':'assistant','content':'synthetic answer'})
+        if stream:
+            delta = json.loads(json.dumps(message))
+            for index, call in enumerate(delta.get('tool_calls', [])):
+                call['index'] = index
+            event = {'choices':[{'index':0,'delta':delta,'finish_reason':'tool_calls' if delta.get('tool_calls') else 'stop'}]}
+            return httpx.Response(200, headers={'content-type':'text/event-stream'},
+                text='data: '+json.dumps(event)+'\n\ndata: [DONE]\n\n')
+        return httpx.Response(200, json={'choices':[{'index':0,'message':message}]})
+    monkeypatch.setattr('serein.model_runtime.httpx.AsyncClient',
+        lambda **options: original_client(transport=httpx.MockTransport(handler), **options))
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('tools_state', ['omitted','empty','present'])
+@pytest.mark.parametrize('reasoning', ['MISSING',None,'','original reasoning'])
+@pytest.mark.parametrize('route_index', range(4))
+def test_chat_entrypoint_reasoning_compat_routes_and_history_matrix(deployment, monkeypatch, stream, tools_state, reasoning, route_index):
+    _, client = deployment
+    route = configure_reasoning_routes(client)[route_index]
+    assistant = reasoning_tool_message('call-synthetic')
+    if reasoning != 'MISSING':
+        assistant['reasoning_content'] = reasoning
+    body = {'model':'Compat/'+route['label'], 'messages':[{'role':'user','content':'synthetic'}, assistant,
+        {'role':'tool','tool_call_id':'call-synthetic','content':'synthetic result'}],
+        'stream':stream,'max_tokens':37,'temperature':0.23,'thinking':{'type':'disabled'},
+        # A client-echoed option cannot override the selected local model policy.
+        'reasoning_content_compat':'off' if route_index in (0,1) else 'on'}
+    if tools_state != 'omitted':
+        body['tools'] = [] if tools_state == 'empty' else [{'type':'function','function':{'name':'lookup','parameters':{'type':'object'}}}]
+    before = json.loads(json.dumps(body))
+    captured = []
+    mock_reasoning_upstream(monkeypatch, captured, stream=stream)
+    response = client.post('/v1/chat/completions', json=body)
+    assert response.status_code == 200, response.text
+    assert body == before
+    assert len(captured) == 1
+    forwarded = captured[0]
+    assert forwarded['model'] == route['upstream_model']
+    assert forwarded['max_tokens'] == 37 and forwarded['temperature'] == 0.23
+    assert forwarded['thinking'] == {'type':'disabled'}
+    assert 'reasoning_content_compat' not in forwarded
+    actual = next(message for message in forwarded['messages'] if message['role']=='assistant')
+    if route_index in (0,1) and reasoning in ('MISSING',None):
+        assert actual['reasoning_content'] == ''
+    elif reasoning == 'MISSING':
+        assert 'reasoning_content' not in actual
+    else:
+        assert actual['reasoning_content'] == reasoning
+    if stream:
+        assert response.text.count('synthetic answer') == 1 and '[DONE]' in response.text
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('policy', ['on','off'])
+def test_chat_entrypoint_recovers_real_reasoning_before_optional_empty_fallback(deployment, monkeypatch, stream, policy):
+    _, client = deployment
+    routes = configure_reasoning_routes(client)
+    route = routes[1 if policy=='on' else 2]
+    captured = []
+    first = reasoning_tool_message('call-original', 'real cached reasoning')
+    mock_reasoning_upstream(monkeypatch,captured,stream=stream,responses=[first,{'role':'assistant','content':'finished'}])
+    body = {'model':'Compat/'+route['label'],'stream':stream,'messages':[{'role':'user','content':'synthetic'}],
+        'tools':[{'type':'function','function':{'name':'lookup','parameters':{'type':'object'}}}]}
+    response = client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'same-window'},json=body)
+    assert response.status_code == 200 and 'real cached reasoning' in response.text
+    body.pop('tools')
+    body['messages'].extend([reasoning_tool_message('call-original'),{'role':'tool','tool_call_id':'call-original','content':'result'}])
+    response = client.post('/v1/chat/completions',headers={'X-Serein-Window-ID':'same-window'},json=body)
+    assert response.status_code == 200
+    restored = next(message for message in captured[-1]['messages'] if message['role']=='assistant')
+    assert restored['reasoning_content'] == 'real cached reasoning'
+
+
+def test_reasoning_compat_pure_chat_and_non_openai_never_inject():
+    from serein.model_runtime import deepseek_tool_reasoning_compat
+    for protocol in ('openai','anthropic'):
+        payload = {'messages':[{'role':'user','content':'hello'},{'role':'assistant','content':'hi'}]}
+        if protocol == 'anthropic':
+            payload['messages'].append(reasoning_tool_message('call-a'))
+            payload['tools'] = [{'type':'function','function':{'name':'lookup'}}]
+        result,count = deepseek_tool_reasoning_compat({'model':'deepseek-test','protocol':protocol,'reasoning_content_compat':'on'},payload)
+        assert result is payload and count == 0
+
+
+def test_reasoning_compat_settings_validation_import_export_and_legacy_grouping(deployment):
+    from serein.deployment import grouped_upstreams, save_settings
+    settings,client = deployment
+    routes = configure_reasoning_routes(client)
+    result = client.get('/v1/settings').json()
+    exported = result['upstreams'][0]
+    assert exported['models'][1]['reasoning_content_compat'] == 'on'
+    assert exported['models'][2]['reasoning_content_compat'] == 'off'
+    assert task_model(settings.database,'chat',requested='Compat/on route')['reasoning_content_compat']=='on'
+    template = {'gateway':{'upstreams':[exported]}}
+    template['gateway']['upstreams'][0].pop('api_key_configured',None)
+    imported = client.post('/v1/settings/upstreams-template',json={'template':json.dumps(template)})
+    assert imported.status_code == 200, imported.text
+    assert imported.json()['upstreams'][0]['models'][1]['reasoning_content_compat']=='on'
+    for invalid in (True,False,None,'enabled',1):
+        bad = {**exported,'models':[{**routes[1],'reasoning_content_compat':invalid}]}
+        bad.pop('api_key_configured',None)
+        assert client.patch('/v1/settings',json={'upstreams':[bad]}).status_code==422
+        with pytest.raises(ValueError,match='reasoning content compatibility'):
+            save_settings(settings.database,{'upstreams':[bad],'assignments':{'chat':'opaque-on'}})
+    legacy = {'upstreams':[],'models':[{'id':'a','label':'A','model':'opaque','base_url':'https://synthetic.invalid',
+        'protocol':'openai','api_key':'','reasoning_content_compat':'on'},
+        {'id':'b','label':'B','model':'opaque-2','base_url':'https://synthetic.invalid',
+        'protocol':'openai','api_key':'','reasoning_content_compat':'off'}]}
+    groups = grouped_upstreams(legacy)
+    assert len(groups)==1
+    assert 'reasoning_content_compat' not in groups[0]
+    assert [item['reasoning_content_compat'] for item in groups[0]['models']]==['on','off']
+
+
+@pytest.mark.parametrize('stream', [False, True])
+@pytest.mark.parametrize('tools_state', ['omitted','empty','present'])
+def test_chat_entrypoint_missing_reasoning_no_longer_becomes_upstream_502(deployment, monkeypatch, stream, tools_state):
+    _, client = deployment
+    routes = configure_reasoning_routes(client)
+    captured = []
+    mock_reasoning_upstream(monkeypatch,captured,stream=stream,require_reasoning=True)
+    body = {'model':'Compat/'+routes[0]['label'],'stream':stream,'messages':[{'role':'user','content':'synthetic'},
+        reasoning_tool_message('synthetic-call'),{'role':'tool','tool_call_id':'synthetic-call','content':'result'}]}
+    if tools_state!='omitted':
+        body['tools']=[] if tools_state=='empty' else [{'type':'function','function':{'name':'lookup','parameters':{'type':'object'}}}]
+    response=client.post('/v1/chat/completions',json=body)
+    assert response.status_code==200,response.text
+    assert captured[-1]['messages'][1]['reasoning_content']==''
+    # Explicit off retains the existing provider rejection, rather than secretly
+    # injecting a field or silently retrying/altering the upstream request.
+    body['model']='Compat/'+routes[2]['label']
+    response=client.post('/v1/chat/completions',json=body)
+    assert response.status_code==502,response.text
+    assert 'reasoning_content' not in captured[-1]['messages'][1]

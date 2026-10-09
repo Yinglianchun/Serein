@@ -76,6 +76,7 @@ class TokenizerWindow(BaseModel):
 
 
 class ModelEntry(ModelConnection):
+    reasoning_content_compat: Literal['auto', 'on', 'off'] = 'auto'
     id: str = Field(min_length=1, max_length=100)
     label: str = Field(min_length=1, max_length=100)
     model: str = Field(min_length=1, max_length=200)
@@ -94,6 +95,7 @@ class ModelEntry(ModelConnection):
 
 class ModelRoute(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    reasoning_content_compat: Literal['auto', 'on', 'off'] = 'auto'
     id: str = Field(min_length=1, max_length=200)
     upstream_model: str = Field(min_length=1, max_length=200)
     label: str = Field(default='', max_length=100)

@@ -50,6 +50,9 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
         <label className="settings-field"><span>上游模型号</span><input required value={model.upstream_model} onChange={event=>editModel(upstream,index,{upstream_model:event.target.value,
           ...(!model.id?{id:createUuid()}:{})})} /></label>
         <label className="settings-field"><span>模型别名（可选）</span><input value={model.label || ""} placeholder="留空使用上游模型号" onChange={event=>editModel(upstream,index,{label:event.target.value})} /></label>
+        <label className="settings-field"><span>工具历史推理字段兼容</span><select disabled={(upstream.protocol || "openai")!=="openai"} value={model.reasoning_content_compat || "auto"} onChange={event=>editModel(upstream,index,{reasoning_content_compat:event.target.value})}>
+          <option value="auto">自动（识别 DeepSeek）</option><option value="on">开启（此模型要求 reasoning_content）</option><option value="off">关闭补空</option></select></label>
+        <p className="model-connection-help">仅用于 Chat Completions：优先恢复已缓存原文；工具请求或历史含工具调用时，为缺失字段补空。中转隐藏模型名时可手动开启。这不是思考开关，也不能恢复已丢失的推理；关闭只停止补空。请在工具轮次结束后调整，修改设置会切换缓存命名空间。</p>
         {[assignments.embedding,assignments.reranker].includes(model.id)&&<p className="model-connection-help">用于{assignments.embedding===model.id?'向量':'重排'}，不出现在聊天模型列表中。</p>}
         <details><summary>向量选项</summary>
           <label className="settings-field"><span>向量维度（可留空自动读取）</span><input type="number" min="1" max="65536" value={model.dimension || ""} onChange={event=>editModel(upstream,index,{dimension:Number(event.target.value) || null})} /></label>

@@ -164,3 +164,12 @@ serein --config config.toml resume-index --recovery-token <当前状态令牌> -
 HTTP 对应已鉴权的 GET `/v1/settings/index-status` 与 POST `/v1/settings/resume-index`；恢复要求 writable 部署、`confirm: RESUME_INDEX_EMBEDDING` 和当前 `recovery_token`。错误记录不保存响应正文、URL、密钥或输入内容。此保护不能撤销已经计费的请求，也不能保证请求成功后、落库前崩溃时提供方的恰好一次处理；人工恢复可能重发该批次。多个进程必须共享同一数据库路径和本地文件锁语义，不支持跨主机或不可靠的网络文件锁。
 
 严格批量位置、数量和维度校验保持不变。issue #52 未包含原始响应，因此本修复不猜测或放宽 Gemini 的响应兼容规则。
+
+## 工具历史推理字段兼容
+
+每个模型有“工具历史推理字段兼容”选项，保存到该模型的 `reasoning_content_compat`：
+- `auto`：默认值，仅沿用对实际上游模型号或地址包含 DeepSeek 的识别；显示别名不参与识别。
+- `on`：明确为这个模型启用。适合隐藏模型名的中转或确认要求 `reasoning_content` 的 Chat Completions 接口。
+- `off`：关闭缺失字段补空；已有推理仍原样转发，唯一匹配的缓存原文仍优先恢复。
+
+这是请求字段兼容，不是模型思考开关。当前请求带工具，或历史里有 assistant 工具调用时，才为缺失/null 的推理字段补空。空字符串无法恢复已经丢失的推理。Anthropic Messages 不适用，界面禁用此控件；不会编造签名或向未知供应商自动添加字段。模板导入和设置导出保留各模型的选项，修改后保存即可用于后续请求。模型设置变化会切换缓存命名空间，请在工具轮次结束后调整；进行中的轮次无法恢复修改前设置下的缓存。

@@ -24,8 +24,8 @@ choosing the first upstream. This configuration does not provide key rotation or
   when that signature identifies one cached call and one incoming assistant message, with
   no conflict against known IDs. Ambiguous matches remain unrestored rather than borrowing
   another call's reasoning. This is a process-local tool-continuation cache, cleared by the
-  final reply; it is not persistent history. The existing DeepSeek request-side empty-field
-  compatibility fallback is unchanged and does not replace full reasoning preservation.
+  final reply; it is not persistent history. Request-side empty-field compatibility does
+  not replace full reasoning preservation; see the per-model controls below.
 - Prompt cache keys and retention settings preserve caller-supplied values. Native Anthropic
   mode supports automatic cache control or explicit breakpoints on system, tools and an earlier
   assistant message. The current user turn receives no explicit breakpoint. Token estimates
@@ -35,6 +35,31 @@ choosing the first upstream. This configuration does not provide key rotation or
   incomplete/failed streams do not become successful delivery receipts.
 - The public host uses a five-response recent-card window. The core still checks
   cooldown after selecting the final cards and never substitutes a third-place candidate.
+
+## Tool-history reasoning field compatibility
+
+Each model can set `reasoning_content_compat` to `auto` (default), `on`, or `off`.
+This is a local gateway control, never an upstream request parameter or a thinking-mode
+switch. `auto` retains DeepSeek recognition through the actual upstream model ID or base
+URL, not the client-facing display alias. For a proxy that hides that identity, explicitly
+choose `on` only when its Chat Completions endpoint requires `reasoning_content`. Other
+providers remain unchanged by default; Anthropic Messages never receives this fallback.
+
+After restoring any unambiguous cached original, eligible routes fill only missing/null
+`reasoning_content` fields on assistant messages with an empty string when the request has
+nonempty `tools` **or its history contains an assistant `tool_calls` list**. This also covers
+a continuation that omits `tools` or sends `tools: []`. Existing values are preserved.
+`off` disables only empty-field insertion; it still forwards existing reasoning and restores
+unambiguous cached originals. Empty strings cannot reconstruct reasoning a client lost and
+may not satisfy every provider's contract. Opaque reasoning signatures are never invented.
+
+The setting is per model in Settings → 模型 → 工具历史推理字段兼容, in a model entry under
+`gateway.upstreams[].models[]`, or in a legacy `models[]` entry. In YAML, quote
+`"on"` and `"off"` so the parser keeps these values as strings. The selected model's setting
+wins; a client-echoed top-level `reasoning_content_compat` is ignored and stripped rather
+than forwarded. Normal client generation parameters retain their existing forwarding rules.
+Changing model settings separates cache namespaces, so adjust this option between completed
+turns; an in-progress tool continuation cannot restore the previous settings' cache.
 
 ## Worldbook and raw dialogue
 
