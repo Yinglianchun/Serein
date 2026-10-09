@@ -503,6 +503,8 @@
   "web/tests/persona-seen.test.mjs",
   "web/tests/public.test.mjs",
   "web/tests/darkroom.dom.mjs",
+  "web/tests/darkroom-preview.html",
+  "web/tests/darkroom-preview.jsx",
   "web/tests/source-time.test.mjs",
   "web/tests/together-date.test.mjs",
   "web/tests/webAuth.test.mjs",

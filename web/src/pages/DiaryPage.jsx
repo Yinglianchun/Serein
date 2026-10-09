@@ -94,6 +94,8 @@ const formatDarkroomUnlockAt = (value) => {
 
 export function DiaryPage() {
   const readerRef = useRef(null);
+  const darkroomFocusRef = useRef(null);
+  const darkroomDialogRef = useRef(null);
   const [diaryUserIdentity, setDiaryUserIdentity] = useState(readDiaryUserIdentity);
   const [entries, setEntries] = useState(() => sortEntries(readDiaryEntries()));
   const [selectedEntryId, setSelectedEntryId] = useState(() => readDiaryEntries()[0]?.id ?? null);
@@ -149,14 +151,24 @@ export function DiaryPage() {
   useEffect(() => {
     if (!composerOpen && !darkroomOpen) return undefined;
     const closeOnEscape = (event) => {
+      if (event.key === "Tab" && darkroomOpen) {
+        const controls = [...darkroomDialogRef.current.querySelectorAll('button:not([disabled]), a[href]')];
+        const target = event.shiftKey ? controls.at(-1) : controls[0];
+        if ((event.shiftKey && document.activeElement === controls[0])
+          || (!event.shiftKey && document.activeElement === controls.at(-1))) {
+          event.preventDefault(); target?.focus();
+        }
+        return;
+      }
       if (event.key !== "Escape") return;
       setComposerOpen(false);
       setEditingEntryId(null);
-      setDarkroomOpen(false);
+      if (darkroomOpen && darkroomEntryId) setDarkroomEntryId(null);
+      else setDarkroomOpen(false);
     };
     document.addEventListener("keydown", closeOnEscape);
     return () => document.removeEventListener("keydown", closeOnEscape);
-  }, [composerOpen, darkroomOpen]);
+  }, [composerOpen, darkroomOpen, darkroomEntryId]);
 
   const diaryEntries = useMemo(() => entries.filter((entry) => !entry.darkroom), [entries]);
   const darkroomEntries = useMemo(() => entries.filter((entry) => entry.darkroom), [entries]);
@@ -192,10 +204,7 @@ export function DiaryPage() {
   const calendarEntries = calendarDate ? entriesByDate.get(calendarDate) ?? [] : [];
   const selectedDayEntries = selectedEntry ? entriesByDate.get(selectedEntry.date) ?? [] : [];
   const selectedDayIndex = selectedDayEntries.findIndex((entry) => entry.id === selectedEntry?.id);
-  const selectedDarkroomEntry = darkroomEntries.find((entry) => entry.id === darkroomEntryId)
-    ?? darkroomEntries.find((entry) => !isDarkroomEntryLocked(entry, darkroomClock))
-    ?? darkroomEntries[0]
-    ?? null;
+  const selectedDarkroomEntry = darkroomEntries.find((entry) => entry.id === darkroomEntryId) ?? null;
   const selectedDarkroomLocked = selectedDarkroomEntry && isDarkroomEntryLocked(selectedDarkroomEntry, darkroomClock);
   const darkroomUnlockTime = new Date(selectedDarkroomEntry?.unlockAt).getTime();
   const darkroomRemainingSeconds = Number.isFinite(darkroomUnlockTime)
@@ -203,6 +212,8 @@ export function DiaryPage() {
   const overdueDarkroomIds = darkroomEntries.filter((entry) => entry.locked === true
     && Number.isFinite(new Date(entry.unlockAt).getTime())
     && new Date(entry.unlockAt).getTime() <= darkroomClock).map((entry) => entry.id).join(",");
+
+  useEffect(() => { if (darkroomOpen) darkroomFocusRef.current?.focus(); }, [darkroomOpen, selectedDarkroomEntry?.id]);
 
   useEffect(() => {
     if (!darkroomOpen) return undefined;
@@ -230,8 +241,7 @@ export function DiaryPage() {
   }, [darkroomOpen, overdueDarkroomIds]);
 
   const openDarkroom = () => {
-    setDarkroomEntryId((current) => darkroomEntries.some((entry) => entry.id === current) ? current
-      : (darkroomEntries.find((entry) => !isDarkroomEntryLocked(entry, Date.now())) ?? darkroomEntries[0])?.id ?? null);
+    setDarkroomEntryId(null);
     setDarkroomClock(Date.now());
     setDarkroomOpen(true);
   };
@@ -715,10 +725,10 @@ export function DiaryPage() {
           role="presentation"
         >
           <div className="diary-modal-layer__veil" aria-hidden="true" />
-            <section className="darkroom-open-room" role="dialog" aria-modal="true" aria-labelledby="darkroom-open-title">
+            <section ref={darkroomDialogRef} className="darkroom-open-room" role="dialog" aria-modal="true" aria-labelledby="darkroom-open-title">
               <header>
                 <div>
-                  <span>OPEN</span>
+                  <span>留在这里的话</span>
                   <h2 id="darkroom-open-title">{defaultDarkroom.title}</h2>
                 </div>
                 <button type="button" onClick={() => setDarkroomOpen(false)}>
@@ -727,55 +737,59 @@ export function DiaryPage() {
                 </button>
               </header>
 
-              <div className="darkroom-open-room__body">
-                <aside aria-label="暗房日记">
-                  <p>门后的日记</p>
-                  {darkroomEntries.map((entry) => (
-                    <button
-                      className={selectedDarkroomEntry?.id === entry.id ? "is-active" : ""}
-                      key={entry.id}
-                      type="button"
-                      onClick={() => setDarkroomEntryId(entry.id)}
-                    >
-                      <time dateTime={entry.date}>{entry.date.replaceAll("-", ".")}</time>
-                      <strong>{entry.title}</strong>
-                      <span>{identityName(entry.role)} · {entry.role}</span>
-                      <span className="darkroom-letter-status">
-                        {isDarkroomEntryLocked(entry, darkroomClock) ? <><LockSimple size={12} aria-hidden="true" />尚未开启</> : "可以读了"}
-                      </span>
-                    </button>
-                  ))}
-                </aside>
-
+              <div className="darkroom-open-room__body darkroom-open-room__body--letters">
                 <article>
                   {selectedDarkroomEntry ? (
                     <div className="darkroom-open-room__page" key={selectedDarkroomEntry.id}>
-                      <header>
+                      <button ref={darkroomFocusRef} className="darkroom-reader-back" type="button" onClick={() => setDarkroomEntryId(null)}>
+                        <CaretLeft size={16} aria-hidden="true" />放回信件桌
+                      </button>
+                      {!selectedDarkroomLocked ? <header>
                         <time dateTime={selectedDarkroomEntry.date}>
                           {formatDiaryDate(selectedDarkroomEntry.date)} · {selectedDarkroomEntry.time} · {identityName(selectedDarkroomEntry.role)}
                         </time>
                         <h3>{selectedDarkroomEntry.title}</h3>
-                      </header>
+                      </header> : null}
                       {selectedDarkroomLocked ? (
                         <div className="darkroom-letter-sealed" role="status">
-                          <LockSimple size={28} weight="light" aria-hidden="true" />
-                          <p>{darkroomRemainingSeconds === 0 ? "这封信到了约定的开启时间。" : "这封信还没到开启时间。"}</p>
+                          <LockSimple size={16} weight="light" aria-hidden="true" />
+                          <h3>???</h3>
                           <time dateTime={selectedDarkroomEntry.unlockAt || undefined}>
                             {formatDarkroomUnlockAt(selectedDarkroomEntry.unlockAt)}
                           </time>
                           {darkroomRemainingSeconds > 0 ? <small>还有 {formatDarkroomCountdown(darkroomRemainingSeconds)}</small>
                             : darkroomRemainingSeconds === 0 ? <small>正在等待信件开启。</small> : null}
-                          <small>其他已经开启的信，可以照常读。</small>
                         </div>
                       ) : <MarkdownProjection
-                        className="darkroom-open-room__content"
+                        key={`letter-${selectedDarkroomEntry.id}-open`}
+                        className="darkroom-open-room__content darkroom-ink-reveal"
                         content={selectedDarkroomEntry.body}
                       />}
+                    </div>
+                  ) : darkroomEntries.length ? (
+                    <div className="darkroom-letter-table">
+                      <header>
+                        <h3 ref={darkroomFocusRef} tabIndex={-1}>留给以后的信</h3>
+                        <p>{darkroomEntries.length} 封信</p>
+                      </header>
+                          <div className="darkroom-letter-list" aria-label="信件">
+                            {darkroomEntries.map(entry=>{
+                              const sealed = isDarkroomEntryLocked(entry, darkroomClock);
+                              return <button className={`darkroom-letter${sealed ? " darkroom-letter--sealed" : ""}`} key={entry.id}
+                                type="button" onClick={()=>setDarkroomEntryId(entry.id)} aria-label={sealed ? `未开启的信，${formatDarkroomUnlockAt(entry.unlockAt)} 开启` : `读信：${entry.title}`}>
+                                {!sealed ? <span className="darkroom-letter__status"><CaretRight size={16} aria-hidden="true" /></span> : null}
+                                <strong>{sealed ? "???" : entry.title}</strong>
+                                {!sealed ? <span className="darkroom-letter__sender">{entry.date.replaceAll("-", ".")} · {identityName(entry.role)}</span> : null}
+                                <span className="darkroom-letter__footer">{sealed ? `${formatDarkroomUnlockAt(entry.unlockAt)} 开启` : "打开这封信"}</span>
+                              </button>;
+                            })}
+                          </div>
                     </div>
                   ) : (
                     <div className="darkroom-open-room__empty">
                       <BookOpenText size={25} weight="light" aria-hidden="true" />
-                      <p>门后还没有日记。</p>
+                      <h3 ref={darkroomFocusRef} tabIndex={-1}>这里还没有信。</h3>
+                      <p>留给以后的话，会在这里等着。</p>
                     </div>
                   )}
                 </article>

@@ -4779,9 +4779,9 @@ label:has(input:focus-visible) {
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   background:
-    radial-gradient(circle at 72% 18%, rgba(127, 145, 137, 0.08), transparent 34%),
-    #151b19;
-  color: #dde3e0;
+    radial-gradient(circle at 72% 18%, rgba(170, 151, 127, 0.07), transparent 34%),
+    #211f1d;
+  color: #e5e0d6;
   animation: darkroom-door-arrive 720ms ease both;
 }
 .darkroom-open-room > header {
@@ -4791,17 +4791,17 @@ label:has(input:focus-visible) {
   justify-content: space-between;
   gap: 28px;
   padding: 20px 38px;
-  border-bottom: 1px solid rgba(226, 234, 230, 0.1);
+  border-bottom: 1px solid rgba(229, 224, 214, 0.1);
 }
 .darkroom-open-room > header span {
-  color: #7f8a86;
+  color: #a29a8e;
   font-family: var(--font-editorial);
   font-size: 8px;
   letter-spacing: 0.22em;
 }
 .darkroom-open-room > header h2 {
   margin: 3px 0 0;
-  color: #edf1ef;
+  color: #eee8dd;
   font-family: var(--font-editorial-cjk);
   font-size: 23px;
   font-weight: 400;
@@ -4813,7 +4813,7 @@ label:has(input:focus-visible) {
   padding: 7px 0;
   border: 0;
   background: transparent;
-  color: #96a19c;
+  color: #b0a79b;
   font-family: var(--font-editorial-cjk);
   font-size: 11px;
   cursor: pointer;
@@ -4833,7 +4833,7 @@ label:has(input:focus-visible) {
 .darkroom-open-room__body > aside::-webkit-scrollbar { display: none; }
 .darkroom-open-room__body > aside > p {
   margin: 0 10px 22px;
-  color: #77827e;
+  color: #a29a8e;
   font-family: var(--font-editorial-cjk);
   font-size: 10px;
   letter-spacing: 0.08em;
@@ -4863,7 +4863,7 @@ label:has(input:focus-visible) {
   letter-spacing: 0.05em;
 }
 .darkroom-open-room__body > aside strong {
-  color: #d8dfdb;
+  color: #ded8cc;
   font-size: 14px;
   font-weight: 400;
   line-height: 1.5;
@@ -4882,7 +4882,7 @@ label:has(input:focus-visible) {
   animation: diary-page-arrive 520ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .darkroom-open-room__page > header time {
-  color: #7f8b86;
+  color: #a29a8e;
   font-family: var(--font-editorial-cjk);
   font-size: 11px;
   letter-spacing: 0.05em;
@@ -4890,7 +4890,7 @@ label:has(input:focus-visible) {
 .darkroom-open-room__page > header h3 {
   max-width: 700px;
   margin: 22px 0 0;
-  color: #edf1ef;
+  color: #eee8dd;
   font-family: var(--font-editorial-cjk);
   font-size: clamp(35px, 4.2vw, 58px);
   font-weight: 400;
@@ -4901,8 +4901,89 @@ label:has(input:focus-visible) {
   padding-top: clamp(44px, 7vh, 68px);
 }
 .darkroom-open-room__content {
-  color: #bec8c3;
+  color: #ded8cc;
   font-family: var(--font-editorial-cjk);
+}
+.darkroom-open-room__body--letters { grid-template-columns: minmax(0, 1fr); }
+.darkroom-letter-table {
+  width: min(900px, calc(100% - 96px));
+  margin: 0 auto;
+  padding: 64px 0 96px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 72px;
+  row-gap: 48px;
+  font-family: var(--font-editorial-cjk);
+}
+.darkroom-letter-table > header { grid-column: 1 / -1; }
+.darkroom-letter-table > header h3 {
+  margin: 0 0 16px;
+  color: #e5e0d6;
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+}
+.darkroom-letter-table > header h3:focus { outline: none; }
+.darkroom-letter-table > header p { margin: 0; color: #aca397; font-size: 13px; line-height: 1.8; }
+.darkroom-letter-list { display: flex; flex-direction: column; }
+.darkroom-letter {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  min-height: 144px;
+  padding: 24px 40px 24px 8px;
+  border: 0;
+  border-bottom: 1px solid #3a3530;
+  border-radius: 0;
+  background: transparent;
+  color: #e5e0d6;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 180ms ease, transform 180ms ease;
+  font-family: var(--font-editorial-cjk);
+}
+.darkroom-letter:hover { background: #292622; transform: translateX(4px); }
+.darkroom-letter:focus-visible { outline: 1px solid #c9bda9; outline-offset: 4px; }
+.darkroom-letter time { color: #aaa093; font-family: var(--font-editorial); font-size: 11px; letter-spacing: 0.08em; }
+.darkroom-letter strong { font-size: clamp(23px, 2.5vw, 32px); font-weight: 400; line-height: 1.55; overflow-wrap: anywhere; }
+.darkroom-letter__sender { color: #b5aa9b; font-size: 12px; }
+.darkroom-letter__footer { margin-top: 4px; color: #aaa093; font-size: 11px; line-height: 1.8; }
+.darkroom-letter__status {
+  position: absolute;
+  top: 24px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #b9ae9f;
+  font-size: 10px;
+}
+.darkroom-letter--sealed strong { color: #c8bfb0; }
+.darkroom-reader-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  margin-bottom: 40px;
+  border: 0;
+  background: transparent;
+  color: #b5aa9b;
+  font-family: var(--font-editorial-cjk);
+  font-size: 12px;
+  cursor: pointer;
+}
+.darkroom-reader-back:focus-visible { outline: 1px solid #c9bda9; outline-offset: 6px; }
+@media (max-width: 760px) {
+  .darkroom-letter-table { width: calc(100% - 40px); grid-template-columns: minmax(0, 1fr); gap: 40px; padding: 40px 0 64px; }
+  .darkroom-letter-table > header h3 { font-size: 24px; }
+  .darkroom-open-room__body.darkroom-open-room__body--letters { grid-template-rows: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .darkroom-letter { transition: none; }
+  .darkroom-letter:hover { transform: none; }
 }
 .darkroom-letter-status { display: inline-flex; align-items: center; gap: 5px; }
 .darkroom-letter-sealed {
@@ -4910,17 +4991,46 @@ label:has(input:focus-visible) {
   flex-direction: column;
   align-items: center;
   gap: 18px;
+  min-height: 45vh;
+  justify-content: center;
   padding: 64px 16px;
-  color: #96a19c;
+  color: #b0a79b;
   text-align: center;
   font-family: var(--font-editorial-cjk);
 }
-.darkroom-open-room__page > .darkroom-letter-sealed p { margin: 0; color: #d8dfdb; }
+.darkroom-open-room__page > .darkroom-letter-sealed p { margin: 0; color: #ded8cc; }
 .darkroom-letter-sealed time { font-size: 14px; }
 .darkroom-letter-sealed small { font-size: 12px; line-height: 1.7; }
+.darkroom-letter-sealed h3 {
+  margin: 8px 0 12px;
+  color: #e5e0d6;
+  font-size: 42px;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+}
+.darkroom-ink-reveal > * {
+  --ink-delay: 1.2s;
+  mask-image: linear-gradient(to bottom, #000 0%, #000 35%, transparent 65%, transparent 100%);
+  mask-size: 100% 300%;
+  animation: darkroom-ink-emerge 1600ms ease-out var(--ink-delay) both;
+}
+.darkroom-ink-reveal > :nth-child(1) { --ink-delay: 0s; }
+.darkroom-ink-reveal > :nth-child(2) { --ink-delay: 0.24s; }
+.darkroom-ink-reveal > :nth-child(3) { --ink-delay: 0.48s; }
+.darkroom-ink-reveal > :nth-child(4) { --ink-delay: 0.72s; }
+.darkroom-ink-reveal > :nth-child(5) { --ink-delay: 0.96s; }
+@keyframes darkroom-ink-emerge {
+  from { mask-position: 0 100%; opacity: 0; filter: blur(1.2px); }
+  30% { opacity: 1; }
+  to { mask-position: 0 0; opacity: 1; filter: blur(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .darkroom-ink-reveal > * { animation: none; mask-image: none; filter: none; }
+  .darkroom-open-room, .darkroom-open-room__page { animation: none; }
+}
 .darkroom-open-room__page > div p {
   margin: 0 0 28px;
-  color: #bec8c3;
+  color: #ded8cc;
   font-family: var(--font-editorial-cjk);
   font-size: clamp(16px, 1.4vw, 19px);
   line-height: 2.08;
@@ -4932,7 +5042,7 @@ label:has(input:focus-visible) {
   place-content: center;
   justify-items: center;
   gap: 14px;
-  color: #77827e;
+  color: #a29a8e;
   font-family: var(--font-editorial-cjk);
   font-size: 12px;
 }
