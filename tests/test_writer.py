@@ -69,6 +69,8 @@ def test_promote_event_creates_edited_scene_and_keeps_original_evidence(writable
             {"source_key": "message:ticket", "content": "我说会把车票收好"}]})
     request = {"event_id": event["id"], "expected_revision": 1,
                "title": "留下的车票", "body_md": "她留下车票，我也想记住那天。"}
+    writable.write('choose-event','mailbox_select',{'event_id':event['id'],'expected_revision':1,'expected_queue_revision':0})
+    request['expected_queue_revision']=1
     promoted = writable.write('promote-once', 'promote_event', request)
     again = writable.write('promote-once', 'promote_event', request)
     assert promoted['id'] == again['id']
@@ -113,15 +115,17 @@ def test_promotion_disabled_blocks_direct_and_cached_calls_and_keeps_receipts(wr
     with pytest.raises(ValueError, match='disabled'):
         writable.write('promote', 'promote_event', request)
     save_settings(writable._settings.database, {'features':{'event_to_scene':True}})
+    writable.write('choose-source','mailbox_select',{'event_id':event_id,'expected_revision':1,'expected_queue_revision':0})
+    request={'candidate_id':event_id,'title':'Scene','body':'Edited body','cues':'cue'}
     cached = tools_for(writable._settings)['promote_event_to_scene']
-    scene_id = cached(operation_id='promote', **request)['id']
+    scene_id = cached(**request)['id']
     save_settings(writable._settings.database, {'features':{'event_to_scene':False}})
     for operation in ('promote', 'another-operation'):
         with pytest.raises(ValueError, match='disabled'):
-            cached(operation_id=operation, **request)
+            cached(**request)
     assert writable.read(scene_id)['document']['body_md'] == 'Edited body'
     save_settings(writable._settings.database, {'features':{'event_to_scene':True}})
-    assert cached(operation_id='promote', **request)['id'] == scene_id
+    assert cached(**request)['id'] == scene_id
 
 
 def test_candidate_acceptance_is_frozen_atomic_and_retry_safe(writable):

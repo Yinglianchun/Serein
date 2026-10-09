@@ -25,7 +25,7 @@ def item_for(store, event_id, *, detail=False):
     status=value.get('status','completed' if scene else 'pending' if event['lifecycle']=='active' else 'not_selected')
     result={'candidate_id':event_id,'event_id':event_id,'queue_revision':row['revision'] if row else 0,
         'status':status,'title':event['title'] if event['lifecycle']!='deleted' else 'Deleted Event','event_revision':event['revision'],
-        'lifecycle':event['lifecycle'],'processable':status=='pending' and event['lifecycle']=='active' and scene is None,
+        'lifecycle':event['lifecycle'],'processable':status=='approved' and event['lifecycle']=='active' and scene is None,
         'scene_id':scene['id'] if scene else None,'created_at':event['created_at'],
         'updated_at':row['updated_at'] if row else event['updated_at'],
         'draft_event_revision':value.get('draft_event_revision',event['revision']),
@@ -69,12 +69,15 @@ def mutate(store,request,action):
     value=json.loads(row['payload_json']) if row else {'status':item_for(store,event['id'])['status'],'draft':{'title':event['title'],'body_md':event['body_md'],'cues':[]},'draft_event_revision':event['revision']}
     if action=='select':
         if value.get('status')=='completed':raise Conflict('Completed entries cannot be selected again')
+        value['status']='approved'
+    elif action=='restore':
+        if value.get('status')=='completed':raise Conflict('Completed entries cannot be restored')
         value['status']='pending'
     elif action=='remove':
-        if value.get('status')!='pending':raise Conflict('Only pending entries can be removed')
+        if value.get('status') not in ('pending','approved'):raise Conflict('Only undecided or approved entries can be removed')
         value['status']='removed'
     elif action=='draft':
-        if value.get('status')!='pending':raise Conflict('Mailbox entry is not pending')
+        if value.get('status')!='approved':raise Conflict('Only user-approved entries can save drafts')
         draft=dict(value['draft'])
         for key in ('title','body_md'):
             if key in request:
@@ -96,19 +99,15 @@ def check_promotion(store,request):
         raise Conflict('This Event already has a promoted Scene; edit that Scene instead')
     row=row_for(store,request['event_id'])
     if row:
-        if json.loads(row['payload_json'])['status']!='pending':raise Conflict('Mailbox entry is not pending; explicitly select it again before promotion')
+        if json.loads(row['payload_json'])['status']!='approved':raise Conflict('Mailbox entry is not approved; user must choose to keep it before promotion')
         current(store,request)
     else:
-        event=store.read(request['event_id'])
-        if not event or event['kind']!='event' or event['lifecycle']!='active' or store.read(promoted_scene_id(event['id'])):
-            raise Conflict('Mailbox entry is not pending')
-        current(store,{**request,'expected_queue_revision':request.get('expected_queue_revision',0)})
-        row={'key':event['id'],'revision':0,'payload_json':encode({'status':'pending','draft':{'title':event['title'],'body_md':event['body_md'],'cues':[]},'draft_event_revision':event['revision']})}
+        raise Conflict('Mailbox entry is not approved; user must choose to keep it before promotion')
     return row
 
 
 def complete(store,row,scene_id):
-    if row and json.loads(row['payload_json'])['status']=='pending':
+    if row and json.loads(row['payload_json'])['status']=='approved':
         value=json.loads(row['payload_json'])
         value.update(status='completed',scene_id=scene_id)
         save_row(store,row['key'],value,row['revision'])
@@ -120,12 +119,17 @@ class EventMailbox:
     def __init__(self,database):self.database=database
 
     def list(self,*,status='pending',limit=20,offset=0,processable_only=False,cursor=None):
-        if status not in ('pending','completed','removed','all'):raise ValueError('Invalid mailbox status')
+        if status not in ('pending','approved','retained','completed','removed','all'):raise ValueError('Invalid mailbox status')
         if type(limit) is not int or not 1<=limit<=100 or type(offset) is not int or offset<0:raise ValueError('Invalid pagination')
         with Store(self.database,read_only=True) as store:
             store.conn.create_function('promoted_scene_id',1,promoted_scene_id)
             where="d.kind='event' AND (p.key IS NOT NULL OR (d.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM documents s WHERE s.id=promoted_scene_id(d.id))))";params=[SCOPE]
-            if status!='all':where+=" AND COALESCE(json_extract(p.payload_json,'$.status'),'pending')=?";params.append(status)
+            join=' FROM documents d LEFT JOIN personal_records p ON p.document_id=d.id AND p.scope=? WHERE '
+            counts={row['status']:row['count'] for row in store.conn.execute("SELECT COALESCE(json_extract(p.payload_json,'$.status'),'pending') AS status,count(*) AS count"+join+where+" GROUP BY status",params)}
+            counts={key:counts.get(key,0) for key in ('pending','approved','completed','removed')}
+            counts['retained']=counts['approved']+counts['completed']
+            if status=='retained':where+=" AND json_extract(p.payload_json,'$.status') IN ('approved','completed')"
+            elif status!='all':where+=" AND COALESCE(json_extract(p.payload_json,'$.status'),'pending')=?";params.append(status)
             if cursor is not None:
                 if offset:raise ValueError('Use cursor or offset, not both')
                 try:
@@ -135,11 +139,11 @@ class EventMailbox:
                 except Exception:raise ValueError('Invalid mailbox cursor') from None
                 where+=' AND (d.created_at,d.id) > (?,?)';params.extend(position)
             if processable_only:
-                where+=" AND COALESCE(json_extract(p.payload_json,'$.status'),'pending')='pending' AND d.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM documents s WHERE s.id=promoted_scene_id(d.id))"
+                where+=" AND json_extract(p.payload_json,'$.status')='approved' AND d.lifecycle='active' AND NOT EXISTS (SELECT 1 FROM documents s WHERE s.id=promoted_scene_id(d.id))"
             rows=store.conn.execute('SELECT d.id AS key,d.created_at FROM documents d LEFT JOIN personal_records p ON p.document_id=d.id AND p.scope=? WHERE '+where+
                 ' ORDER BY d.created_at,d.id LIMIT ? OFFSET ?',(*params,limit+1,offset)).fetchall()
             items=[item_for(store,row['key']) for row in rows[:limit]]
-            return {'items':items,'has_more':len(rows)>limit,'next_offset':offset+len(items),
+            return {'items':items,'counts':counts,'has_more':len(rows)>limit,'next_offset':offset+len(items),
                 'next_cursor':base64.urlsafe_b64encode(encode([rows[len(items)-1]['created_at'],rows[len(items)-1]['key']]).encode()).decode() if items else None}
 
     def read(self,event_id):

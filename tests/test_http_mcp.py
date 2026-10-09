@@ -19,8 +19,7 @@ def test_event_scene_switch_persists_and_refreshes_http_mcp(tmp_path, writable):
     services = Application(settings).services
     event = services.write('seed', 'save', {'kind':'event', 'title':'Trip', 'body_md':'A trip',
         'sources':[{'source_key':'synthetic:trip', 'content':'Keep the ticket.'}]})
-    request = {'operation_id':'promote', 'event_id':event['id'], 'expected_revision':1,
-               'title':'The ticket', 'body_md':'I kept our ticket.'}
+    request = {'candidate_id':event['id'],'title':'The ticket','body':'I kept our ticket.','cues':'ticket'}
     from dataclasses import replace
     settings = replace(settings, writable=writable)
     headers = {'Authorization':'Bearer test', 'Accept':'application/json, text/event-stream'}
@@ -51,6 +50,7 @@ def test_event_scene_switch_persists_and_refreshes_http_mcp(tmp_path, writable):
             return
         from serein.deployment import read_settings
         assert read_settings(settings.database)['features']['event_to_scene'] is True
+        services.write('choose','mailbox_select',{'event_id':event['id'],'expected_revision':1,'expected_queue_revision':0})
         promoted = call()
         assert not promoted.get('isError')
         scene_id = promoted['structuredContent']['id']
@@ -61,7 +61,7 @@ def test_event_scene_switch_persists_and_refreshes_http_mcp(tmp_path, writable):
         assert call()['isError']
         assert client.post('/v1/extensions/promote_event_to_scene', json=request).status_code == 404
         assert 'promote_event_to_scene' not in names()
-        assert services.read(scene_id)['document']['body_md'] == request['body_md']
+        assert services.read(scene_id)['document']['body_md'] == request['body']
         assert services.read(event['id'])['document']['body_md'] == 'A trip'
 
 

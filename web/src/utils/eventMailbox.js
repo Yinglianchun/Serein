@@ -27,7 +27,7 @@ export async function mailboxRequest(path='', body, request=fetch) {
   const payload=await response.json().catch(()=>({}));
   if(!response.ok||['conflict','error','invalid','disabled'].includes(payload?.status)) {
     const detail=typeof payload.detail==='string'?payload.detail:payload.message||payload.reason||payload.error;
-    const error=new Error(response.status===409||payload.status==='conflict'?'这条 Event 或草稿已有新版本。你的输入仍保留，请重新读取后核对。':detail||'操作未完成，请重试。');
+    const error=new Error(response.status===409||payload.status==='conflict'?'这件事的状态已经变了。请刷新后再决定。':detail||'操作未完成，请重试。');
     error.conflict=response.status===409||payload.status==='conflict';throw error;
   }
   return payload;

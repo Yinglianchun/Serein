@@ -10,7 +10,7 @@ from ..deployment import feature_enabled
 class MailboxWrite(BaseModel):
     model_config=ConfigDict(extra='forbid')
     operation_id: str
-    action: Literal['select','draft','remove']
+    action: Literal['select','restore','draft','remove']
     expected_revision: StrictInt
     expected_queue_revision: StrictInt
     title: str | None=None

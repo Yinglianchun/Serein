@@ -42,12 +42,12 @@ test('standalone preview is isolated, exercises mutation and failure receipts wi
   assert.equal((await request('unrecognized')).status,404);
   const item=(await request('event-mailbox/event_synthetic')).payload;
   const select=(await request('event-mailbox/event_synthetic',mailboxWrite(item,'select',undefined,'op'))).payload;
-  assert.equal(select.status,'pending');assert.equal(fixture.selectCalls,1);
+  assert.equal(select.status,'approved');assert.equal(fixture.selectCalls,1);
   const saved=(await request('event-mailbox/event_synthetic',mailboxWrite(select,'draft',{title:'New',body_md:'Full body',cues:['rain']},'draft'))).payload;
   assert.deepEqual(saved.draft.cues,['rain']);
   fixture.failPromotion=true;
   assert.equal((await request('event-mailbox-promote',mailboxPromotion(saved,saved.draft,'promote'))).status,502);
-  assert.equal(fixture.rows.get(item.event_id).status,'pending');
+  assert.equal(fixture.rows.get(item.event_id).status,'approved');
   fixture.failPromotion=false;
   assert.equal((await request('event-mailbox-promote',mailboxPromotion(saved,saved.draft,'promote'))).payload.queue_status,'completed');
   fixture.enabled=false;

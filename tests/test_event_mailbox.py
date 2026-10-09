@@ -32,31 +32,35 @@ def select(services,event_id):return services.write('select','mailbox_select',re
 def test_automatic_candidate_draft_remove_and_single_call_scene(setup):
     settings,services,event_id=setup
     tools=tools_for(settings)
-    candidate=tools['list_event_mailbox']()['items'][0]
+    assert tools['list_event_mailbox']()['items']==[]
+    candidate=EventMailbox(settings.database).list()['items'][0]
     assert candidate['candidate_id']==event_id and candidate['queue_revision']==0
     assert candidate['body_preview']=='Original body' and candidate['evidence_count']==1
     with Store(settings.database,read_only=True) as store:
         assert not store.conn.execute("SELECT 1 FROM personal_records WHERE scope='event_mailbox'").fetchone()
-    scene=tools['memory_inbox_scene'](event_id,'New title','Rewritten body','rain | tickets')
-    assert scene['queue_status']=='completed' and scene['queue_revision']==1
+    select(services,event_id)
+    assert tools['list_event_mailbox']()['items'][0]['candidate_id']==event_id
+    scene=tools['promote_event_to_scene'](event_id,'New title','Rewritten body','rain | tickets')
+    assert scene['queue_status']=='completed' and scene['queue_revision']==2
     document=services.read(scene['id'])
     assert document['document']['body_md']=='Rewritten body'
     assert document['document']['metadata']['scene_cues']==['rain','tickets']
     assert document['evidence'][0]['content']=='Original evidence'
-    assert tools['memory_inbox_scene'](event_id,'New title','Rewritten body','rain | tickets')['id']==scene['id']
+    assert tools['promote_event_to_scene'](event_id,'New title','Rewritten body','rain | tickets')['id']==scene['id']
     assert EventMailbox(settings.database).list()['items']==[]
     save_settings(settings.database,{'features':{'event_to_scene':False}})
-    with pytest.raises(ValueError,match='disabled'):tools['memory_inbox_scene'](event_id,'New title','Rewritten body','rain | tickets')
+    with pytest.raises(ValueError,match='disabled'):tools['promote_event_to_scene'](event_id,'New title','Rewritten body','rain | tickets')
 
 
-def test_automatic_candidate_can_be_removed_or_drafted_without_selection(setup):
+def test_undecided_candidate_can_be_removed_but_not_authored_or_promoted(setup):
     settings,services,event_id=setup
-    draft=services.write('draft-auto','mailbox_draft',request(event_id,title='Draft',body_md='Draft body',cues=['cue']))
-    assert draft['queue_revision']==1
-    services.write('remove-auto','mailbox_remove',request(event_id,1))
+    with pytest.raises(Conflict):services.write('draft-auto','mailbox_draft',request(event_id,title='Draft',body_md='Draft body',cues=['cue']))
+    with pytest.raises(Conflict):tools_for(settings)['promote_event_to_scene'](event_id,'Scene','Body','cue')
+    with pytest.raises(Conflict):services.write('bypass','promote_event',request(event_id,title='Scene',body_md='Body'))
+    services.write('remove-auto','mailbox_remove',request(event_id))
     services.write('edit-auto','save',{'document_id':event_id,'expected_revision':1,'kind':'event','title':'Changed','body_md':'Changed'})
     assert EventMailbox(settings.database).list()['items']==[]
-    with pytest.raises(Conflict):tools_for(settings)['memory_inbox_scene'](event_id,'Scene','Body','cue')
+    with pytest.raises(Conflict):tools_for(settings)['promote_event_to_scene'](event_id,'Scene','Body','cue')
 
 
 def test_automatic_scene_tool_has_four_arguments_and_is_opt_in(setup):
@@ -65,9 +69,34 @@ def test_automatic_scene_tool_has_four_arguments_and_is_opt_in(setup):
     settings,services,event_id=setup
     async def check():
         tools={tool.name:tool for tool in await create_server(Application(settings)).list_tools()}
-        assert set(tools['memory_inbox_scene'].inputSchema['properties'])=={'candidate_id','title','body','cues'}
+        for name in ('promote_event_to_scene',):
+            assert set(tools[name].inputSchema['properties'])=={'candidate_id','title','body','cues'}
+        assert 'list_event_mailbox' in tools
     asyncio.run(check())
-    assert 'memory_inbox_scene' not in tools_for(Settings(settings.database,writable=False))
+    assert 'promote_event_to_scene' not in tools_for(Settings(settings.database,writable=False))
+
+
+def test_decisions_counts_restore_and_ai_visibility(setup):
+    settings,services,event_id=setup
+    mailbox=EventMailbox(settings.database)
+    assert mailbox.list()['counts']=={'pending':1,'approved':0,'completed':0,'removed':0,'retained':0}
+    assert tools_for(settings)['list_event_mailbox']()['items']==[]
+    kept=select(services,event_id)
+    assert kept['status']=='approved' and kept['processable']
+    assert mailbox.list()['items']==[]
+    assert mailbox.list(status='retained')['counts']['retained']==1
+    with Store(settings.database,read_only=True) as store:
+        assert store.conn.execute("SELECT count(*) FROM documents WHERE kind='scene'").fetchone()[0]==0
+    assert tools_for(settings)['list_event_mailbox']()['items'][0]['candidate_id']==event_id
+    restored=services.write('restore','mailbox_restore',request(event_id,1))
+    assert restored['status']=='pending' and not restored['processable']
+    assert tools_for(settings)['list_event_mailbox']()['items']==[]
+    with pytest.raises(Conflict):tools_for(settings)['promote_event_to_scene'](event_id,'Title','Body','cue')
+    with pytest.raises(Conflict):services.write('stale-choice','mailbox_remove',request(event_id,1))
+    removed=services.write('no','mailbox_remove',request(event_id,2))
+    assert removed['status']=='removed'
+    assert mailbox.list(status='removed')['counts']['removed']==1
+    with pytest.raises(Conflict):services.write('bypass','promote_event',request(event_id,3,title='Scene',body_md='Body'))
 
 
 def test_single_call_scene_failure_is_atomic_and_retryable(setup,monkeypatch):
@@ -76,12 +105,13 @@ def test_single_call_scene_failure_is_atomic_and_retryable(setup,monkeypatch):
     original=mailbox_module.complete
     def fail(*args):raise RuntimeError('Queue failure')
     monkeypatch.setattr(mailbox_module,'complete',fail)
-    tool=tools_for(settings)['memory_inbox_scene']
+    select(services,event_id)
+    tool=tools_for(settings)['promote_event_to_scene']
     with pytest.raises(RuntimeError,match='Queue failure'):tool(event_id,'Title','Body','cue')
     with Store(settings.database,read_only=True) as store:
         assert store.read(promoted_scene_id(event_id)) is None
         assert not store.conn.execute("SELECT 1 FROM write_receipts WHERE operation_id LIKE 'memory-inbox-scene:%'").fetchone()
-    assert EventMailbox(settings.database).read(event_id)['queue_revision']==0
+    assert EventMailbox(settings.database).read(event_id)['queue_revision']==1
     monkeypatch.setattr(mailbox_module,'complete',original)
     result=tool(event_id,'Title','Body','cue')
     assert result['candidate_id']==event_id and result['scene_id']==promoted_scene_id(event_id)
@@ -94,9 +124,9 @@ def test_single_call_scene_http_and_unstored_removal(setup):
     assert EventMailbox(settings.database).list()['items']==[]
     with TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'}) as client:
         body={'candidate_id':event_id,'title':'Title','body':'Body','cues':'cue'}
-        assert client.post('/v1/extensions/memory_inbox_scene',json=body).status_code==409
+        assert client.post('/v1/extensions/promote_event_to_scene',json=body).status_code==409
         services.write('restore-unstored','mailbox_select',request(event_id,1))
-        result=client.post('/v1/extensions/memory_inbox_scene',json=body)
+        result=client.post('/v1/extensions/promote_event_to_scene',json=body)
         assert result.status_code==200 and result.json()['scene_id']==promoted_scene_id(event_id)
 
 
@@ -110,8 +140,8 @@ def test_automatic_inbox_retention_and_isolation(setup):
         before=store.conn.execute("SELECT * FROM personal_records WHERE scope='favorite'").fetchone()
     first=select(services,event_id)
     assert first['queue_revision']==1 and first['event_revision']==1
-    assert mailbox.list()['items'][0]['processable']
-    assert 'draft' not in mailbox.list()['items'][0]
+    assert mailbox.list(status='approved')['items'][0]['processable']
+    assert 'draft' not in mailbox.list(status='approved')['items'][0]
     assert services.write('select','mailbox_select',request(event_id))==first
     draft=services.write('draft','mailbox_draft',request(event_id,1,title='Scene draft',body_md='Draft body',cues=[]))
     assert draft['queue_revision']==2
@@ -202,8 +232,8 @@ def test_pagination_and_reserved_scope(setup):
             'sources':[{'source_key':'source'+str(n),'content':'evidence'}]})
         services.write('s'+str(n),'mailbox_select',request(new['id']))
     mailbox=EventMailbox(settings.database)
-    first=mailbox.list(limit=2)
-    second=mailbox.list(limit=2,offset=first['next_offset'])
+    first=mailbox.list(status='approved',limit=2)
+    second=mailbox.list(status='approved',limit=2,offset=first['next_offset'])
     assert first['has_more'] and not second['has_more']
     assert len({x['event_id'] for x in first['items']+second['items']})==3
 
@@ -220,10 +250,10 @@ def test_http_contract_and_mcp_read_annotations(setup):
         body={'operation_id':'http-select','action':'select','expected_revision':1,'expected_queue_revision':0}
         assert client.post('/api/event-mailbox/'+event_id,headers=headers,json=body).json()['queue_revision']==1
         assert client.post('/api/event-mailbox/'+event_id,headers=headers,json={**body,'operation_id':'http-stale'}).status_code==409
-        promotion={'operation_id':'http-promote','event_id':event_id,'expected_revision':1,'expected_queue_revision':1,'title':'Scene','body_md':'Body','cues':['one']}
+        promotion={'candidate_id':event_id,'title':'Scene','body':'Body','cues':'one'}
         result=client.post('/v1/extensions/promote_event_to_scene',headers=headers,json=promotion)
         assert result.status_code==200 and result.json()['queue_status']=='completed'
-        assert client.post('/v1/extensions/promote_event_to_scene',headers=headers,json={**promotion,'operation_id':'duplicate'}).status_code==409
+        assert client.post('/v1/extensions/promote_event_to_scene',headers=headers,json={**promotion,'body':'Different body'}).status_code==409
     async def check():
         server=create_server(Application(settings))
         tools={x.name:x for x in await server.list_tools()}
@@ -235,7 +265,7 @@ def test_removed_entry_stale_requests_and_deleted_draft_redaction(setup):
     settings,services,event_id=setup
     select(services,event_id)
     services.write('remove','mailbox_remove',request(event_id,1))
-    with pytest.raises(Conflict,match='not pending'):
+    with pytest.raises(Conflict,match='not approved'):
         services.write('stale-ai','promote_event',{'event_id':event_id,'expected_revision':1,'title':'Title','body_md':'Body'})
     services.write('delete','state',{'document_id':event_id,'expected_revision':1,'lifecycle':'deleted'})
     item=EventMailbox(settings.database).read(event_id)
@@ -271,7 +301,7 @@ def test_concurrent_promotion_and_draft_only_one_commits(setup):
     item=EventMailbox(settings.database).read(event_id)
     assert item['queue_revision']==2
     if results[0]:assert item['status']=='completed' and item['scene_id']
-    else:assert item['status']=='pending' and item['scene_id'] is None
+    else:assert item['status']=='approved' and item['scene_id'] is None
 
 
 def test_cues_index_and_existing_state_retained(setup,tmp_path):
@@ -342,7 +372,7 @@ def test_failure_after_scene_creation_rolls_back_entire_promotion(setup,monkeypa
         assert store.conn.execute('SELECT 1 FROM scene_jobs WHERE scene_id=?',(scene_id,)).fetchone() is None
         assert store.conn.execute("SELECT 1 FROM write_receipts WHERE operation_id='promotion-retry'").fetchone() is None
     item=EventMailbox(settings.database).read(event_id)
-    assert item['status']=='pending' and item['queue_revision']==1
+    assert item['status']=='approved' and item['queue_revision']==1
     monkeypatch.setattr(mailbox_module,'complete',complete)
     result=services.write('promotion-retry','promote_event',promotion)
     assert result['id']==scene_id and result['queue_status']=='completed' and result['queue_revision']==2
@@ -359,7 +389,7 @@ def test_draft_does_not_schedule_models_or_index_work(setup,monkeypatch):
         raise AssertionError('Draft must not prepare model/index work')
     monkeypatch.setattr('serein.recall.passage_layouts.prepare_layouts',unexpected_model_preparation)
     result=services.write('draft-only','mailbox_draft',request(event_id,1,title='Draft',body_md='Draft body',cues=['cue']))
-    assert result['status']=='pending' and result['index']['status']=='current'
+    assert result['status']=='approved' and result['index']['status']=='current'
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute("SELECT count(*) FROM documents WHERE kind='scene'").fetchone()[0]==0
         assert [tuple(row) for row in store.conn.execute('SELECT * FROM index_outbox ORDER BY sequence')]==initial_outbox

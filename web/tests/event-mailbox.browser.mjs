@@ -1,33 +1,44 @@
-// Synthetic-only acceptance. Optional PLAYWRIGHT_MODULE / CHROMIUM_EXECUTABLE
-// reuse official local installations. This never contacts a real backend.
+// Synthetic-only browser acceptance. Never contacts a deployment.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
+import {mkdir} from 'node:fs/promises';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const base='http://127.0.0.1:5193';
 const server=spawn(process.execPath,['node_modules/vite/bin/vite.js','--host','127.0.0.1','--port','5193','--strictPort'],{stdio:['ignore','pipe','pipe']});
 let output='',browser;server.stdout.on('data',chunk=>output+=chunk);server.stderr.on('data',chunk=>output+=chunk);
-try {
+try{
  for(let attempt=0;;attempt++){try{await fetch(base);break;}catch{if(attempt>100||server.exitCode!=null)throw new Error(output);await new Promise(resolve=>setTimeout(resolve,100));}}
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE?{executablePath:process.env.CHROMIUM_EXECUTABLE}:{})});
  const page=await browser.newPage({viewport:{width:1200,height:850}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base+'/tests/event-mailbox-preview.html');
- await page.getByRole('button',{name:/event_synthetic/}).waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.selectCalls),0);assert.equal(await page.getByRole('button',{name:'加入信箱',exact:true}).count(),0);
- await page.getByRole('button',{name:'刷新信箱'}).click();await page.getByRole('button',{name:'继续读取'}).click();await page.getByRole('button',{name:'继续读取'}).click();
- const detail=page.getByRole('region',{name:'信箱详情'});
- await page.getByRole('button',{name:/event_synthetic/}).click();await detail.locator('.mailbox-quote').waitFor();assert.match(await detail.textContent(),/Last paragraph/);
- await detail.getByLabel('标题',{exact:true}).fill('Edited title');await detail.getByLabel('正文',{exact:true}).fill('Edited Scene body');
- await detail.getByRole('button',{name:'增加一条'}).click();await detail.getByLabel('召回入口 1',{exact:true}).fill('When we talk about rain');
- page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:/event_second/}).click();assert.equal(await detail.getByLabel('标题',{exact:true}).inputValue(),'Edited title');
- await detail.getByRole('button',{name:'保存草稿',exact:true}).click();await detail.getByText('草稿已保存。').waitFor();assert.deepEqual(await page.evaluate(()=>mailboxFixture.rows.get('event_synthetic').draft.cues),['When we talk about rain']);
- await page.evaluate(()=>{mailboxFixture.failPromotion=true;});await detail.getByRole('button',{name:'升为 Scene',exact:true}).click();await detail.getByRole('alert').filter({hasText:'Synthetic promotion failed'}).waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.rows.get('event_synthetic').status),'pending');assert.equal(await detail.getByLabel('标题',{exact:true}).inputValue(),'Edited title');
- await page.evaluate(()=>{mailboxFixture.failPromotion=false;});await detail.getByRole('button',{name:'升为 Scene',exact:true}).evaluate(button=>{button.click();button.click();});await detail.getByText('已升为 Scene，并从待处理信箱移出。').waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.promoteCalls),2);
- await detail.getByRole('button',{name:'关闭信箱详情'}).click();await page.getByLabel('信箱状态').selectOption('completed');await page.getByRole('button',{name:/event_synthetic/}).click();await detail.getByText('关联 Scene：scene_synthetic').waitFor();assert.equal(await detail.getByRole('button',{name:'升为 Scene',exact:true}).count(),0);
- await detail.getByRole('button',{name:'关闭信箱详情'}).click();await page.getByLabel('信箱状态').selectOption('pending');await page.getByRole('button',{name:/event_second/}).click();await detail.getByLabel('标题',{exact:true}).fill('Unsaved retained');
- await page.evaluate(()=>{mailboxFixture.conflictDraft=true;});await detail.getByRole('button',{name:'保存草稿',exact:true}).click();await detail.getByRole('alert').filter({hasText:'已有新版本'}).waitFor();assert.equal(await detail.getByLabel('标题',{exact:true}).inputValue(),'Unsaved retained');assert(await detail.getByRole('button',{name:'升为 Scene',exact:true}).isDisabled());
- await page.evaluate(()=>{mailboxFixture.conflictDraft=false;});page.once('dialog',dialog=>dialog.accept());await detail.getByRole('button',{name:'重新读取',exact:true}).click();await detail.getByRole('button',{name:'移出信箱',exact:true}).click();await detail.getByText('已移出信箱，Event 与已保存草稿仍保留。').waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.rows.get('event_second').event.document.body_md),'Full original Event\n\nLast paragraph');
- await detail.getByRole('button',{name:'关闭信箱详情'}).click();await page.evaluate(()=>{mailboxFixture.rows.get('event_third').draft_stale=true;});await page.getByRole('button',{name:/event_third/}).click();await detail.getByText(/草稿仍基于旧版本/).waitFor();assert(await detail.getByRole('button',{name:'升为 Scene',exact:true}).isDisabled());await detail.getByRole('button',{name:'保存草稿',exact:true}).click();await detail.getByText('草稿已保存。').waitFor();
- await page.evaluate(()=>{mailboxFixture.enabled=false;});const before=await page.evaluate(()=>mailboxFixture.mutations);await page.getByRole('button',{name:'刷新信箱'}).click();await page.getByText('“Event 升为 Scene”尚未开启。已有信箱和草稿会保留。').waitFor();
- await page.getByRole('button',{name:/event_third/}).click();assert(await detail.getByRole('button',{name:'升为 Scene',exact:true}).isDisabled());assert(await detail.getByRole('button',{name:'移出信箱',exact:true}).isDisabled());assert.equal(await page.evaluate(()=>mailboxFixture.mutations),before);
- await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/event-mailbox-mobile.png',fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'mobile has no horizontal overflow');
- assert.deepEqual(errors,[]);console.log('PASS mailbox synthetic browser: automatic candidates, pagination, full evidence, cues/draft, dirty guard, failure preservation, stale revision, promotion, removal, disabled opt-in, mobile');
+ await page.locator('.mailbox-card-heading').first().waitFor();assert.equal(await page.locator('textarea').count(),0);assert.equal(await page.locator('.mailbox-card-content').count(),0);
+ await page.getByRole('button',{name:/event_synthetic/}).click();await page.locator('.mailbox-quote').waitFor();
+ await page.getByRole('button',{name:/查看原文/}).click();await page.locator('.mailbox-evidence-list').waitFor();assert.match(await page.locator('.mailbox-evidence-list').textContent(),/Exact original evidence/);
+ await page.getByRole('button',{name:'想留下',exact:true}).click();await page.getByText('1 件已留下，等待 AI 书写。').waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.promoteCalls),0);
+ await page.getByRole('button',{name:/^已留下/}).click();await page.getByRole('button',{name:/event_synthetic/}).click();await page.getByRole('button',{name:'重新决定',exact:true}).click();await page.getByText('1 件已放回待决定。').waitFor();
+ await page.getByRole('button',{name:/^待决定/}).click();await page.getByRole('button',{name:'继续读取',exact:true}).click();await page.getByRole('button',{name:'继续读取',exact:true}).click();
+ await page.getByRole('button',{name:'批量操作',exact:true}).click();await page.getByLabel('全选已加载候选').check();await page.getByRole('button',{name:'批量不留',exact:true}).click();await page.getByText('3 件已标为不留。').waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.promoteCalls),0);
+ await page.getByRole('button',{name:/^未保留/}).click();await page.getByRole('button',{name:/event_synthetic/}).click();await page.getByRole('button',{name:'重新决定',exact:true}).click();await page.getByText('1 件已放回待决定。').waitFor();
+ await page.getByRole('button',{name:/^待决定/}).click();await page.getByRole('button',{name:/event_synthetic/}).click();await page.locator('.mailbox-quote').waitFor();
+ await page.evaluate(()=>{
+  const seed=mailboxFixture.rows.get('event_synthetic');
+  seed.event.document.body_md=Array(12).fill('这是一段用于验证阅读滚动的合成 Event 正文，原文和内容都不会来自真实实例。').join('\n\n');
+  for(let index=0;index<8;index++){const item=structuredClone(seed);item.event_id='event_scroll_'+index;item.title='合成候选 '+(index+1);item.status='pending';mailboxFixture.rows.set(item.event_id,item);}
+ });
+ await page.getByRole('button',{name:'刷新信箱'}).click();
+ for(let index=0;index<8;index++)await page.getByRole('button',{name:'继续读取',exact:true}).click();
+ // Collapse and reopen to read the updated synthetic body.
+ await page.getByRole('button',{name:'收起',exact:true}).click();await page.getByRole('button',{name:/event_synthetic/}).click();await page.locator('.mailbox-original').waitFor();
+ const scroll=await page.evaluate(()=>{
+  const list=document.querySelector('.mailbox-candidates'),reader=document.querySelector('.mailbox-detail-panel');
+  const before=list.getBoundingClientRect();list.scrollTop=180;reader.scrollTop=180;
+  return {list:list.scrollTop,reader:reader.scrollTop,outer:window.scrollY,top:before.top,after:list.getBoundingClientRect().top,pageHeight:document.querySelector('.mailbox-layout').getBoundingClientRect().height,viewport:innerHeight};
+ });
+ assert(scroll.list>0&&scroll.reader>0,'Both panes scroll independently');assert.equal(scroll.outer,0);assert.equal(scroll.top,scroll.after);assert.equal(scroll.pageHeight,scroll.viewport);
+ await page.evaluate(()=>{document.querySelector('.mailbox-candidates').scrollTop=0;document.querySelector('.mailbox-detail-panel').scrollTop=0;});
+ await mkdir('../tmp/mailbox-review',{recursive:true});
+ await page.screenshot({path:'../tmp/mailbox-review/desktop.png',fullPage:true});
+ await page.setViewportSize({width:390,height:844});await page.screenshot({path:'../tmp/mailbox-review/mobile.png',fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'No mobile horizontal overflow');
+ await page.evaluate(()=>{mailboxFixture.enabled=false;});const before=await page.evaluate(()=>mailboxFixture.mutations);await page.getByRole('button',{name:'刷新信箱'}).click();await page.getByText('“Event 升为 Scene”尚未开启。已有决定会保留。').waitFor();assert(await page.getByRole('button',{name:'批量操作',exact:true}).isDisabled());assert.equal(await page.evaluate(()=>mailboxFixture.mutations),before);
+ assert.deepEqual(errors,[]);console.log('PASS browser: collapsed/expanded cards, original evidence, decisions only, retained/removed tabs, batch, restore, disabled feature, mobile layout');
 }finally{await browser?.close();server.kill('SIGTERM');}

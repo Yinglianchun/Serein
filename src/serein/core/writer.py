@@ -41,7 +41,7 @@ class Writer:
         with self.store.transaction():
             # Obtain the write lock before checking receipt/revision state.
             self.store.conn.execute("UPDATE write_receipts SET operation_id=operation_id WHERE 0")
-            if action in {"promote_event", "mailbox_select", "mailbox_draft", "mailbox_remove"} and (self.promotion_policy is None or not self.promotion_policy(self.store)):
+            if action in {"promote_event", "mailbox_select", "mailbox_restore", "mailbox_draft", "mailbox_remove"} and (self.promotion_policy is None or not self.promotion_policy(self.store)):
                 raise ValueError("Event to Scene promotion is disabled")
             old = self.store.conn.execute("SELECT * FROM write_receipts WHERE operation_id=?", (operation_id,)).fetchone()
             if old:
@@ -50,6 +50,7 @@ class Writer:
                 return json.loads(old["result_json"])
             from .event_mailbox import mutate
             methods = {"mailbox_select": lambda r: mutate(self.store,r,"select"),
+                       "mailbox_restore": lambda r: mutate(self.store,r,"restore"),
                        "mailbox_draft": lambda r: mutate(self.store,r,"draft"),
                        "mailbox_remove": lambda r: mutate(self.store,r,"remove"),
                        "save": self._save, "promote_event": self._promote_event,
