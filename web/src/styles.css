@@ -4904,6 +4904,20 @@ label:has(input:focus-visible) {
   color: #bec8c3;
   font-family: var(--font-editorial-cjk);
 }
+.darkroom-letter-status { display: inline-flex; align-items: center; gap: 5px; }
+.darkroom-letter-sealed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 64px 16px;
+  color: #96a19c;
+  text-align: center;
+  font-family: var(--font-editorial-cjk);
+}
+.darkroom-open-room__page > .darkroom-letter-sealed p { margin: 0; color: #d8dfdb; }
+.darkroom-letter-sealed time { font-size: 14px; }
+.darkroom-letter-sealed small { font-size: 12px; line-height: 1.7; }
 .darkroom-open-room__page > div p {
   margin: 0 0 28px;
   color: #bec8c3;

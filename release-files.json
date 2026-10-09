@@ -502,6 +502,7 @@
   "web/tests/persona-rain-preview.html",
   "web/tests/persona-seen.test.mjs",
   "web/tests/public.test.mjs",
+  "web/tests/darkroom.dom.mjs",
   "web/tests/source-time.test.mjs",
   "web/tests/together-date.test.mjs",
   "web/tests/webAuth.test.mjs",

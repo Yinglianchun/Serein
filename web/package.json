@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "node --test tests/*.test.mjs",
-    "test:mailbox-dom": "node tests/event-mailbox.dom.mjs"
+    "test:mailbox-dom": "node tests/event-mailbox.dom.mjs",
+    "test:darkroom-dom": "node tests/darkroom.dom.mjs"
   },
   "dependencies": {
     "@fontsource/noto-serif-sc": "^5.2.8",

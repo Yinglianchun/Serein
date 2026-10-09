@@ -69,7 +69,9 @@ function mergeSavedDiaryState(liveEntries, savedEntries) {
     const local = savedById.get(entry.id);
     if (!local) return entry;
     if (Number(local.revision || 0) > Number(entry.revision || 0)) {
-      return { ...entry, ...local, comments: entry.comments, sourceKind: entry.sourceKind };
+      return { ...entry, ...local, comments: entry.comments, sourceKind: entry.sourceKind,
+        darkroom: entry.darkroom, locked: entry.locked, unlockAt: entry.unlockAt,
+        ...(entry.locked ? {body: [], excerpt: entry.excerpt} : {}) };
     }
     return entry;
   });
