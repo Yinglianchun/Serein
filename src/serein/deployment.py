@@ -15,7 +15,7 @@ DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': 
 DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'narrative_nightly_organize':False, 'event_to_scene':False, 'current_time':False, 'image_transcription_async':False, 'image_eyes':False}
 DEFAULT_FEATURES.update(dream_read=False, dream_morning=False, memory_candidates=False, pipeline_agent=False)
 DEFAULT_CLOCK = {'timezone':'Asia/Shanghai'}
-DEFAULT_RESUME = {'mode':'command', 'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
+DEFAULT_RESUME = {'mode':'command', 'command_enabled':True, 'mcp_enabled':False, 'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
                   'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
 DEFAULT_DOMAINS = [
     {'key':'relationship','label':'关系','description':'身份、称呼、承诺、边界与沟通方式','policy':'normal'},
@@ -40,6 +40,11 @@ def read_from_store(store):
     if ('image_transcription_async' not in saved_features and 'image_eyes' not in saved_features
             and saved_features.get('image_transcription')):
         features['image_eyes'] = True
+    # Old instances keep their selected entry point; explicit switches take precedence.
+    saved_resume = saved.get('resume', {})
+    resume = {key:saved_resume.get(key, value) for key,value in DEFAULT_RESUME.items()}
+    for entry in ('command', 'mcp'):
+        resume[entry + '_enabled'] = saved_resume.get(entry + '_enabled', saved_resume.get('mode', 'command') == entry)
     legacy_mode = 'legacy' if any(saved.get('assignments', {}).get(role) for role in ('track_router','event_curator','event_writer')) else 'agent'
     return {'settings_version':saved.get('settings_version',0), 'identity': {**DEFAULT_IDENTITY, **saved.get('identity', {})},
             'upstream': {**DEFAULT_UPSTREAM, **saved.get('upstream', {})},
@@ -47,7 +52,7 @@ def read_from_store(store):
             'features': features,
             'clock': {**DEFAULT_CLOCK, **saved.get('clock', {})},
             'recall': saved.get('recall', {}),
-            'resume': {key:saved.get('resume', {}).get(key, value) for key,value in DEFAULT_RESUME.items()},
+            'resume': resume,
             'models': saved.get('models', []), 'upstreams': saved.get('upstreams', []),
             'tagging': saved.get('tagging', {'domains': DEFAULT_DOMAINS}),
             'tagging_version': saved.get('tagging_version', 1),
@@ -134,6 +139,13 @@ def save_settings(database, changes):
     resume_changes=changes.get('resume') or {}
     if 'mode' in resume_changes and resume_changes['mode'] not in ('command','mcp'):
         raise ValueError('Resume mode must be command or mcp')
+    for entry in ('command', 'mcp'):
+        key = entry + '_enabled'
+        if key in resume_changes and type(resume_changes[key]) is not bool:
+            raise ValueError('Resume entry switches must be booleans')
+        # Legacy clients still select one entry point. Explicit new flags win.
+        if 'mode' in resume_changes:
+            resume_changes.setdefault(key, resume_changes['mode'] == entry)
     if resume_changes.get('recent_originals') is True:
         resume_changes['pending_originals']=False
     elif resume_changes.get('pending_originals') is True:

@@ -165,9 +165,10 @@ def test_disabled_and_oversized_resume_do_not_call_upstream(chat, monkeypatch):
     assert response.status_code==413 and not payloads
 
 
-def test_resume_does_not_require_embedding_and_tool_round_keeps_context(chat, monkeypatch):
+@pytest.mark.parametrize('mcp', [False, True])
+def test_resume_does_not_require_embedding_and_tool_round_keeps_context(chat, monkeypatch, mcp):
     settings, client, payloads = chat
-    save_settings(settings.database, {'upstream':{'memory_enabled':True}})
+    save_settings(settings.database, {'upstream':{'memory_enabled':True}, 'resume':{'mcp_enabled':mcp}})
     monkeypatch.setattr('serein.configured_models.memory_ready',lambda *_:False)
     tool_message = {'role':'assistant','content':None,'tool_calls':[{'id':'call1','type':'function','function':{'name':'lookup','arguments':'{}'}}]}
     async def complete(model, payload, **kwargs):
@@ -266,3 +267,36 @@ def test_streaming_resume_forwards_full_context_and_retains_after_success(chat, 
     assert response.headers['x-serein-resume']=='loaded'
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('select count(*) from chat_resume_contexts').fetchone()[0]==1
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+@pytest.mark.parametrize('command,mcp', [(False, False), (True, False), (False, True), (True, True)])
+def test_resume_command_entry_matrix_and_single_injection(chat, enabled, command, mcp):
+    settings, client, payloads = chat
+    save_settings(settings.database, {'features':{'resume':enabled}, 'resume':{
+        'command_enabled':command, 'mcp_enabled':mcp}})
+    messages = [{'role':'user','content':'/resume Continue here'}]
+    response = post(client, messages, window_id='matrix', memory=False)
+    if not (enabled and command):
+        assert response.status_code == 409
+        assert not payloads
+        return
+    assert response.status_code == 200, response.text
+    for _ in range(2):
+        assert post(client, messages, window_id='matrix', memory=False).status_code == 200
+        serialized = json.dumps(payloads[-1])
+        assert serialized.count('Serein resume:') == 1
+        assert serialized.count('Full shadow marker') == 1
+        assert serialized.count('long prose ') == 1800
+    # Enabling MCP does not load anything in an unrelated ordinary request.
+    ordinary = [{'role':'user','content':'An unrelated ordinary message'}]
+    assert post(client, ordinary, window_id='other', memory=False).headers['x-serein-resume'] == 'none'
+    assert payloads[-1]['messages'] == ordinary
+    followup = messages + [{'role':'assistant','content':'Synthetic reply'}, {'role':'user','content':'Continue'}]
+    assert post(client, followup, window_id='matrix', memory=False).headers['x-serein-resume'] == 'loaded'
+    assert json.dumps(payloads[-1]).count('Serein resume:') == 1
+    # Disabling only the command stops frozen context, without changing MCP.
+    save_settings(settings.database, {'resume':{'command_enabled':False}})
+    response = post(client, followup, window_id='matrix', memory=False)
+    assert response.status_code == 200 and response.headers['x-serein-resume'] == 'none'
+    assert 'Full shadow marker' not in json.dumps(payloads[-1])

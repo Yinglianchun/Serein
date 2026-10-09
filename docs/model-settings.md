@@ -83,7 +83,7 @@ Embedding 使用 `/embeddings`，Reranker 使用 `/rerank`；选择相应用途�
 - API Key：安装时生成的完整 Gateway Key，输入框不加 `Bearer` 前缀。可从安装输出、`deploy/connection-guide.txt` 或 `deploy/secrets/api-token` 读取。网页登录密码和模型厂商的 Key 都不用于这里。
 - Model：从 `GET /v1/models` 拉取聊天模型。`id` 和 `name` 均为“上游名/别名或模型号”，`owned_by` 是上游名称；向量及重排模型不在其中。
 - 在客户端添加请求头 `X-Serein-Window-ID`，值为当前会话的独立 ID；同一窗口保持不变，新建窗口换值。客户端支持会话 ID 变量时可使用它。旧客户端的 `X-Ombre-Session-Id` 也可兼容。
-- 不填时回退到 `main`，聊天、记忆及已开启的会话功能仍可运行，但这些请求共用轮次、状态与召回冷却，不能识别新窗口。全局填写一个固定请求头也不能区分窗口。开窗续接需显式操作：命令方式发送 `/resume`；MCP 方式调用 `resume` 并读完全部分页。两种方式在功能设置二选一，要带入的内容在侧栏“换窗”页选择。
+- 不填时回退到 `main`，聊天、记忆及已开启的会话功能仍可运行，但这些请求共用轮次、状态与召回冷却，不能识别新窗口。全局填写一个固定请求头也不能区分窗口。开窗续接需显式操作：命令方式发送 `/resume`；MCP 方式调用 `resume` 并读完全部分页。两个入口在功能设置独立开关，可同时开启，要带入的内容在侧栏“换窗”页选择。
 
 远程 MCP 的服务器 URL 填 `https://你的域名/serein/mcp`，传输类型选 **Streamable HTTP**。支持 OAuth 的客户端（包括官端自定义 MCP）把身份验证选为 **OAuth**；浏览器打开 Serein 授权页后，手动输入 Gateway Key 并确认。OAuth 需要 HTTPS 域名，同机 localhost 例外；不要把 Key 写进 URL、回调地址或客户端名称。
 

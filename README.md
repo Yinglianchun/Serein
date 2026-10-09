@@ -183,7 +183,7 @@ Track 不设按时间删除的期限。归线默认回看最近三天内实际�
 
 窗影由当前聊天主模型在换窗前明确写下，分成“我眼中的你”“我眼中的自己”和“这一窗发生的事”。醒来页的两张画像只读展示最新窗影的前两节，长文可展开，不需要手动编辑。它保存这一窗的视角，不生成 Scene，也不进入普通向量召回；关闭窗影功能会停用写入工具，但不会删除已有内容。
 
-开窗续接是另一项独立开关，默认关闭。在侧栏“换窗”页选择最新窗影、最近 10 条 Event、收藏的 Scene、自选 Event／Scene，以及最近或尚未整理的原话。续接方式在功能设置二选一：默认在经过 Serein 网关的聊天中发送 `/resume`；MCP 模式则让客户端调用只读 `resume` 工具，并停用聊天 `/resume`。新窗口使用独立的 `X-Serein-Window-ID`。换窗页可分页预览，读完全部资料后复制；资料仍来自当前实例。只有勾选的材料在明确触发后进入上下文，不会额外运行语义召回。
+开窗续接是另一项独立开关，默认关闭。在侧栏“换窗”页选择最新窗影、最近 10 条 Event、收藏的 Scene、自选 Event／Scene，以及最近或尚未整理的原话。两个续接入口在功能设置独立开关，可同时开启：默认在经过 Serein 网关的聊天中发送 `/resume`；开启 MCP 入口后，客户端也可调用只读 `resume` 工具。已通过指令加载本轮资料时，无须再次调用工具。新窗口使用独立的 `X-Serein-Window-ID`。换窗页可分页预览，读完全部资料后复制；资料仍来自当前实例。只有勾选的材料在明确触发后进入上下文，不会额外运行语义召回。
 
 如果聊天界面、后端和换窗动作都由自己管理，还可以读取同一份结构化续接资料，通过 Codex App Server 新建 thread 并预装所选内容。这个示例不会让 Serein 网页直接控制 Codex，也不改写 Codex 会话文件；见 [Codex 换窗包接入说明](docs/codex-continuity-packet.md) 与 [示例目录](examples/codex-continuity-packet/README.md)。
 
@@ -285,7 +285,7 @@ bash scripts/one_click.sh
 
 OAuth 按规范只在 HTTPS 域名（或本机 localhost）上授权；直接使用公网 IP 的 HTTP 入口时，使用支持自定义请求头的静态 Key 方式。MCP OAuth 会自动发现授权端点，使用 PKCE；Gateway Key 只输入 Serein 自己的授权页，不放进服务器 URL、回调 URL或客户端名称。静态 MCP 与聊天 API 继续共用 Gateway Key，可从安装输出、`deploy/connection-guide.txt` 或 `deploy/secrets/api-token` 读取。主菜单 6 更换 Key 后，旧静态 Key 和已发放的 OAuth code/token 都会失效。模型厂商的 API Key 仅填在 **设置 → 模型**。
 
-新窗口需要独立的 `X-Serein-Window-ID`；未填写时使用默认会话，共用召回冷却。开启开窗续接后，可自选带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”互斥，打开一个会关闭另一个。命令方式在经过网关的聊天中发送 `/resume`，也可以在指令后接上想聊的话；MCP 方式调用 `resume` 并读完全部分页。两种方式二选一，侧栏“换窗”可预览资料。[模型与客户端配置](docs/model-settings.md)
+新窗口需要独立的 `X-Serein-Window-ID`；未填写时使用默认会话，共用召回冷却。开启开窗续接后，可自选带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”互斥，打开一个会关闭另一个。命令方式在经过网关的聊天中发送 `/resume`，也可以在指令后接上想聊的话；MCP 方式调用 `resume` 并读完全部分页。两个入口可独立开启或同时开启，侧栏“换窗”可预览资料。[模型与客户端配置](docs/model-settings.md)
 
 ### 导入、备份与升级
 
@@ -332,7 +332,7 @@ OAuth 按规范只在 HTTPS 域名（或本机 localhost）上授权；直接使
 | 照顾备忘 | `memo_create`、`memo_list`、`memo_update` | 可写实例且开启备忘；创建、查询、修改安排或标完成，独立于 Scene / Event |
 | 读写窗影 | `window_shadow_read`、`window_shadow_write` | 开启窗影后按倒数序号读取；`index="1,3,5"` 一次读多篇，写入需可写实例 |
 | 读梦境 | `dream_read` | 开启梦境读取；默认最新一篇，可用 `index="1,3,5"` 读多篇，不消耗晨间注入 |
-| 读取续接资料 | `resume` | 开启开窗续接并选择 MCP 方式；只读，按游标读完全部资料；聊天 `/resume` 同时停用 |
+| 读取续接资料 | `resume` | 开启开窗续接及 MCP 入口；只读，按游标读完全部资料；可与网关 `/resume` 同时开启 |
 | 主模型读写叙事卷 | `narrative_volume` | 可写实例且开启对应功能；查卷、读材料、预览、确认保存，不另调用 Writer 模型 |
 
 **`/resume` 是经过聊天网关的指令，`resume` 是 MCP 方式下的只读工具；两者互斥。** 参数、证据与分页规则见 [功能与工具约定](docs/public-feature-contracts.md)。
