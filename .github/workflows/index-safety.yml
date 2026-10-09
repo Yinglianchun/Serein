@@ -25,6 +25,7 @@ jobs:
           python -m pytest -q tests/test_index_safety.py tests/test_embedding.py
           tests/test_vectors.py tests/test_live_index_worker.py tests/test_public_settings.py
           tests/test_chat_resume.py tests/test_resume_shadows.py
+          tests/test_event_mailbox.py tests/test_writer.py tests/test_http_mcp.py
           tests/test_passages_entities.py tests/test_token_windows.py tests/test_release_boundaries.py tests/test_file_lock.py tests/test_link_candidates_api.py
       - run: python -m compileall -q src
       - run: npm ci --ignore-scripts
@@ -32,5 +33,7 @@ jobs:
       - run: npm run build
         working-directory: web
       - run: npm test
+        working-directory: web
+      - run: npm run test:mailbox-dom
         working-directory: web
       - run: python scripts/release.py /tmp/serein-public.zip

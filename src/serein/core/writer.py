@@ -41,14 +41,18 @@ class Writer:
         with self.store.transaction():
             # Obtain the write lock before checking receipt/revision state.
             self.store.conn.execute("UPDATE write_receipts SET operation_id=operation_id WHERE 0")
-            if action == "promote_event" and (self.promotion_policy is None or not self.promotion_policy(self.store)):
+            if action in {"promote_event", "mailbox_select", "mailbox_draft", "mailbox_remove"} and (self.promotion_policy is None or not self.promotion_policy(self.store)):
                 raise ValueError("Event to Scene promotion is disabled")
             old = self.store.conn.execute("SELECT * FROM write_receipts WHERE operation_id=?", (operation_id,)).fetchone()
             if old:
                 if old["request_sha256"] != stamp:
                     raise Conflict("operation_id was already used with different arguments")
                 return json.loads(old["result_json"])
-            methods = {"save": self._save, "promote_event": self._promote_event,
+            from .event_mailbox import mutate
+            methods = {"mailbox_select": lambda r: mutate(self.store,r,"select"),
+                       "mailbox_draft": lambda r: mutate(self.store,r,"draft"),
+                       "mailbox_remove": lambda r: mutate(self.store,r,"remove"),
+                       "save": self._save, "promote_event": self._promote_event,
                        "state": self._state, "evidence": self._evidence,
                        "propose": self._propose, "review": self._review,
                        "diary_save": self._diary_save, "diary_comment": self._diary_comment, "diary_delete": self._diary_delete}
@@ -138,6 +142,11 @@ class Writer:
         return {"id": document_id, "kind": kind, "revision": doc["revision"], "status": "saved", **mark}
 
     def _promote_event(self, request):
+        from .event_mailbox import check_promotion, complete
+        from ..compat.scenes import Scenes
+        mailbox_row = check_promotion(self.store, request)
+        saved_cues = json.loads(mailbox_row["payload_json"]).get("draft", {}).get("cues", []) if mailbox_row else []
+        cues = Scenes._cues(request["cues"]) if "cues" in request else (Scenes._cues(saved_cues) if saved_cues else [])
         event = self._current(request["event_id"], request["expected_revision"])
         if event["kind"] != "event" or event["lifecycle"] != "active":
             raise Conflict("Only an active Event can become a Scene")
@@ -155,7 +164,7 @@ class Writer:
         domain = event["metadata"].get("canonical_domain") or "general"
         scene = self.store.create(scene_id, "scene", title, body,
                                   metadata={"object_kind": "scene", "memory_value_source": "authored_scene",
-                                            "write_contract": "event-to-scene-v1", "scene_cues": [],
+                                            "write_contract": "event-to-scene-v1", "scene_cues": cues,
                                             "canonical_domain": domain, "domain": [domain],
                                             "date": event["metadata"].get("local_date") or "",
                                             "created": now(), "promoted_from_event": {"id": event["id"],
@@ -179,7 +188,8 @@ class Writer:
                                             (encode(hint), row["id"]))
         self._dirty(scene_id)
         return {"id": scene_id, "kind": "scene", "revision": scene["revision"], "status": "saved",
-                "source_event_id": event["id"], "event_surface": self.store.surface_state(event["id"])}
+                "source_event_id": event["id"], "event_surface": self.store.surface_state(event["id"]),
+                **complete(self.store, mailbox_row, scene_id)}
 
     def _state(self, request):
         doc = self._current(request["document_id"], request["expected_revision"])

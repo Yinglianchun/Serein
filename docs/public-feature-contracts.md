@@ -148,6 +148,8 @@ Writer 正文通常以 500 字为软预算，复杂经历可适当超出；host 
 
 设置 → 功能中的“Event 升为 Scene”（features.event_to_scene）默认关闭。保存后即时启停工具；关闭后拒绝旧客户端继续调用，保留已有 Event 和 Scene。可写实例开启后的 `promote_event_to_scene` 供主窗口在读过 Event 及当前绑定原话后，提交自己编辑的标题和正文。工具核对 Event 当前版本，以新 ID 保存 Scene，沿用 Event 的全部有效原话绑定，并记录来源 Event ID、版本和正文哈希；Event 原件不改写。Scene 覆盖全部原话后，原 Event 停止自动浮现；已有修订箱待处理提示中涉及该 Event 的项撤出，后续扫描也跳过它，Scene 仍按自己的材料资格参与扫描。重复操作 ID 返回原回执；另一操作再次转换同一 Event 会报冲突，后续修改应编辑已生成的 Scene。
 
+Event 晋升可在同一事务内写入 Scene cues，沿用 Scene 的校验与索引。省略 cues 的旧调用继续有效。独立的精选信箱只记录明确选入的 Event，保存的草稿不是已发布 Scene；晋升同时完成队列，不增加模型调用或后台执行。待处理项要求核对 Event 和信箱的当前版本，过期编辑不能覆盖新草稿。收藏、换窗选材和既有 Scene 候选审核均不构成选入信箱。详见[信箱协议](event-mailbox.md)。
+
 宿主改为公开版数据库和模型 API：只处理显式导入或归档的原话。Track 卡不设删除 TTL；归线默认读取同一 source、同一 runtime／workspace 边界下，在配置回看天数内实际归入过原话的 Track。再次使用会刷新最近归线锚点；超期卡不再参与 Router，但仍保存在库中。额外原文请求限定 declared Track / 可见会话 / 六个历史 unit，且仅一次。图片通过已归档的 URL / data URI 交给图片转录模型或 Curator；Writer 初写及修复只读已绑定的转录，不附原图。不读取私有聊天宿主的图片目录。各角色模型留空时，在设置页打开 Agent 配置弹窗，按说明接入后领取与提交任务；叙事卷 Writer 有独立 runner 引导。原先短版任务协议中尚未完成的任务保留为旧记录，新协议重新从未处理原话开始，已结算正文不重写。
 
 执行方式与配置见 [自动摘要](automatic-events.md)、[扩展接口](extensions.md)。

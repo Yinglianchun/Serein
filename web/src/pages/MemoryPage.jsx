@@ -1,3 +1,4 @@
+import { EventMailboxSelect } from "../components/EventMailboxSelect.jsx";
 import { identityName, instanceSettings } from "../storage/instanceStore.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -355,6 +356,7 @@ function FactEventDetail({ item, onClose, onRevised, onStatusChanged, onDeleted,
       ) : item.item_type === "event" ? (
         <div className="scene-detail__body"><p>{item.body}</p></div>
       ) : null}
+      {item.item_type === "event" && <EventMailboxSelect eventId={item.item_id} disabled={state === "saving" || editing} />}
       <section className="fact-event-sources">
         <header><h3>原文</h3><span>{item.source_refs?.length || 0}</span></header>
         {(item.source_refs || []).map((source) => (

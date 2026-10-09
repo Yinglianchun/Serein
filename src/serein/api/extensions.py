@@ -33,11 +33,16 @@ def routes(application, auth):
             inspect.signature(tools[name]).bind(**arguments)
         except TypeError as exc:
             raise HTTPException(400, str(exc)) from None
+        from ..core.store import Conflict
         from ..extensions.handoff import ResumeLimit
         try:
             if inspect.iscoroutinefunction(tools[name]):
                 return await tools[name](**arguments)
             return await run_in_threadpool(tools[name], **arguments)
+        except Conflict as exc:
+            if name in {'promote_event_to_scene','save_event_mailbox_draft'}:
+                raise HTTPException(409,str(exc)) from None
+            raise
         except ResumeLimit as exc:
             raise HTTPException(413,str(exc)) from None
 

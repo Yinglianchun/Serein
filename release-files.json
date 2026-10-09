@@ -552,5 +552,20 @@
   "tests/test_manual_recall_fallback.py",
   "src/serein/recall/index_safety.py",
   "tests/test_index_safety.py",
-  "web/tests/index-safety.test.mjs"
+  "web/tests/index-safety.test.mjs",
+  "docs/event-mailbox.md",
+  "src/serein/core/event_mailbox.py",
+  "src/serein/api/event_mailbox.py",
+  "tests/test_event_mailbox.py",
+  "web/server/eventMailboxBridge.mjs",
+  "web/src/components/EventMailboxSelect.jsx",
+  "web/src/pages/EventMailboxPage.jsx",
+  "web/src/pages/event-mailbox-page.css",
+  "web/src/utils/eventMailbox.js",
+  "web/tests/event-mailbox.test.mjs",
+  "web/tests/event-mailbox-preview.html",
+  "web/tests/event-mailbox-preview.jsx",
+  "web/tests/event-mailbox.browser.mjs",
+  "web/tests/event-mailbox-fixture.js",
+  "web/tests/event-mailbox.dom.mjs"
 ]
