@@ -662,3 +662,182 @@ def test_legacy_models_explicit_null_clears_tokenizer_but_omission_preserves_it(
     save_settings(settings.database,SettingsPatch(models=[model]).model_dump(exclude_none=True))
     save_settings(settings.database,SettingsPatch(models=[cleared]).model_dump(exclude_none=True))
     assert read_settings(settings.database)['models'][0].get('tokenizer') is None
+
+
+def reasoning_tool_message(call_id, reasoning=None, *, arguments='{}', name='lookup'):
+    call = {'type':'function', 'function':{'name':name, 'arguments':arguments}}
+    if call_id is not None:
+        call['id'] = call_id
+    message = {'role':'assistant', 'content':None, 'tool_calls':[call]}
+    if reasoning is not None:
+        message['reasoning_content'] = reasoning
+    return message
+
+
+def restore_reasoning(context, *messages, session='window-a'):
+    context._restore_cached_reasoning_content(session, [*messages, {'role':'tool', 'content':'synthetic result'}])
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_reasoning_cache_repeated_arguments_keep_each_call_original(reverse):
+    context = ClientContext()
+    first = reasoning_tool_message('call-a', 'original A')
+    second = reasoning_tool_message('call-b', 'original B')
+    for message in (first, second):
+        context._update_reasoning_cache('window-a', message)
+    missing = [reasoning_tool_message('call-a'), reasoning_tool_message('call-b')]
+    restore_reasoning(context, *reversed(missing) if reverse else missing)
+    assert [message['reasoning_content'] for message in missing] == ['original A', 'original B']
+
+
+@pytest.mark.parametrize('replayed_id', ['rewritten-id', None, ''])
+def test_reasoning_cache_unique_call_allows_rewritten_or_missing_id(replayed_id):
+    context = ClientContext()
+    context._update_reasoning_cache('window-a', reasoning_tool_message('original-id', 'original', arguments='{"a":1,"b":2}'))
+    replay = reasoning_tool_message(replayed_id, arguments=' { "b": 2, "a": 1 } ')
+    restore_reasoning(context, replay)
+    assert replay['reasoning_content'] == 'original'
+
+
+@pytest.mark.parametrize('cached_ids', [('call-a','call-b'), (None,None), ('reused','reused')])
+@pytest.mark.parametrize('replayed_id', ['rewritten-id', None])
+def test_reasoning_cache_ambiguous_cache_never_guesses(cached_ids, replayed_id):
+    context = ClientContext()
+    for call_id, text in zip(cached_ids, ('original A','original B')):
+        context._update_reasoning_cache('window-a', reasoning_tool_message(call_id, text))
+    replay = reasoning_tool_message(replayed_id)
+    restore_reasoning(context, replay)
+    assert 'reasoning_content' not in replay
+
+
+@pytest.mark.parametrize('same_id', [False, True])
+def test_reasoning_cache_duplicate_incoming_calls_do_not_share_one_entry(same_id):
+    context = ClientContext()
+    context._update_reasoning_cache('window-a', reasoning_tool_message('call-a', 'original'))
+    first = reasoning_tool_message('call-a' if same_id else 'rewritten-a')
+    second = reasoning_tool_message('call-a' if same_id else 'rewritten-b')
+    restore_reasoning(context, first, second)
+    assert 'reasoning_content' not in first and 'reasoning_content' not in second
+
+
+def test_reasoning_cache_exact_id_wins_without_lending_to_unknown_same_arguments():
+    context = ClientContext()
+    context._update_reasoning_cache('window-a', reasoning_tool_message('call-a', 'original A'))
+    exact = reasoning_tool_message('call-a')
+    unknown = reasoning_tool_message('rewritten-b')
+    restore_reasoning(context, exact, unknown)
+    assert exact['reasoning_content'] == 'original A'
+    assert 'reasoning_content' not in unknown
+
+
+def test_reasoning_cache_known_id_with_changed_arguments_does_not_fall_back():
+    context = ClientContext()
+    context._update_reasoning_cache('window-a', reasoning_tool_message('call-a', 'original A', arguments='{"x":1}'))
+    context._update_reasoning_cache('window-a', reasoning_tool_message('call-b', 'original B', arguments='{"x":2}'))
+    altered = reasoning_tool_message('call-a', arguments='{"x":2}')
+    restore_reasoning(context, altered)
+    assert 'reasoning_content' not in altered
+
+
+def test_reasoning_cache_reused_id_is_ambiguous_even_with_exact_match():
+    context = ClientContext()
+    for text in ('original A','original B'):
+        context._update_reasoning_cache('window-a', reasoning_tool_message('reused', text))
+    replay = reasoning_tool_message('reused')
+    restore_reasoning(context, replay)
+    assert 'reasoning_content' not in replay
+
+
+@pytest.mark.parametrize('changed', ['swapped_ids','partial_batch','malformed'])
+def test_reasoning_cache_does_not_restore_changed_or_malformed_batches(changed):
+    context = ClientContext()
+    batch = reasoning_tool_message('call-a', 'batch original')
+    batch['tool_calls'].extend(reasoning_tool_message('call-b')['tool_calls'])
+    context._update_reasoning_cache('window-a', batch)
+    replay = json.loads(json.dumps(batch))
+    replay.pop('reasoning_content')
+    if changed == 'swapped_ids':
+        replay['tool_calls'].reverse()
+    elif changed == 'partial_batch':
+        replay['tool_calls'].pop()
+    else:
+        replay['tool_calls'].append(None)
+    restore_reasoning(context, replay)
+    assert 'reasoning_content' not in replay
+
+
+def test_reasoning_cache_preserves_existing_fields_and_deepcopies_details():
+    context = ClientContext()
+    original = reasoning_tool_message('call-a', 'cached original')
+    original['reasoning_details'] = [{'type':'reasoning.text','text':'cached detail'}]
+    context._update_reasoning_cache('window-a', original)
+    original['reasoning_details'][0]['text'] = 'changed after caching'
+    replay = reasoning_tool_message('call-a', 'client original')
+    restore_reasoning(context, replay)
+    assert replay['reasoning_content'] == 'client original'
+    assert replay['reasoning_details'][0]['text'] == 'cached detail'
+    replay['reasoning_details'][0]['text'] = 'changed after restoring'
+    again = reasoning_tool_message('call-a')
+    restore_reasoning(context, again)
+    assert again['reasoning_details'][0]['text'] == 'cached detail'
+
+
+def test_reasoning_cache_keeps_window_isolation_and_final_reply_cleanup():
+    context = ClientContext()
+    context._update_reasoning_cache('window-a', reasoning_tool_message('call-a', 'original'))
+    other_window = reasoning_tool_message('call-a')
+    restore_reasoning(context, other_window, session='window-b')
+    assert 'reasoning_content' not in other_window
+    context._update_reasoning_cache('window-a', {'role':'assistant','content':'final answer','reasoning_content':'final reasoning'})
+    after_final = reasoning_tool_message('call-a')
+    restore_reasoning(context, after_final)
+    assert 'reasoning_content' not in after_final
+    assert 'window-a' not in context.pending_tool_reasoning
+
+
+def test_proxy_repeated_same_tool_arguments_restore_originals_before_forwarding(deployment, monkeypatch):
+    settings, client = deployment
+    assert configure(client).is_success
+    forwarded = []
+    responses = [reasoning_tool_message('call-a', 'original A'), reasoning_tool_message('call-b', 'original B'),
+                 {'role':'assistant','content':'done'}]
+    async def complete(model, payload, **options):
+        forwarded.append(json.loads(json.dumps(payload)))
+        return {'choices':[{'message':responses[len(forwarded)-1]}]}
+    monkeypatch.setattr('serein.api.chat.complete', complete)
+    messages = [{'role':'user','content':'Perform the synthetic lookup twice.'}]
+    for index in range(3):
+        response = client.post('/v1/chat/completions', headers={'X-Serein-Window-ID':'repeat-test'},
+            json={'messages':messages,'tools':[{'type':'function','function':{'name':'lookup','parameters':{'type':'object'}}}]})
+        assert response.status_code == 200, response.text
+        assistant = response.json()['choices'][0]['message']
+        if index < 2:
+            assert assistant.pop('reasoning_content') == f'original {"AB"[index]}'
+            messages.extend([assistant, {'role':'tool','tool_call_id':f'call-{"ab"[index]}','content':'synthetic result'}])
+    assert [message['reasoning_content'] for message in forwarded[-1]['messages'] if message['role']=='assistant'] == [
+        'original A', 'original B']
+
+
+def test_reasoning_cache_call_without_reasoning_blocks_borrowing_another_call():
+    context = ClientContext()
+    context._update_reasoning_cache('window-a', reasoning_tool_message('call-a', 'original A'))
+    context._update_reasoning_cache('window-a', reasoning_tool_message('call-b'))
+    exact_without_reasoning = reasoning_tool_message('call-b')
+    rewritten = reasoning_tool_message('rewritten-id')
+    restore_reasoning(context, exact_without_reasoning)
+    restore_reasoning(context, rewritten)
+    assert 'reasoning_content' not in exact_without_reasoning
+    assert 'reasoning_content' not in rewritten
+    exact_original = reasoning_tool_message('call-a')
+    restore_reasoning(context, exact_original)
+    assert exact_original['reasoning_content'] == 'original A'
+
+
+def test_reasoning_cache_does_not_store_partially_malformed_tool_batches():
+    context = ClientContext()
+    malformed = reasoning_tool_message('call-a', 'must not be restored')
+    malformed['tool_calls'].append(None)
+    context._update_reasoning_cache('window-a', malformed)
+    replay = reasoning_tool_message('call-a')
+    restore_reasoning(context, replay)
+    assert 'reasoning_content' not in replay

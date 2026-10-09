@@ -1035,16 +1035,48 @@ class ClientContext:
         if not cache:
             return
 
-        restored = 0
+        # A function/argument signature is not a call identity: a tool may be
+        # called repeatedly with the same arguments during one continuation.
+        incoming = []
         for message in messages:
             if not isinstance(message, dict) or message.get("role") != "assistant":
                 continue
             signature = self._tool_call_signature(message)
-            if not signature:
-                continue
-            cached_message = cache.get(signature)
-            if not cached_message:
-                continue
+            call_ids = self._reasoning_tool_call_ids(message)
+            if signature and len(signature) == len(call_ids):
+                incoming.append((message, signature, call_ids))
+        known_ids = {
+            call_id
+            for entries in cache.values()
+            for entry in entries
+            for call_id in self._reasoning_tool_call_ids(entry)
+            if call_id
+        }
+
+        restored = 0
+        for message, signature, call_ids in incoming:
+            candidates = cache.get(signature, [])
+            exact = [entry for entry in candidates
+                     if all(call_ids) and self._reasoning_tool_call_ids(entry) == call_ids]
+            if exact:
+                # Reused IDs or duplicated incoming messages are ambiguous too.
+                if len(exact) != 1 or sum(
+                    other_ids == call_ids for _, _, other_ids in incoming
+                ) != 1:
+                    continue
+                cached_message = exact[0]
+            else:
+                # Some clients rewrite/drop IDs. Retain that compatibility only
+                # when the semantic signature is unique on BOTH sides.
+                if len(candidates) != 1 or sum(
+                    other_signature == signature for _, other_signature, _ in incoming
+                ) != 1:
+                    continue
+                cached_message = candidates[0]
+                cached_ids = self._reasoning_tool_call_ids(cached_message)
+                if any(call_id in known_ids and call_id != cached_id
+                       for call_id, cached_id in zip(call_ids, cached_ids)):
+                    continue
             restored_fields = []
             if not message.get("reasoning_content") and cached_message.get("reasoning_content"):
                 message["reasoning_content"] = cached_message["reasoning_content"]
@@ -1071,22 +1103,32 @@ class ClientContext:
         reasoning_details = assistant_message.get("reasoning_details")
         if not isinstance(reasoning_details, list):
             reasoning_details = []
-        if signature and (reasoning_content or reasoning_details):
+        if signature and len(signature) == len(self._reasoning_tool_call_ids(assistant_message)):
+            # Keep calls with no reasoning as ambiguity evidence too; otherwise
+            # a later replay could borrow another call's reasoning via fallback.
             cache = self.pending_tool_reasoning.setdefault(session_id, {})
-            cache[signature] = {
+            cache.setdefault(signature, []).append({
                 "reasoning_content": reasoning_content,
                 "reasoning_details": deepcopy(reasoning_details),
                 "tool_calls": deepcopy(assistant_message.get("tool_calls", [])),
-            }
-            logger.info(
-                "Gateway cached reasoning context for tool continuation | session=%s tool_calls=%s",
-                session_id,
-                list(signature),
-            )
+            })
+            if reasoning_content or reasoning_details:
+                logger.info(
+                    "Gateway cached reasoning context for tool continuation | session=%s tool_calls=%s",
+                    session_id,
+                    list(signature),
+                )
             return
 
         if not signature:
             self.pending_tool_reasoning.pop(session_id, None)
+
+    @staticmethod
+    def _reasoning_tool_call_ids(assistant_message: dict[str, Any]) -> tuple[str, ...]:
+        calls = assistant_message.get("tool_calls")
+        if not isinstance(calls, list) or not calls or any(not isinstance(call, dict) for call in calls):
+            return ()
+        return tuple(call.get("id") if isinstance(call.get("id"), str) else "" for call in calls)
 
     def _tool_call_signature(self, assistant_message: Any) -> tuple[str, ...]:
         if not isinstance(assistant_message, dict):
