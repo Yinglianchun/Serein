@@ -143,7 +143,12 @@ def event_curator_model_input(component: dict[str, Any], snowflake_message_ids: 
         source_ids = [int(value) for value in candidate.get('source_message_ids') or []]
         if not source_ids or set(source_ids).difference(context_by_id):
             raise ValueError('Track Curator base Event is missing bound originals')
-        base_events.append({'event_id': str(candidate.get('event_id') or candidate.get('item_id') or candidate.get('id') or ''), 'primary_track_id': str(candidate.get('primary_track_id') or candidate.get('track_id') or ''), 'blocking_flags': [flag for flag in EVENT_CURATOR_BLOCKING_BASE_FLAGS if bool(candidate.get(flag))], 'messages': event_track_message_payload([context_by_id[source_id] for source_id in source_ids], snowflake_message_ids)})
+        base = {'event_id': str(candidate.get('event_id') or candidate.get('item_id') or candidate.get('id') or ''), 'primary_track_id': str(candidate.get('primary_track_id') or candidate.get('track_id') or ''), 'blocking_flags': [flag for flag in EVENT_CURATOR_BLOCKING_BASE_FLAGS if bool(candidate.get(flag))], 'messages': event_track_message_payload([context_by_id[source_id] for source_id in source_ids], snowflake_message_ids)}
+        if component.get('writer_material_review') and type(component.get('material_contract_version')) is int and component['material_contract_version'] == 1:
+            inherited = pipeline_materials.trusted_materials(candidate, component.get('context_messages') or [])
+            base['extend_material_mode'] = 'new_sources_only' if inherited is not None else 'full_sources'
+            base['inherited_materials'] = inherited
+        base_events.append(base)
     tracks = [{'track_id': str(card.get('track_id') or ''), 'subject': str(card.get('subject') or ''), 'throughline': str(card.get('throughline') or ''), 'event_policy': str(card.get('event_policy') or 'default')} for card in component.get('track_cards') or []]
     return {'context_request_scope': {'track_ids': list(component.get('track_ids') or []), 'before_message_id': min(stable_ids), 'session_ids': [int(item) for item in component.get('context_session_ids') or []]}, 'tracks': tracks, 'units': units, 'base_events': base_events,
             'continuity_pairs': list(component.get('continuity_pairs') or []),
@@ -171,6 +176,15 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
                      '若告别或玩笑本身正在被讨论则保留。'
                      '附带状态确认和任务回执可省；若其本身是讨论中心或改变结果则保留。拒绝、纠正、条件、因果和有区别的语气不得省。\n'
                      if component.get('writer_material_review') else '')
+    if component.get('writer_material_review') and type(component.get('material_contract_version')) is int and component['material_contract_version'] == 1:
+        material_rule = material_rule.replace('按该 Event 的全部 owned source_message_id 逐条标记',
+            '按本次标注范围逐条标记').replace('不可遗漏或重复 owned 来源', '不可遗漏或重复本次需要标注的来源')
+        material_rule += ('普通 extend 仅在所选唯一 base 的 extend_material_mode=new_sources_only 时，'
+                         '不重复标注 inherited_materials 中的旧来源，只标注本 Event 新增 owned 来源；'
+                         '旧标注只读，host 按来源原样合入门槛和边界审阅，不得改写或再次输出。'
+                         'base 标为 full_sources 时仍标注旧+新完整来源；create、rewrite、merge 始终标注完整 owned 来源。'
+                         '完整来源绑定不变，旧原文仍可核对活动关系；reason 说明新材料如何推进旧经历。'
+                         '共享 bridge 边界可使用 host 合入的旧标注，只能引用该侧实际保留的原文片段。\n')
     boundary_rule = ('左右各自独占的 owned 原文，或共同拥有的 declared bridge 中仅一侧 main/mixed 实际保留的片段，'
                      '都可作为该侧逐字边界证据。双侧保留的同一引文不能证明边界；'
                      '不要删改完整 bridge ownership 制造独占来源；引文不得跨越省略片段拼接。'
@@ -631,6 +645,7 @@ def normalize_event_curator_output(output: dict[str, Any], component: dict[str, 
     if payload_keys == {'events', 'skip_unit_roots', 'defer_unit_roots'}:
         output = _expand_compact_event_curator_output(output, component)
     normalized = _normalize_expanded_event_curator_output(output, component)
+    review = pipeline_materials.merge_review(review, output, component)
     validate_bridge_owners(output, component, review)
     errors = curator_receipt_errors(review, output, component)
     if errors:
