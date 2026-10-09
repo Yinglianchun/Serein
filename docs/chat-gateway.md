@@ -19,6 +19,13 @@ choosing the first upstream. This configuration does not provide key rotation or
 - A tool continuation can reuse the exact prepared prefix. The source prefix and model/tools
   contract must match; snapshots expire after one hour and are cleared after a final answer.
   Missing reasoning fields are restored only for matching assistant tool calls in that window.
+  Repeated calls keep separate reasoning entries: complete call IDs must match the same
+  ordered function/argument signature. Clients that rewrite or omit IDs can fall back only
+  when that signature identifies one cached call and one incoming assistant message, with
+  no conflict against known IDs. Ambiguous matches remain unrestored rather than borrowing
+  another call's reasoning. This is a process-local tool-continuation cache, cleared by the
+  final reply; it is not persistent history. The existing DeepSeek request-side empty-field
+  compatibility fallback is unchanged and does not replace full reasoning preservation.
 - Prompt cache keys and retention settings preserve caller-supplied values. Native Anthropic
   mode supports automatic cache control or explicit breakpoints on system, tools and an earlier
   assistant message. The current user turn receives no explicit breakpoint. Token estimates
