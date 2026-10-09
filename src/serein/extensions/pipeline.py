@@ -11,6 +11,7 @@ from ..compat.events import Events, reference_blockers
 from ..compat.germany.fact_events import FactEventStore, FactEventSettlementBlockedError
 from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
 from . import pipeline_latest as latest
+from . import pipeline_materials
 from .pipeline_config import snapshot, execution
 from .pipeline_images import (freeze_task_images, persistable_request, hydrate_request_images,
     verify_images, bind_transcriptions,
@@ -520,6 +521,13 @@ def candidates(database,track_ids,*,overflow_out=None):
                     originals.append(task_message(raw) if raw else task_message({'id':-int(digest(encode(source_key(ref)))[:12],16),'source':ref['source_system'],'source_event_id':ref['message_id'],'session_id':ref['session_id'],'role':ref['role'],'text':ref['content'],'created_at':ref['created_at']}))
                 detail=store.conn.execute('SELECT details_json FROM pipeline_event_details WHERE event_id=?',(row['item_id'],)).fetchone()
                 details=json.loads(detail[0]) if detail else {}
+                # A source-key-only Event fingerprint cannot establish that its
+                # bound snapshot still agrees with the separately stored raw row.
+                consistent_sources=all(
+                    ref['content']==original['content'] and ref['role']==original['role']
+                    and ref['created_at']==original['created_at']
+                    and ref['content_sha256']==digest(original['content'])
+                    for ref,original in zip(refs,originals))
                 blockers=reference_blockers(store.conn,row['item_id'])
                 family=FactEventStore._replacement_family_payload(store.conn,row['item_id']) if blockers else {}
                 family_ids=list(family.get('family_ids') or [])
@@ -529,6 +537,7 @@ def candidates(database,track_ids,*,overflow_out=None):
                 result.append({**dict(row),'event_id':row['item_id'],'primary_track_id':track,'track_id':track,'source_refs':refs,'originals':originals,
                     'source_message_ids':[m['id'] for m in originals],'session_ids':list({m['session_id'] for m in originals}),
                     'source_activity_roles':details.get('source_activity_roles',{}),'blocked':bool(blockers),
+                    'material_snapshot':details.get('material_snapshot') if consistent_sources else None,
                     'protected':bool(blockers),'manual':not str(dict(row).get('origin_id') or '').startswith('assistant_bridge:'),
                     'blocking_reasons':blockers,
                     'continuation_allowed':bool(blockers) and trusted and bool(family.get('ok'))
@@ -589,6 +598,7 @@ def components(database,data,routed,*,include_materials=True):
             'base_event_candidate_overflow':overflow,
             'context_session_ids':list({m['session_id'] for m in context.values()}),
             'writer_material_review':bool(policy.get('material_review_enabled',False)),
+            'material_contract_version':1,
             'writer_round_gate':bool(policy.get('round_gate_enabled',False)),
             'append_protected':bool(policy.get('append_protected_enabled',False)),
         })
@@ -903,7 +913,25 @@ def curator_repair_prompt(request, output, error):
     return request['prompt']+'\n漏项修复：保留上一份结果中已有的有效归属和处置，对照完整上下文补全遗漏。必要时修正关联的边界和回执；不得为通过校验一律 skip/defer，不得猜测归属。返回修复后的完整 JSON，程序会重新检查全部来源、重复归属和冲突。\n'+encode({
         'missing_source_message_ids':error.missing_source_ids,
         'missing_messages':messages,
-        'previous_output':output})
+        'previous_output':output, **curator_material_repair_scope(request, output)})
+
+
+def curator_material_repair_scope(request, output):
+    """Host-owned annotation IDs; malformed ownership is repaired separately."""
+    component=request.get('component') or {}
+    if (request.get('role')!='event_curator' or not component.get('writer_material_review')
+            or not isinstance(output,dict)):
+        return {}
+    try:
+        expanded=decision(output)
+        expanded={key:value for key,value in expanded.items() if key!='decision_review'}
+        if 'skip_unit_roots' in expanded:
+            expanded=latest._expand_compact_event_curator_output(expanded,component)
+        contracts=pipeline_materials.material_contracts(expanded,component)
+        return {'material_annotation_source_ids_by_event':{
+            str(index):contract['annotation_source_message_ids'] for index,contract in contracts.items()}}
+    except (ValueError,KeyError,TypeError,IndexError):
+        return {}
 
 
 def accept_curator_omission(database,job_id,error):
@@ -1091,7 +1119,7 @@ async def job(database,batch,request,key,runner):
         for attempt in range(attempts):
             progress(attempt=attempt+1,stage=request['role'],
                      prompt_chars=len(prompt)+len(request['rules']))
-            raw='';received=False
+            raw='';received=False;output={}
             try:
                 content=([{'type':'text','text':prompt}]+[{'type':'image_url','image_url':{'url':item['url']}} for item in request.get('images',[])]) if request.get('images') else prompt
                 response=await asyncio.wait_for(complete({**model,'request_timeout_seconds':policy['timeout_seconds']},
@@ -1132,7 +1160,7 @@ async def job(database,batch,request,key,runner):
                 elif image:record_image_failure(database,image,error)
                 else:fail_stage(database,batch,identifier,error)
                 if (not image and (not received or not isinstance(error,ValueError))) or attempt==attempts-1:raise
-                correction='\n请按原角色规则纠正结构或证据校验错误，只返回完整 JSON。保留人物归属、比喻及不确定程度，不按词句数量改写文风。编号使用原始编号，不得按展示位置重新编号。\n'+encode({'validation_error':reason,'allowed_ids':allowed_ids(request)})
+                correction='\n请按原角色规则纠正结构或证据校验错误，只返回完整 JSON。保留人物归属、比喻及不确定程度，不按词句数量改写文风。编号使用原始编号，不得按展示位置重新编号。\n'+('materials 必须只覆盖 host 指定的 material_annotation_source_ids_by_event；继承标注只读，不重复输出。\n' if request['role']=='event_curator' and request.get('component',{}).get('writer_material_review') else '')+encode({'validation_error':reason,'allowed_ids':allowed_ids(request), **curator_material_repair_scope(request,output)})
                 room=policy['max_prompt_chars']-len(request['rules'])-len(request['prompt'])-len(correction)-80
                 if room<0:raise ValueError('提示词上限不足以容纳纠错请求，请减小每批输入。') from error
                 prompt=request['prompt']+correction+'\n上一份不合格输出（仅用于纠错，可能截断）：\n'+raw[:min(room,10000)]
@@ -1241,6 +1269,7 @@ def settle(database,batch,data,routed,plans):
                     'source_keys':[dict(zip(('source_system','session_id','message_id'),source_key(ref))) for ref in b['source_refs']]} for b in bases])
             if append_only:item['append_only']=True
             items.append(item);details.append({'track_id':event['primary_track_id'],'writer':written,
+                'material_snapshot':pipeline_materials.snapshot_for(event,component['context_messages']),
                 'curator_decision_review':plan.get('decision_review'),
                 'curator_image_transcriptions':written.get('curator_image_transcriptions',[]),
                 'source_activity_roles':{str(b['source_message_id']):b['activity_role'] for b in event['source_bindings']}})
@@ -1274,6 +1303,9 @@ def settle(database,batch,data,routed,plans):
         record_routes(conn,batch['id'],assignments)
         for item,detail in zip(items,details):
             key=conn.execute('SELECT item_id FROM fact_events WHERE origin_id=?',(item['origin_id'],)).fetchone()[0]
+            if detail.get('material_snapshot') is not None:
+                fingerprint=conn.execute('SELECT fingerprint FROM fact_events WHERE item_id=?',(key,)).fetchone()[0]
+                detail['material_snapshot'].update(event_id=key,event_fingerprint=fingerprint)
             conn.execute('INSERT OR IGNORE INTO pipeline_track_events VALUES (?,?)',(detail['track_id'],key))
             conn.execute('INSERT OR REPLACE INTO pipeline_event_details VALUES (?,?)',(key,encode(detail)))
             if arc_linking_enabled:
