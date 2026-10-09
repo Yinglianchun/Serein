@@ -9,7 +9,7 @@ import {
   Sparkle,
   NotePencil,
   Browsers,
-  EnvelopeSimple,
+  CheckSquare,
 } from "@phosphor-icons/react";
 
 function ThoughtCloud({ size = 20, weight, ...props }) {
@@ -29,7 +29,7 @@ function ThoughtCloud({ size = 20, weight, ...props }) {
 const navItems = [
   { label: "醒来", icon: House },
   { label: "记忆", icon: Sparkle },
-  { label: "信箱", icon: EnvelopeSimple },
+  { label: "沉淀", icon: CheckSquare },
   { label: "叙事卷", icon: Books },
   { label: "日记", icon: BookOpenText },
   { label: "心绪", icon: ThoughtCloud },

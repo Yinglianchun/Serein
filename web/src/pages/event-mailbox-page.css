@@ -2,7 +2,7 @@
 .mailbox-page{height:100dvh;min-height:0;overflow:hidden;background:var(--paper)}
 .mailbox-page>.sidebar{position:fixed;opacity:1;visibility:visible}
 .mailbox-layout{box-sizing:border-box;width:100%;max-width:1380px;height:100dvh;display:flex;flex-direction:column;overflow:hidden;margin:auto;padding:40px 40px 32px 118px;color:var(--ink)}
-.mailbox-header{flex-shrink:0;margin-bottom:24px}.mailbox-header>p{font-size:11px;letter-spacing:.22em;color:var(--muted);margin:0 0 24px}.mailbox-header h1{font-family:var(--font-editorial-cjk);font-size:30px;font-weight:400;line-height:1.6;margin:0}
+.mailbox-header{flex-shrink:0;margin-bottom:24px}.mailbox-header>p{font-family:var(--font-editorial-cjk);font-size:13px;letter-spacing:normal;color:var(--muted);margin:0 0 12px}.mailbox-header h1{font-family:var(--font-editorial-cjk);font-size:29px;font-weight:400;letter-spacing:.04em;line-height:1.6;margin:0}
 .mailbox-layout button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:8px 14px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--ink);font:inherit;font-size:13px;cursor:pointer}
 .mailbox-layout button:disabled{opacity:.45;cursor:default}.mailbox-layout button:focus-visible,.mailbox-layout input:focus-visible{outline:2px solid var(--sage);outline-offset:4px}.mailbox-layout input[type=checkbox]{accent-color:var(--sage);width:16px;height:16px}
 .mailbox-tabs{flex-shrink:0;display:flex;gap:32px;border-bottom:1px solid var(--line)}.mailbox-tabs button{border:0;border-radius:0;padding:12px 0 18px;font-size:16px;color:var(--muted);gap:12px}.mailbox-tabs button[aria-pressed=true]{color:var(--ink);box-shadow:0 2px var(--sage)}.mailbox-tabs span{font-size:12px}

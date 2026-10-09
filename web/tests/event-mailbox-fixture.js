@@ -1,6 +1,6 @@
 // Fully isolated synthetic preview. No fetch request can reach a backend.
 const makeRow=(id,status='pending')=>({event_id:id,title:id,lifecycle:'active',created_at:'2026-01-01T00:00:00Z',event_revision:3,queue_revision:status==='not_selected'?0:1,status,processable:true,updated_at:'2026-01-01T00:00:00Z',draft_stale:false,draft:{title:id,body_md:'Full original Event\n\nLast paragraph',cues:[]},event:{readable:true,document:{title:id,body_md:'Full original Event\n\nLast paragraph'},evidence:[{binding_id:1,source_key:'synthetic-original',content:'Exact original evidence, never rewritten.',metadata:{role:'user'}}]}});
-export const fixture={receipts:new Map(),requests:[],loseDraftReplyOnce:false,enabled:true,failPromotion:false,conflictDraft:false,badDecisionReplyOnce:false,failedIds:new Set(),loseDecisionReplyOnce:false,selectCalls:0,promoteCalls:0,mutations:0,rows:new Map([
+export const fixture={identity:{user_name:'User',ai_name:'AI'},receipts:new Map(),requests:[],loseDraftReplyOnce:false,enabled:true,failPromotion:false,conflictDraft:false,badDecisionReplyOnce:false,failedIds:new Set(),loseDecisionReplyOnce:false,selectCalls:0,promoteCalls:0,mutations:0,rows:new Map([
  ['event_synthetic',{...makeRow('event_synthetic'),queue_revision:0,body_preview:'Full original Event',topic:'日常',evidence_count:1,source_started_at:'2026-01-01'}],['event_second',makeRow('event_second')],['event_third',makeRow('event_third')]
 ])};
 window.mailboxFixture=fixture;
@@ -8,7 +8,7 @@ window.fetch=async(input,options={})=>{
  const url=new URL(String(input),window.location.origin),body=options.body?JSON.parse(options.body):null;
  if(body){fixture.requests.push(structuredClone(body));if(fixture.badDecisionReplyOnce&&['select','remove','restore'].includes(body.action)){fixture.badDecisionReplyOnce=false;return new Response(JSON.stringify({status:'pending'}),{status:200});}if(fixture.receipts.has(body.operation_id))return new Response(JSON.stringify(fixture.receipts.get(body.operation_id)),{status:200});}
  let payload={},status=200;
- if(url.pathname==='/__serein/settings')payload={identity:{user_name:'User',ai_name:'AI'},features:{event_to_scene:fixture.enabled}};
+ if(url.pathname==='/__serein/settings')payload={identity:fixture.identity,features:{event_to_scene:fixture.enabled}};
  else if(url.pathname==='/__serein/event-mailbox-promote'){
   fixture.promoteCalls++;fixture.mutations++;const item=fixture.rows.get(body.event_id);
   if(!fixture.enabled){status=403;payload={message:'Feature disabled'};}

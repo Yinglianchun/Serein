@@ -148,9 +148,9 @@ Persona 是只读的状态卡片展示页：当前心情、内心独白/余韵�
 
 Writer 正文通常以 500 字为软预算，复杂经历可适当超出；host 以 1500 字为异常阈值，不截断正文。保留关键内容、归属、条件与真实时序，不逐轮报幕或补写心理变化。图片转录和审核结果保存在 pipeline_event_details，原话由 Event 事务绑定；活动叶、来源集合、引用保护和幂等收据继续保留。Scene 由主窗口主动写，自动 Event 不生成 Scene 候选。
 
-设置 → 功能中的“Event 升为 Scene”（features.event_to_scene）默认关闭。保存后即时启停工具；关闭后拒绝旧客户端继续调用，保留已有 Event 和 Scene。可写实例开启后的 `promote_event_to_scene` 供主窗口在读过已留下的 Event 及当前绑定原话后，提交自己编辑的标题、正文和 cues。工具核对 Event 当前版本，以新 ID 保存 Scene，沿用 Event 的全部有效原话绑定，并记录来源 Event ID、版本和正文哈希；Event 原件不改写。Scene 覆盖全部原话后，原 Event 停止自动浮现；已有修订箱待处理提示中涉及该 Event 的项撤出，后续扫描也跳过它，Scene 仍按自己的材料资格参与扫描。相同四参数重试返回原回执；不同内容再次转换同一 Event 会报冲突，后续修改应编辑已生成的 Scene。
+设置 → 功能中的“Event 升为 Scene”（features.event_to_scene）默认关闭。保存后即时启停工具；关闭后拒绝旧客户端继续调用，保留已有 Event 和 Scene。可写实例开启后的 `promote_event_to_scene` 供主窗口在读过已选入的 Event 及当前绑定原话后，提交自己编辑的标题、正文和 cues。工具核对 Event 当前版本，以新 ID 保存 Scene，沿用 Event 的全部有效原话绑定，并记录来源 Event ID、版本和正文哈希；Event 原件不改写。Scene 覆盖全部原话后，原 Event 停止自动浮现；已有修订箱待处理提示中涉及该 Event 的项撤出，后续扫描也跳过它，Scene 仍按自己的材料资格参与扫描。相同四参数重试返回原回执；不同内容再次转换同一 Event 会报冲突，后续修改应编辑已生成的 Scene。
 
-Event 信箱自动展示有效、尚未晋升的 Event。人只做“想留下”或“不留”的单条／批量决定，不手写正文、不补绑定；留下不会创建 Scene。`list_event_mailbox` 只列已留下、当前有效且未晋升的候选。现有 `promote_event_to_scene` 接收 `candidate_id、title、body、cues`，一次原子提交 AI 重写的正文、召回入口、全部有效原文绑定和信箱完成状态。未决定或不留的项不能通过旧接口绕过选择。并发核对 Event 与信箱当前版本；失败保留候选，重复调用不重复创建 Scene。已完成项仍归入已留下，未完成的决定可恢复为待决定。左侧候选列表与右侧阅读各自固定高度、独立滚动。收藏、换窗选材、Scene 草稿审核各自独立。详见[信箱协议](event-mailbox.md)。
+“沉淀”自动展示有效、尚未晋升的 Event。人只做“选入”或“跳过”的单条／批量决定，不手写正文、不补绑定；选入不会创建 Scene。`list_event_mailbox` 只列已选、当前有效且未晋升的候选。现有 `promote_event_to_scene` 接收 `candidate_id、title、body、cues`，一次原子提交 AI 重写的正文、召回入口、全部有效原文绑定和候选完成状态。未决定或跳过的项不能通过旧接口绕过选择。并发核对 Event 与候选当前版本；失败保留候选，重复调用不重复创建 Scene。已完成项仍归入已选，未完成的决定可恢复为待选。左侧候选列表与右侧阅读各自固定高度、独立滚动。收藏、换窗选材、Scene 草稿审核各自独立。详见[候选协议](event-mailbox.md)。
 
 宿主改为公开版数据库和模型 API：只处理显式导入或归档的原话。Track 卡不设删除 TTL；归线默认读取同一 source、同一 runtime／workspace 边界下，在配置回看天数内实际归入过原话的 Track。再次使用会刷新最近归线锚点；超期卡不再参与 Router，但仍保存在库中。额外原文请求限定 declared Track / 可见会话 / 六个历史 unit，且仅一次。图片通过已归档的 URL / data URI 交给图片转录模型或 Curator；Writer 初写及修复只读已绑定的转录，不附原图。不读取私有聊天宿主的图片目录。各角色模型留空时，在设置页打开 Agent 配置弹窗，按说明接入后领取与提交任务；叙事卷 Writer 有独立 runner 引导。原先短版任务协议中尚未完成的任务保留为旧记录，新协议重新从未处理原话开始，已结算正文不重写。
 
