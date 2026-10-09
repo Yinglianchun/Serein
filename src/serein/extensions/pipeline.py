@@ -526,7 +526,7 @@ def candidates(database,track_ids,*,overflow_out=None):
                 consistent_sources=all(
                     ref['content']==original['content'] and ref['role']==original['role']
                     and ref['created_at']==original['created_at']
-                    and ref['content_sha256']==digest(original['content'])
+                    and ref.get('content_sha256')==digest(original['content'])
                     for ref,original in zip(refs,originals))
                 blockers=reference_blockers(store.conn,row['item_id'])
                 family=FactEventStore._replacement_family_payload(store.conn,row['item_id']) if blockers else {}
