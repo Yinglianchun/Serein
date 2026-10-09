@@ -288,7 +288,7 @@ def create_server(app: Application, *, private=False, http=False):
             optional_names.update(name for name,(feature,_) in gated_tools.items() if features[feature])
         if not private and 'resume' in app._optional_names:
             from ..deployment import read_settings
-            if read_settings(app.settings.database)['resume']['mode']=='mcp':
+            if read_settings(app.settings.database)['resume']['mcp_enabled']:
                 optional_names.add('resume')
         if app.settings.mcp_tools is not None:
             optional_names.intersection_update(app.settings.mcp_tools)

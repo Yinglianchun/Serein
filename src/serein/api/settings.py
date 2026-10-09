@@ -159,7 +159,10 @@ class TaggingPatch(BaseModel):
 
 class ResumePatch(BaseModel):
     model_config = ConfigDict(extra='forbid')
-    mode: Literal['command','mcp'] | None = None
+    mode: Literal['command','mcp'] | None = None  # Legacy exclusive selector.
+    command_enabled: bool | None = Field(default=None, strict=True)
+    mcp_enabled: bool | None = Field(default=None, strict=True)
+
     latest_shadow: bool | None = None
     recent_events: bool | None = None
     favorite_scenes: bool | None = None
@@ -168,6 +171,13 @@ class ResumePatch(BaseModel):
     recent_original_limit: int | None = Field(default=None, ge=1, le=50, strict=True)
     pending_originals: bool | None = None
     selected_ids: list[str] | None = Field(default=None, max_length=200)
+
+    @field_validator('command_enabled', 'mcp_enabled', mode='before')
+    @classmethod
+    def entry_switch(cls, value):
+        if type(value) is not bool:
+            raise ValueError('Resume entry switches must be booleans')
+        return value
 
     @field_validator('selected_ids')
     @classmethod

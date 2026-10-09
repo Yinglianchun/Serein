@@ -23,8 +23,8 @@ def routes(application, auth):
             from pydantic import ValidationError
             try:
                 selection=ResumePatch.model_validate(arguments['selection'],strict=True)
-                if 'mode' in selection.model_fields_set:
-                    raise ValueError('Preview selection cannot change resume mode')
+                if {'mode', 'command_enabled', 'mcp_enabled'} & selection.model_fields_set:
+                    raise ValueError('Preview selection cannot change resume entry switches')
                 arguments={**arguments,'selection':selection.model_dump(exclude_none=True)}
             except (ValidationError,ValueError):
                 raise HTTPException(422,'Invalid resume preview selection; use content options only') from None

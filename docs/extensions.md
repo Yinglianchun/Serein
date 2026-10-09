@@ -1,6 +1,6 @@
 # 扩展接口
 
-`Contributions(tools, prompt_hooks, jobs)` 由显式工厂装配。关闭的扩展不加载工厂；HTTP `/v1/extensions/{tool}` 与 MCP 共用扩展函数。开窗续接默认使用聊天 `/resume` 指令；选择 MCP 模式后注册只读 `resume` 工具，同时停用该聊天指令及其快照续带。后台任务由同一生命周期启动和取消；索引任务是有可写索引时的核心任务。
+`Contributions(tools, prompt_hooks, jobs)` 由显式工厂装配。关闭的扩展不加载工厂；HTTP `/v1/extensions/{tool}` 与 MCP 共用扩展函数。开窗续接默认使用聊天 `/resume` 指令；MCP 入口独立开启后注册只读 `resume` 工具，可与聊天指令同时使用。关闭指令入口会停用该指令及其快照续带；关闭总开关则停用两个入口。后台任务由同一生命周期启动和取消；索引任务是有可写索引时的核心任务。
 
 这里没有插件市场或自动发现机制。自定义工厂由 Python 宿主传给 `Application(extension_factories=...)`；现成内置工厂由 TOML 选择。
 

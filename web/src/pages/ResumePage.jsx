@@ -46,7 +46,7 @@ export function ResumePage({onOpenSettings}) {
   function change(value){cancelPreview();setSelection(value);setPages([]);setStatus('');}
   async function save(event) {
     event.preventDefault();const current=++version.current;setBusy('saving');setError('');
-    const {mode,...contentSelection}=selection;
+    const {mode,command_enabled,mcp_enabled,...contentSelection}=selection;
     try {const value=await instanceSettings({expected_version:config.settings_version,resume:contentSelection});
       if(current===version.current){setConfig(value);setSelection(value.resume);setStatus('已保存，下次续接会使用这份选择。');}}
     catch(err){if(current===version.current)setError(err.message);}
@@ -55,7 +55,7 @@ export function ResumePage({onOpenSettings}) {
   async function preview(cursor='') {
     cancelPreview();const current=previewVersion.current;
     request.current=new AbortController();setPreviewing(true);setPreviewError('');
-    const {mode,...contentSelection}=selection;
+    const {mode,command_enabled,mcp_enabled,...contentSelection}=selection;
     try {
       const response=await fetch('/__serein/resume',{method:'POST',cache:'no-store',signal:request.current.signal,
         headers:{'Content-Type':'application/json'},body:JSON.stringify({window_id:'main',cursor,selection:contentSelection})});
@@ -72,10 +72,10 @@ export function ResumePage({onOpenSettings}) {
   return <div className="resume-layout">
     <header className="resume-header"><p>接着上一窗</p><h1>换窗</h1><span>把还想留在身边的，带去下一次见面。</span></header>
     {!config?<div role={error?'alert':'status'}>{error||'正在读取换窗设置…'}{error&&<button type="button" onClick={reload}>重新读取</button>}</div>:
-      !enabled?<div className="resume-disabled"><h2>还没有开启续接</h2><p>在功能设置开启“开窗续接”，再选择发送 /resume 或通过 MCP 读取。已有选择会保留。</p><button type="button" onClick={onOpenSettings}>打开功能设置</button><button type="button" onClick={reload}>重新读取</button></div>:
+      !enabled?<div className="resume-disabled"><h2>还没有开启续接</h2><p>在功能设置开启“开窗续接”，再分别开启网关 /resume 指令或 MCP 工具，也可同时开启。已有选择会保留。</p><button type="button" onClick={onOpenSettings}>打开功能设置</button><button type="button" onClick={reload}>重新读取</button></div>:
       <div className="resume-columns"><form className="resume-options" onSubmit={save}>
         <ResumeSelection selection={selection} onChange={change} disabled={!!busy} windowShadows={config.features.window_shadows}/>
-        <p className="resume-note">{config.resume.mode==='mcp'?'当前提供 resume 工具，聊天中的 /resume 指令已停用。':'当前通过 /resume 指令续接，MCP resume 工具已关闭。'}<button type="button" className="resume-settings-link" onClick={onOpenSettings}>修改续接方式</button></p>
+        <p className="resume-note">{config.resume.command_enabled?(config.resume.mcp_enabled?'网关 /resume 指令与 MCP resume 工具均已开启。':'网关 /resume 指令已开启，MCP resume 工具已关闭。'):(config.resume.mcp_enabled?'MCP resume 工具已开启，网关 /resume 指令已关闭。':'两个续接入口均已关闭，仍可预览与复制资料。')}<button type="button" className="resume-settings-link" onClick={onOpenSettings}>修改续接方式</button></p>
         <div className="resume-actions"><button type="submit" disabled={!!busy||!dirty||!valid}>{busy==='saving'?'正在保存…':'保存选择'}</button><button type="button" disabled={!!busy} onClick={reload}>重新读取</button></div>
       </form><section ref={previewPanel} className="resume-preview" aria-labelledby="resume-preview-title">
         <header><div><p>当前选择会读到</p><h2 id="resume-preview-title">续接资料</h2></div><button type="button" disabled={!!busy||previewing||!valid} onClick={()=>preview()}>{previewing?'正在读取…':'重新预览'}</button></header>

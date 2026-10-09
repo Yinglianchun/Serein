@@ -1,4 +1,5 @@
 import asyncio
+import json
 import pytest
 from fastapi.testclient import TestClient
 from serein.api.http import create_app
@@ -63,6 +64,7 @@ def test_draft_resume_preview_pages_without_saving_or_changing_tool_selection(se
 
 
 @pytest.mark.parametrize('draft',[
+    *[{key:value} for key in ('command_enabled','mcp_enabled') for value in (True,False,None)],
     [],{'mode':'mcp'},{'mode':None},{'recent_events':'true'},{'recent_original_limit':0},
     {'recent_original_limit':51},{'recent_original_limit':True},{'selected_ids':['x']*201},
     {'selected_ids':['']},{'features':{'resume':True}},
@@ -307,3 +309,80 @@ def test_resume_can_include_a_bounded_number_of_recent_originals(settings):
     assert pending['selection']['pending_originals'] is True
     assert pending['selection']['recent_originals'] is False
     assert len([item for item in pending['items'] if item['kind']=='raw'])==5
+
+
+@pytest.mark.parametrize('command,mcp', [(False, False), (True, False), (False, True), (True, True)])
+def test_resume_entry_switches_are_independent_and_hot_reload(settings, command, mcp):
+    server = create_server(Application(settings))
+    client = TestClient(create_app(settings, token='synthetic', live=True), headers={'Authorization':'Bearer synthetic'})
+    saved = client.patch('/v1/settings', json={'features':{'resume':True}, 'resume':{
+        'command_enabled':command, 'mcp_enabled':mcp}})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()['resume']['command_enabled'] is command
+    assert saved.json()['resume']['mcp_enabled'] is mcp
+    names = lambda: {tool.name for tool in asyncio.run(server.list_tools())}
+    assert ('resume' in names()) is mcp
+    if mcp:
+        result = asyncio.run(server.call_tool('resume', {}))
+        assert result
+    else:
+        with pytest.raises(Exception):
+            asyncio.run(server.call_tool('resume', {}))
+    # Content preview is independent of both transport switches.
+    assert client.post('/v1/extensions/resume', json={}).status_code == 200
+    save_settings(settings.database, {'features':{'resume':False}})
+    assert 'resume' not in names()
+    with pytest.raises(Exception):
+        asyncio.run(server.call_tool('resume', {}))
+    assert client.post('/v1/extensions/resume', json={}).status_code == 404
+    save_settings(settings.database, {'features':{'resume':True}})
+    assert ('resume' in names()) is mcp
+    state = read_settings(settings.database)['resume']
+    assert (state['command_enabled'], state['mcp_enabled']) == (command, mcp)
+
+
+@pytest.mark.parametrize('legacy', [{}, {'mode':'command'}, {'mode':'mcp'},
+    {'mode':'mcp','command_enabled':True}, {'mode':'command','mcp_enabled':True},
+    {'mode':'mcp','mcp_enabled':False}, {'mode':'command','command_enabled':False}])
+def test_resume_legacy_settings_migrate_without_enabling_an_extra_entry(settings, legacy):
+    with Store(settings.database) as store, store.transaction(immediate=True):
+        store.conn.execute("INSERT OR REPLACE INTO background_state(name,value_json) VALUES (?,?)",
+                           ('deployment_settings', json.dumps({'resume':legacy})))
+    state = read_settings(settings.database)['resume']
+    mode = legacy.get('mode','command')
+    assert state['command_enabled'] is legacy.get('command_enabled', mode == 'command')
+    assert state['mcp_enabled'] is legacy.get('mcp_enabled', mode == 'mcp')
+    # Any later unrelated save persists the normalized values, not new defaults.
+    save_settings(settings.database, {'resume':{'selected_ids':['synthetic-choice']}})
+    reloaded = read_settings(settings.database)['resume']
+    assert (reloaded['command_enabled'], reloaded['mcp_enabled']) == (state['command_enabled'], state['mcp_enabled'])
+
+
+def test_resume_partial_and_legacy_patches_preserve_explicit_switches(settings):
+    save_settings(settings.database, {'features':{'resume':True}, 'resume':{
+        'selected_ids':['synthetic-choice'], 'command_enabled':True, 'mcp_enabled':True}})
+    save_settings(settings.database, {'resume':{'command_enabled':False}})
+    state = read_settings(settings.database)
+    assert state['features']['resume'] is True
+    assert state['resume']['mcp_enabled'] is True
+    assert state['resume']['selected_ids'] == ['synthetic-choice']
+    save_settings(settings.database, {'resume':{'mcp_enabled':False}})
+    assert read_settings(settings.database)['resume']['command_enabled'] is False
+    for mode in ('command','mcp'):
+        save_settings(settings.database, {'resume':{'mode':mode}})
+        state = read_settings(settings.database)['resume']
+        assert (state['command_enabled'],state['mcp_enabled']) == (mode == 'command',mode == 'mcp')
+    save_settings(settings.database, {'resume':{'mode':'mcp','command_enabled':True,'mcp_enabled':False}})
+    state = read_settings(settings.database)['resume']
+    assert (state['command_enabled'],state['mcp_enabled']) == (True,False)
+
+
+@pytest.mark.parametrize('key', ['command_enabled','mcp_enabled'])
+@pytest.mark.parametrize('value', [None, 'false', 'true', 0, 1, [], {}])
+def test_resume_entry_switches_require_booleans(settings, key, value):
+    client = TestClient(create_app(settings, token='synthetic', live=True), headers={'Authorization':'Bearer synthetic'})
+    before = read_settings(settings.database)
+    assert client.patch('/v1/settings', json={'resume':{key:value}}).status_code == 422
+    with pytest.raises(ValueError, match='booleans'):
+        save_settings(settings.database, {'resume':{key:value}})
+    assert read_settings(settings.database) == before
