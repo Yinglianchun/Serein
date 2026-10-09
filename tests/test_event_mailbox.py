@@ -29,11 +29,82 @@ def request(event_id,q=0,**extra):
 def select(services,event_id):return services.write('select','mailbox_select',request(event_id))
 
 
-def test_explicit_selection_retention_and_isolation(setup):
+def test_automatic_candidate_draft_remove_and_single_call_scene(setup):
+    settings,services,event_id=setup
+    tools=tools_for(settings)
+    candidate=tools['list_event_mailbox']()['items'][0]
+    assert candidate['candidate_id']==event_id and candidate['queue_revision']==0
+    assert candidate['body_preview']=='Original body' and candidate['evidence_count']==1
+    with Store(settings.database,read_only=True) as store:
+        assert not store.conn.execute("SELECT 1 FROM personal_records WHERE scope='event_mailbox'").fetchone()
+    scene=tools['memory_inbox_scene'](event_id,'New title','Rewritten body','rain | tickets')
+    assert scene['queue_status']=='completed' and scene['queue_revision']==1
+    document=services.read(scene['id'])
+    assert document['document']['body_md']=='Rewritten body'
+    assert document['document']['metadata']['scene_cues']==['rain','tickets']
+    assert document['evidence'][0]['content']=='Original evidence'
+    assert tools['memory_inbox_scene'](event_id,'New title','Rewritten body','rain | tickets')['id']==scene['id']
+    assert EventMailbox(settings.database).list()['items']==[]
+    save_settings(settings.database,{'features':{'event_to_scene':False}})
+    with pytest.raises(ValueError,match='disabled'):tools['memory_inbox_scene'](event_id,'New title','Rewritten body','rain | tickets')
+
+
+def test_automatic_candidate_can_be_removed_or_drafted_without_selection(setup):
+    settings,services,event_id=setup
+    draft=services.write('draft-auto','mailbox_draft',request(event_id,title='Draft',body_md='Draft body',cues=['cue']))
+    assert draft['queue_revision']==1
+    services.write('remove-auto','mailbox_remove',request(event_id,1))
+    services.write('edit-auto','save',{'document_id':event_id,'expected_revision':1,'kind':'event','title':'Changed','body_md':'Changed'})
+    assert EventMailbox(settings.database).list()['items']==[]
+    with pytest.raises(Conflict):tools_for(settings)['memory_inbox_scene'](event_id,'Scene','Body','cue')
+
+
+def test_automatic_scene_tool_has_four_arguments_and_is_opt_in(setup):
+    import asyncio
+    from serein.api.mcp import create_server
+    settings,services,event_id=setup
+    async def check():
+        tools={tool.name:tool for tool in await create_server(Application(settings)).list_tools()}
+        assert set(tools['memory_inbox_scene'].inputSchema['properties'])=={'candidate_id','title','body','cues'}
+    asyncio.run(check())
+    assert 'memory_inbox_scene' not in tools_for(Settings(settings.database,writable=False))
+
+
+def test_single_call_scene_failure_is_atomic_and_retryable(setup,monkeypatch):
+    settings,services,event_id=setup
+    import serein.core.event_mailbox as mailbox_module
+    original=mailbox_module.complete
+    def fail(*args):raise RuntimeError('Queue failure')
+    monkeypatch.setattr(mailbox_module,'complete',fail)
+    tool=tools_for(settings)['memory_inbox_scene']
+    with pytest.raises(RuntimeError,match='Queue failure'):tool(event_id,'Title','Body','cue')
+    with Store(settings.database,read_only=True) as store:
+        assert store.read(promoted_scene_id(event_id)) is None
+        assert not store.conn.execute("SELECT 1 FROM write_receipts WHERE operation_id LIKE 'memory-inbox-scene:%'").fetchone()
+    assert EventMailbox(settings.database).read(event_id)['queue_revision']==0
+    monkeypatch.setattr(mailbox_module,'complete',original)
+    result=tool(event_id,'Title','Body','cue')
+    assert result['candidate_id']==event_id and result['scene_id']==promoted_scene_id(event_id)
+
+
+def test_single_call_scene_http_and_unstored_removal(setup):
+    from serein.api.http import create_app
+    settings,services,event_id=setup
+    services.write('remove-unstored','mailbox_remove',request(event_id))
+    assert EventMailbox(settings.database).list()['items']==[]
+    with TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'}) as client:
+        body={'candidate_id':event_id,'title':'Title','body':'Body','cues':'cue'}
+        assert client.post('/v1/extensions/memory_inbox_scene',json=body).status_code==409
+        services.write('restore-unstored','mailbox_select',request(event_id,1))
+        result=client.post('/v1/extensions/memory_inbox_scene',json=body)
+        assert result.status_code==200 and result.json()['scene_id']==promoted_scene_id(event_id)
+
+
+def test_automatic_inbox_retention_and_isolation(setup):
     settings,services,event_id=setup
     mailbox=EventMailbox(settings.database)
-    assert mailbox.list()['items']==[]
-    assert mailbox.read(event_id)['status']=='not_selected'
+    assert mailbox.list()['items'][0]['event_id']==event_id
+    assert mailbox.read(event_id)['status']=='pending'
     with Store(settings.database) as store:
         store.conn.execute("INSERT INTO personal_records VALUES ('favorite',?,?,?,1,0,'a','a')",(event_id,event_id,'{"favorite":true}'))
         before=store.conn.execute("SELECT * FROM personal_records WHERE scope='favorite'").fetchone()

@@ -1,7 +1,7 @@
 // Fully isolated synthetic preview. No fetch request can reach a backend.
 const makeRow=(id,status='pending')=>({event_id:id,title:id,event_revision:3,queue_revision:status==='not_selected'?0:1,status,processable:true,updated_at:'2026-01-01T00:00:00Z',draft_stale:false,draft:{title:id,body_md:'Full original Event\n\nLast paragraph',cues:[]},event:{readable:true,document:{title:id,body_md:'Full original Event\n\nLast paragraph'},evidence:[{binding_id:1,source_key:'synthetic-original',content:'Exact original evidence, never rewritten.',metadata:{role:'user'}}]}});
 export const fixture={receipts:new Map(),requests:[],loseDraftReplyOnce:false,enabled:true,failPromotion:false,conflictDraft:false,selectCalls:0,promoteCalls:0,mutations:0,rows:new Map([
- ['event_synthetic',makeRow('event_synthetic','not_selected')],['event_second',makeRow('event_second')],['event_third',makeRow('event_third')]
+ ['event_synthetic',{...makeRow('event_synthetic'),queue_revision:0,body_preview:'Full original Event',topic:'日常',evidence_count:1,source_started_at:'2026-01-01'}],['event_second',makeRow('event_second')],['event_third',makeRow('event_third')]
 ])};
 window.mailboxFixture=fixture;
 window.fetch=async(input,options={})=>{

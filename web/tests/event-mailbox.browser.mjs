@@ -11,11 +11,10 @@ try {
  browser=await chromium.launch({headless:true,...(process.env.CHROMIUM_EXECUTABLE?{executablePath:process.env.CHROMIUM_EXECUTABLE}:{})});
  const page=await browser.newPage({viewport:{width:1200,height:850}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(base+'/tests/event-mailbox-preview.html');
- const select=page.getByRole('button',{name:'加入信箱',exact:true});await select.waitFor();await select.evaluate(button=>{button.click();button.click();});
- await page.getByText('已加入信箱，可以在那里编辑草稿与召回入口。').waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.selectCalls),1);
+ await page.getByRole('button',{name:/event_synthetic/}).waitFor();assert.equal(await page.evaluate(()=>mailboxFixture.selectCalls),0);assert.equal(await page.getByRole('button',{name:'加入信箱',exact:true}).count(),0);
  await page.getByRole('button',{name:'刷新信箱'}).click();await page.getByRole('button',{name:'继续读取'}).click();await page.getByRole('button',{name:'继续读取'}).click();
  const detail=page.getByRole('region',{name:'信箱详情'});
- await page.getByRole('button',{name:/event_synthetic/}).click();await detail.getByText('Exact original evidence, never rewritten.').waitFor();assert.match(await detail.textContent(),/Last paragraph/);
+ await page.getByRole('button',{name:/event_synthetic/}).click();await detail.locator('.mailbox-quote').waitFor();assert.match(await detail.textContent(),/Last paragraph/);
  await detail.getByLabel('标题',{exact:true}).fill('Edited title');await detail.getByLabel('正文',{exact:true}).fill('Edited Scene body');
  await detail.getByRole('button',{name:'增加一条'}).click();await detail.getByLabel('召回入口 1',{exact:true}).fill('When we talk about rain');
  page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:/event_second/}).click();assert.equal(await detail.getByLabel('标题',{exact:true}).inputValue(),'Edited title');
@@ -30,5 +29,5 @@ try {
  await page.evaluate(()=>{mailboxFixture.enabled=false;});const before=await page.evaluate(()=>mailboxFixture.mutations);await page.getByRole('button',{name:'刷新信箱'}).click();await page.getByText('“Event 升为 Scene”尚未开启。已有信箱和草稿会保留。').waitFor();
  await page.getByRole('button',{name:/event_third/}).click();assert(await detail.getByRole('button',{name:'升为 Scene',exact:true}).isDisabled());assert(await detail.getByRole('button',{name:'移出信箱',exact:true}).isDisabled());assert.equal(await page.evaluate(()=>mailboxFixture.mutations),before);
  await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/event-mailbox-mobile.png',fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'mobile has no horizontal overflow');
- assert.deepEqual(errors,[]);console.log('PASS mailbox synthetic browser: explicit selection, pagination, full evidence, cues/draft, dirty guard, failure preservation, stale revision, promotion, removal, disabled opt-in, mobile');
+ assert.deepEqual(errors,[]);console.log('PASS mailbox synthetic browser: automatic candidates, pagination, full evidence, cues/draft, dirty guard, failure preservation, stale revision, promotion, removal, disabled opt-in, mobile');
 }finally{await browser?.close();server.kill('SIGTERM');}

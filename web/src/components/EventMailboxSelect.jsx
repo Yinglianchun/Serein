@@ -13,6 +13,12 @@ export function EventMailboxSelect({eventId,disabled=false}) {
     instanceSettings().then(config=>{if(current===generation.current)setEnabled(!!config.features.event_to_scene);}).catch(()=>{});
     return()=>{generation.current++;window.removeEventListener('serein:features',features);};
   },[eventId]);
+  useEffect(()=>{
+    if(!enabled)return;
+    let active=true;
+    mailboxRequest('/'+encodeURIComponent(eventId)).then(value=>{if(active)setItem(value);}).catch(()=>{});
+    return()=>{active=false;};
+  },[enabled,eventId]);
   async function select() {
     if(lock.current||!enabled)return;lock.current=true;setBusy(true);setMessage('');const current=generation.current;
     try {
@@ -24,7 +30,7 @@ export function EventMailboxSelect({eventId,disabled=false}) {
   }
   if(!enabled)return null;
   return <div className="event-mailbox-select">
-    <button type="button" disabled={disabled||busy||!!item} onClick={select}><EnvelopeSimple size={15} aria-hidden="true"/>{busy?'正在加入…':item?'已在信箱':'加入信箱'}</button>
+    {item?.status==='removed'?<button type="button" disabled={disabled||busy} onClick={select}><EnvelopeSimple size={15} aria-hidden="true"/>{busy?'正在恢复…':'重新放入信箱'}</button>:<a href="#mailbox"><EnvelopeSimple size={15} aria-hidden="true"/>打开信箱</a>}
     {message&&<p role="status">{message} {item&&<a href="#mailbox">打开信箱</a>}</p>}
   </div>;
 }

@@ -40,7 +40,7 @@ def routes(application, auth):
                 return await tools[name](**arguments)
             return await run_in_threadpool(tools[name], **arguments)
         except Conflict as exc:
-            if name in {'promote_event_to_scene','save_event_mailbox_draft'}:
+            if name in {'memory_inbox_scene','promote_event_to_scene','save_event_mailbox_draft'}:
                 raise HTTPException(409,str(exc)) from None
             raise
         except ResumeLimit as exc:

@@ -5,6 +5,8 @@ import {mailboxRequest,mailboxDraft,mailboxWrite,mailboxPromotion,validMailboxDr
 import {MarkdownProjection} from '../components/MarkdownProjection.jsx';
 import './event-mailbox-page.css';
 
+function eventRange(item){const start=(item.source_started_at||item.created_at||'').slice(0,10),end=(item.source_ended_at||'').slice(0,10);return end&&end!==start?`${start} — ${end}`:start;}
+
 function MailboxDetail({eventId,enabled,onClose,onChanged}) {
   const [item,setItem]=useState(null),[draft,setDraft]=useState({title:'',body_md:'',cues:[]});
   const [busy,setBusy]=useState('loading'),[error,setError]=useState(''),[notice,setNotice]=useState(''),[conflict,setConflict]=useState(false);
@@ -72,12 +74,13 @@ function MailboxDetail({eventId,enabled,onClose,onChanged}) {
     {notice&&<p role="status">{notice}</p>}
     {(!item||conflict||error)&&<button type="button" disabled={!!busy} onClick={()=>read()}>重新读取</button>}
     {item&&<>
-      <div className="mailbox-state">{item.status==='completed'?'已完成':item.status==='removed'?'已移出':'待处理'} · Event 版本 {item.event_revision}{!item.processable&&item.status==='pending'?' · 当前 Event 不可升为 Scene，请核对其状态。':''}</div>
+      <div className="mailbox-state">{eventRange(item)} · {item.status==='completed'?'已完成':item.status==='removed'?'未保留':'等待决定'}{item.topic?` · ${item.topic}`:''}{!item.processable&&item.status==='pending'?' · 当前 Event 不可升为 Scene，请核对其状态。':''}</div>
       {item.draft_stale&&<p role="alert" className="mailbox-error">Event 已更新，草稿仍基于旧版本。请核对完整 Event 和原话，再保存草稿确认。</p>}
       {item.scene_id&&<p className="mailbox-note">关联 Scene：{item.scene_id}</p>}
       <section className="mailbox-original"><h3>完整 Event</h3>{document?<><h4>{document.title}</h4><MarkdownProjection content={document.body_md||''}/></>:<p>这条 Event 当前不可读取。</p>}</section>
-      <details className="mailbox-evidence" open><summary>绑定原话 · {item.event?.evidence?.length||0}</summary>
-        {(item.event?.evidence||[]).map((source,index)=><article key={source.binding_id||index}><small>{source.metadata?.role?identityName(source.metadata.role):'原始证据'} · {source.source_key||source.source_id}</small><p>{source.content}</p></article>)}
+      {item.event?.evidence?.[0]&&<blockquote className="mailbox-quote">{item.event.evidence[0].content}</blockquote>}
+      <details className="mailbox-evidence"><summary>查看原文 · {item.event?.evidence?.length||0} 条</summary>
+        {(item.event?.evidence||[]).map((source,index)=><article key={source.binding_id||index}><small>{source.metadata?.role?identityName(source.metadata.role):'原始证据'}{source.metadata?.timestamp?` · ${source.metadata.timestamp}`:''}</small><p>{source.content}</p></article>)}
         {!item.event?.evidence?.length&&<p className="mailbox-note">没有已绑定的原话。</p>}
       </details>
       <form className="mailbox-editor" onSubmit={event=>{event.preventDefault();act('draft');}}>
@@ -118,15 +121,15 @@ export function EventMailboxPage({onOpenSettings,onOpenMemory}) {
   useEffect(()=>{setRows([]);setSelected(null);load();return()=>{generation.current++;};},[status]);
   function navigate(action){if(window.dispatchEvent(new Event('serein:before-navigation',{cancelable:true})))action();}
   return <div className="mailbox-layout">
-    <header className="mailbox-header"><p>亲手留下，再慢慢整理</p><h1>信箱</h1><span>只收下你明确选入的 Event。</span></header>
+    <header className="mailbox-header"><p>一起经历，再亲手记住</p><h1>信箱</h1><span>新 Event 会直接来到这里，读过之后再决定怎样留下。</span></header>
     {config&&!config.features.event_to_scene&&<div className="mailbox-disabled"><p>“Event 升为 Scene”尚未开启。已有信箱和草稿会保留。</p><button type="button" onClick={onOpenSettings}>打开功能设置</button></div>}
     <div className={`mailbox-columns${selected?' has-detail':''}`}>
       <section className="mailbox-list" aria-label="信箱列表">
-        <div className="mailbox-toolbar"><label>查看<select aria-label="信箱状态" value={status} onChange={event=>navigate(()=>setStatus(event.target.value))}><option value="pending">待处理</option><option value="completed">已完成</option></select></label><button type="button" aria-label="刷新信箱" disabled={busy} onClick={()=>load()}><ArrowClockwise size={17}/></button></div>
+        <div className="mailbox-toolbar"><label>查看<select aria-label="信箱状态" value={status} onChange={event=>navigate(()=>setStatus(event.target.value))}><option value="pending">待处理</option><option value="completed">已完成</option><option value="removed">未保留</option></select></label><button type="button" aria-label="刷新信箱" disabled={busy} onClick={()=>load()}><ArrowClockwise size={17}/></button></div>
         {error&&<p role="alert" className="mailbox-error">{error}<button type="button" disabled={busy} onClick={()=>load()}>重试</button></p>}
         {busy&&<p role="status">正在读取信箱…</p>}
-        {!busy&&!error&&!rows.length&&<div className="mailbox-empty"><EnvelopeSimple size={30} weight="light"/><p>{status==='pending'?'信箱里还没有待处理的 Event。':'还没有从信箱完成的 Scene。'}</p><span>在记忆页打开一条 Event，点“加入信箱”。</span><button type="button" onClick={onOpenMemory}>去看 Event</button></div>}
-        <ol>{rows.map(row=><li key={row.event_id}><button type="button" aria-pressed={selected===row.event_id} onClick={()=>{if(selected!==row.event_id)navigate(()=>setSelected(row.event_id));}}><span>{row.title||'未命名 Event'}</span><small>{row.updated_at?.slice(0,10)}{!row.processable&&status==='pending'?' · 需核对状态':''}</small></button></li>)}</ol>
+        {!busy&&!error&&!rows.length&&<div className="mailbox-empty"><EnvelopeSimple size={30} weight="light"/><p>{status==='pending'?'信箱现在是空的。':'这里还没有记录。'}</p><span>生成的 Event 会自动出现在信箱里。</span><button type="button" onClick={onOpenMemory}>去看 Event</button></div>}
+        <ol>{rows.map(row=><li key={row.event_id}><button type="button" aria-pressed={selected===row.event_id} onClick={()=>{if(selected!==row.event_id)navigate(()=>setSelected(row.event_id));}}><small>{[row.topic,row.evidence_count?`${row.evidence_count} 条原文`:''].filter(Boolean).join(' · ')}</small><span>{row.title||'未命名 Event'}</span>{row.body_preview&&<p className="mailbox-body-preview">{row.body_preview}</p>}<small>{eventRange(row)}{!row.processable&&status==='pending'?' · 需核对状态':''}</small></button></li>)}</ol>
         {next!=null&&<button type="button" disabled={busy} onClick={()=>load(next)}>继续读取</button>}
       </section>
       {selected?<MailboxDetail key={selected} eventId={selected} enabled={!!config?.features.event_to_scene} onClose={()=>setSelected(null)} onChanged={()=>load()}/>:<div className="mailbox-placeholder"><p>选一封，读过原话再写。</p><span>草稿、收藏和换窗选择各自保存。</span></div>}

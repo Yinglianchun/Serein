@@ -29,8 +29,8 @@ try {
  async function fill(element,value){assert(element);await act(async()=>{Object.getOwnPropertyDescriptor(element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));element.dispatchEvent(new Event('change',{bubbles:true}));});}
  await act(async()=>{root=mount();await wait(20);});
  assert.equal(fixture.mutations,0,'Viewing never selects or writes');
- const select=button('加入信箱');await act(async()=>{select.click();select.click();await wait(200);});assert.equal(fixture.selectCalls,1,'Double selection is locked');
- await click(button('刷新信箱'));await click(button('继续读取'));await click(button('继续读取'));assert.equal(document.querySelectorAll('.mailbox-list li').length,3,'Cursor pagination appends explicit selections');
+ assert(!button('加入信箱'));assert.equal(fixture.selectCalls,0,'Events appear without selection');assert.match(document.querySelector('.mailbox-list').textContent,/Full original Event/);
+ await click(button('刷新信箱'));await click(button('继续读取'));await click(button('继续读取'));assert.equal(document.querySelectorAll('.mailbox-list li').length,3,'Cursor pagination appends automatic candidates');
  await click(row('event_synthetic'));assert.match(detail().textContent,/Exact original evidence, never rewritten/);assert.match(detail().textContent,/Last paragraph/);
  await fill(input('标题'),'Edited title');await fill(input('正文'),'Edited Scene body');await click(button('增加一条',detail()));await fill(detail().querySelector('[aria-label="召回入口 1"]'),'When we talk about rain');
  let confirmations=0;window.confirm=()=>{confirmations++;return false;};await click(row('event_second'));assert.equal(input('标题').value,'Edited title');assert.equal(confirmations,1,'Dirty row switching asks before discarding');
@@ -50,7 +50,7 @@ try {
  fixture.failPromotion=false;fixture.loseDraftReplyOnce=true;await fill(input('标题'),'Retry-safe title');await click(button('升为 Scene',detail()));assert.match(detail().textContent,/response lost after draft commit/);assert.equal(input('标题').value,'Retry-safe title');const firstSave=fixture.requests.at(-1);await click(button('升为 Scene',detail()));const retriedSave=fixture.requests.slice(-2)[0];assert.equal(firstSave.operation_id,retriedSave.operation_id);assert.equal(fixture.rows.get('event_third').status,'completed');
  await click(button('关闭信箱详情',detail()));fixture.rows.get('event_second').status='pending';await click(button('刷新信箱'));await click(row('event_second'));
  fixture.enabled=false;const before=fixture.mutations;await click(button('刷新信箱'));assert.match(document.body.textContent,/尚未开启/);assert(button('升为 Scene',detail()).disabled);assert(button('移出信箱',detail()).disabled);assert(!button('加入信箱'));assert.equal(fixture.mutations,before);
- await flush();console.log('PASS actual React DOM: explicit selection, cursor paging, full Event/evidence, cue editing, dirty navigation, save, failure retention, repeated clicks, completed view, revision conflict, withdrawal, stale drafts, clear-cue promotion, lost-response idempotent retry, disabled opt-in');
+ await flush();console.log('PASS actual React DOM: automatic candidates, cursor paging, full Event/evidence, cue editing, dirty navigation, save, failure retention, repeated clicks, completed view, revision conflict, withdrawal, stale drafts, clear-cue promotion, lost-response idempotent retry, disabled opt-in');
  await act(async()=>root.unmount());root=null;
 }finally{if(root)root.unmount();dom.window.close();await rm(directory,{recursive:true,force:true});}
 

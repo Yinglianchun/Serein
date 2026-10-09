@@ -1,4 +1,4 @@
-"""User-only explicit selection; AI receives separate pending read/draft tools."""
+"""Automatic Event inbox with explicit restore, draft and removal operations."""
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, StrictInt
 from typing import Literal

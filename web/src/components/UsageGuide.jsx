@@ -120,7 +120,7 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p><code>edit_scene</code> 修改已有 Scene：先用 <code>read_memory</code> 读取，传 <code>scene_id</code>、读回的 <code>expected_updated_at</code> 和要改的 title、content 或 cues。未传字段和已有证据保留。状态使用 <code>set_scene_status</code>，批注使用 <code>annotate</code>。日记用独立的 read_diary、write_diary、revise_diary、comment_diary、delete_diary；升级后刷新工具列表。</p>
       <p>需要审核时仍可用 <code>propose_memory</code>，在 draft 中填写 title、body_md、cues、date，接受候选后才正式保存。Event 由原话整理流程生成；叙事卷正文走 <code>narrative_volume</code>，开启“主模型读写叙事卷”后，由主模型读取材料、自己写正文、预览并保存，不额外调用 Writer 模型。</p>
       <h4>把 Event 写成自己的 Scene</h4>
-      <p>在功能页开启“Event 升为 Scene”并保存后，主窗口可以用 <code>read_memory</code> 读取摘要和绑定原话，自己改好标题、正文，再调用 <code>promote_event_to_scene</code>，传 Event ID、当前版本和改好的文字。工具保留 Event 原件及原话绑定，生成关联 Scene；原 Event 不再自动浮现，也不进入叙事卷修订箱。这一步不会自动执行。关闭开关会停用工具，已有内容保留。</p>
+      <p>Event 生成后会直接出现在信箱。开启“Event 升为 Scene”后，主窗口可用 <code>list_event_mailbox</code> 和 <code>read_event_mailbox</code> 读取候选及原话，再调用 <code>memory_inbox_scene</code>，一次传入 <code>candidate_id、title、body、cues</code>，把重写正文和召回入口一起保存为 Scene。工具保留 Event 原件及原话绑定；原 Event 不再重复自动浮现。关闭开关会停用工具，已有内容保留。</p>
       <h4>Arc 的修订提醒</h4>
       <p>修订箱每天凌晨四点后由程序检查已有 Arc 的关联材料是否比卷的发布时间更新，不用为修订箱选模型。旧版模型生成的待处理成卷候选会在下次扫描时退出队列，历史内容保留。要开启新主题，在叙事卷页输入主题手动找材料；这一步才使用<SettingsLink tab="configuration" onOpen={onOpenSettingsTab}>配置页</SettingsLink>里的“叙事卷找材料”模型。</p>
     </section>
