@@ -24,6 +24,12 @@ def annotated_proposals():
 
 
 def annotate(output, component):
+    contracts = None
+    if component.get('material_contract_version') == 1:
+        from serein.extensions.pipeline_materials import annotation_contract
+        expanded = latest._expand_compact_event_curator_output(
+            {key: value for key, value in output.items() if key != 'decision_review'}, component)
+        contracts = [annotation_contract(event, component) for event in expanded['events']]
     bases = {base['event_id']: base for base in component['base_event_candidates']}
     units = {unit['unit_root_message_id']: unit['source_message_ids']
              for unit in component['memberships']}
@@ -31,6 +37,8 @@ def annotate(output, component):
     for index, event in enumerate(output['events']):
         sources = [sid for base in event['base_event_ids'] for sid in bases[base]['source_message_ids']]
         sources += [sid for root in event['owned_unit_roots'] for sid in units[root]]
+        if contracts is not None:
+            sources = contracts[index]['annotation_source_message_ids']
         output['decision_review']['events'].append({
             'event_index': index, 'reason': 'Synthetic activity', 'materials': [
                 {'source_message_id': sid, 'use': 'main',
