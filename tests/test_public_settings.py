@@ -998,5 +998,8 @@ def test_chat_entrypoint_missing_reasoning_no_longer_becomes_upstream_502(deploy
     # injecting a field or silently retrying/altering the upstream request.
     body['model']='Compat/'+routes[2]['label']
     response=client.post('/v1/chat/completions',json=body)
-    assert response.status_code==502,response.text
+    assert response.status_code==400,response.text
+    assert response.json()['detail']['code']=='upstream_invalid_request'
+    assert response.json()['detail']['upstream_status']==400
+    assert 'synthetic missing reasoning_content' not in response.text
     assert 'reasoning_content' not in captured[-1]['messages'][1]
