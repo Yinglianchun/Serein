@@ -422,6 +422,7 @@
   "web/src/components/FeatureSettings.jsx",
   "web/src/components/LegacyMigration.jsx",
   "web/src/components/MarkdownProjection.jsx",
+  "web/src/components/DarkroomLetter.jsx",
   "web/src/components/ModelDiscovery.jsx",
   "web/src/components/ModelSettings.jsx",
   "web/src/components/RecallThresholdSettings.jsx",

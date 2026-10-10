@@ -5,6 +5,6 @@ export const defaultDarkroom = {
   unlockAt: "",
   title: "暗房",
   get lockedTitle() { return `${identityName("assistant")} 锁了门。`; },
-  lockedQuestion: "",
-  lockedCopy: "到约定的时间再打开。",
+  lockedQuestion: "有密码吗？",
+  lockedCopy: "……这扇门不认密码，只认时间。",
 };
