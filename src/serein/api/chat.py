@@ -41,15 +41,24 @@ async def transcribe_archived_images(settings, message_id):
     from ..compat.raw_archive import raw_archive
     from ..extensions.pipeline_images import freeze_images
     from ..image_transcription import (reusable_transcriptions, mark_transcription,
-        persist_transcriptions, transcribe_images, transcription_context)
+        persist_transcriptions, transcribe_images, transcription_context,
+        transcribed_image_receipts)
     event = raw_archive(settings).get_event(message_id)
     if event is None:
         raise ValueError('Source image message is missing')
     async def run():
-        images = await asyncio.to_thread(freeze_images, [
+        originals = [
             {'source_message_id': message_id, 'position': index,
              'evidence_role': 'owned', 'url': item['url']}
-            for index, item in enumerate(event['metadata'].get('attachments', []), 1)])
+            for index, item in enumerate(event['metadata'].get('attachments', []), 1)]
+        if len(originals) > 24:
+            raise ValueError('本批图片超过 24 张，请减小输入批次')
+        receipts = await asyncio.to_thread(transcribed_image_receipts, [event], originals,
+                                          require_source_fingerprint=True)
+        cached_positions = {item['position'] for item in receipts}
+        missing = [image for image in originals if image['position'] not in cached_positions]
+        frozen = await asyncio.to_thread(freeze_images, missing)
+        images = sorted(receipts + frozen, key=lambda image: image['position'])
         cached = reusable_transcriptions(settings, [event], images)
         if len(cached) == len(images):
             return transcription_context(cached), {'status':'cached','message_id':message_id,'images':len(cached)}
