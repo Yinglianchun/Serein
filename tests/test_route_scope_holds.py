@@ -1,6 +1,7 @@
 """Offline scope-hold / 03:00 regression fixtures. No upstream connections."""
 import asyncio
 from datetime import datetime, timedelta, timezone
+from importlib import import_module
 import json
 
 import pytest
@@ -39,6 +40,10 @@ def seed(settings, session='edge', start=None, count=7):
 
 
 def api(settings,monkeypatch,callback):
+    # These modules bind transports on import. Load them before the temporary
+    # stub so later HTTP tests cannot retain this fixture's complete function.
+    for module in ('serein.image_transcription', 'serein.api.chat'):
+        import_module(module)
     save_settings(settings.database,{'models':[{'id':'stub','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
                                      'assignments':{role:'stub' for role in p.ROLES}})
     monkeypatch.setattr(p,'datetime',Clock)
