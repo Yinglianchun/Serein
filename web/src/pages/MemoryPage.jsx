@@ -794,6 +794,7 @@ export function MemoryPage() {
             sceneId: sereinSourceIdForScene(scene),
             expectedUpdatedAt: scene.sourceUpdatedAt,
             status: status === "已沉底" ? "archived" : "active",
+            ...(status === "已沉底" ? {} : { restoreSurface: true }),
           }),
         });
         const payload = await response.json().catch(() => ({}));
