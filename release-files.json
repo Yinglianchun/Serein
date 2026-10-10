@@ -580,5 +580,6 @@
   "tests/test_scene_restore.py",
   "web/tests/scene-restore-fixture.js",
   "web/tests/scene-restore.dom.mjs",
-  "web/tests/scene-restore-preview.html"
+  "web/tests/scene-restore-preview.html",
+  "tests/test_chat_eyes_fallback.py"
 ]

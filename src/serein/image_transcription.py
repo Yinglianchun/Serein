@@ -162,7 +162,7 @@ def source_fingerprint(message):
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def transcribed_image_receipts(messages, images):
+def transcribed_image_receipts(messages, images, *, require_source_fingerprint=False):
     """Use canonical raw-row successes before fetching their original attachments.
 
     New records bind the raw content/attachments as well as each byte hash. Legacy
@@ -189,6 +189,8 @@ def transcribed_image_receipts(messages, images):
                     or type(item.get('unreadable')) is not bool
                     or (not item['text'].strip() and not item['unreadable'])):
                 continue
+            if require_source_fingerprint and not item.get('source_fingerprint'):
+                continue
             if item.get('source_fingerprint') is not None and item['source_fingerprint'] != source_fingerprint(message):
                 continue
             if image['url'].startswith('data:image/'):
@@ -213,6 +215,8 @@ def cached_transcriptions(messages, images):
             continue
         for item in record.get("items") or []:
             if not isinstance(item, dict):
+                continue
+            if item.get('source_fingerprint') is not None and item['source_fingerprint'] != source_fingerprint(message):
                 continue
             try:
                 key = (message_id, int(item["position"]))
