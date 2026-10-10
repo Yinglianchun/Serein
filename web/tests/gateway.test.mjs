@@ -169,6 +169,29 @@ test('gateway separates web auth from API auth, saves settings and streams respo
       assert.deepEqual(requests.at(-1).body,{name:'set_scene_status',arguments:{
         scene_id:'scene_synthetic',expected_updated_at:'synthetic-version',status}});
     }
+    for (const restoreSurface of [true,false]) {
+      const response=await browserRequest('/__serein/memory/set-scene-status',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sceneId:'scene_synthetic',expectedUpdatedAt:'synthetic-version',status:'active',restoreSurface})});
+      assert.equal(response.status,200);
+      assert.deepEqual(requests.at(-1).body,{name:'set_scene_status',arguments:{
+        scene_id:'scene_synthetic',expected_updated_at:'synthetic-version',status:'active',restore_surface:restoreSurface}});
+    }
+    for (const [restoreSurface,status] of [['true','active'],[1,'active'],[null,'active'],[true,'archived'],[true,undefined]]) {
+      const before=requests.length;
+      const response=await browserRequest('/__serein/memory/set-scene-status',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sceneId:'scene_synthetic',expectedUpdatedAt:'synthetic-version',status,restoreSurface})});
+      assert.equal(response.status,400);
+      assert.equal(requests.length,before);
+    }
+    for (const headers of [{'Content-Type':'application/json'},{...postHeaders,Origin:'https://foreign.invalid'}]) {
+      const before=requests.length;
+      const response=await fetch(base+'/__serein/memory/set-scene-status',{
+        method:'POST',headers,body:JSON.stringify({sceneId:'scene_synthetic',expectedUpdatedAt:'synthetic-version',status:'active',restoreSurface:true})});
+      assert.equal(response.status,headers.Origin?403:401);
+      assert.equal(requests.length,before);
+    }
     const sceneDelete=await browserRequest('/__serein/memory/delete-scenes',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sceneIds:['scene_synthetic']})});
     assert.equal(sceneDelete.status,200);

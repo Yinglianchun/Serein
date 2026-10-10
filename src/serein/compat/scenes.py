@@ -83,7 +83,11 @@ class Scenes:
         if not 1<=len(values)<=8 or any(len(v)>80 for v in values): raise ValueError('Use 1..8 cues of at most 80 characters')
         return values
 
-    def edit(self,scene_id,expected_updated_at,*,title=None,content=None,cues=None,date=None,status=None,metadata=None):
+    def edit(self,scene_id,expected_updated_at,*,title=None,content=None,cues=None,date=None,status=None,metadata=None,restore_surface=False):
+        if type(restore_surface) is not bool:
+            raise ValueError('restore_surface must be a boolean')
+        if restore_surface and status != 'active':
+            raise ValueError('restore_surface requires active status')
         with Writer(self.database) as writer,writer.store.transaction():
             # Acquire the write lock before reading the version supplied by UI.
             writer.store.conn.execute('UPDATE documents SET revision=revision WHERE 0')
@@ -102,11 +106,16 @@ class Scenes:
             body=doc['body_md'] if content is None else content
             heading=doc['title'] if title is None else title
             if not body.strip() or not heading.strip():raise ValueError('Title and body are required')
-            if meta==doc['metadata'] and body==doc['body_md'] and heading==doc['title']:
+            if (meta==doc['metadata'] and body==doc['body_md'] and heading==doc['title']
+                    and (status is None or status==doc['lifecycle'])
+                    and (not restore_surface or doc['manual_surface']==1)):
                 return {'status':'unchanged','scene':scene_payload(doc),'updated_at':doc['updated_at']}
             stamp=now();meta.update(updated_at=stamp,name=heading,scene_revision=doc['revision']+1)
             writer.store.revise(scene_id,expected_revision=doc['revision'],title=heading,body_md=body,metadata=meta)
             if status is not None:writer.store.set_lifecycle(scene_id,status)
+            # Only the explicit restore action opts back into surfacing.
+            # Lifecycle-only edits preserve the independent manual switch.
+            if restore_surface:writer.store.set_manual_surface(scene_id,True)
             writer._dirty(scene_id)
             updated=writer.store.read(scene_id)
             # Metadata tokens returned to existing clients must be exactly the

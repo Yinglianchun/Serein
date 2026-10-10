@@ -570,5 +570,9 @@
   "web/tests/event-mailbox-preview.jsx",
   "web/tests/event-mailbox.browser.mjs",
   "web/tests/event-mailbox-fixture.js",
-  "web/tests/event-mailbox.dom.mjs"
+  "web/tests/event-mailbox.dom.mjs",
+  "tests/test_scene_restore.py",
+  "web/tests/scene-restore-fixture.js",
+  "web/tests/scene-restore.dom.mjs",
+  "web/tests/scene-restore-preview.html"
 ]
