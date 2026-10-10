@@ -243,3 +243,24 @@ Serein 正文主库是 SQLite，旧 Ombre 的 Markdown 桶与 Syncthing 加密�
 ```
 
 可以附错误截图，遮掉密钥、账号、真实地址和私人内容。不要分享 `connection-guide.txt`、`api-token`、数据库、完整日志或备份包。菜单 12 只显示固定错误类别；菜单 4 的原始日志可能含私人信息，发布前需要自己检查。
+
+## 图片与上游请求被拒绝
+
+`/v1/chat/completions` 在上游返回 HTTP 400 或 422 时，向客户端返回相同状态，JSON 的 `detail` 包含固定的 `code`、安全提示 `message` 和数字 `upstream_status`。流式请求在上游拒绝建立流时也返回这个 JSON，而不是 SSE。分类只依据 HTTP 状态，不回显上游错误正文、错误码、请求 ID、URL 或响应头。
+
+| 上游状态 | 网关状态 | `detail.code` |
+| --- | --- | --- |
+| 400 | 400 | `upstream_invalid_request` |
+| 422 | 422 | `upstream_validation_error` |
+| 401 / 403 | 502 | `upstream_authentication_error` / `upstream_permission_error` |
+| 404 / 413 / 429 | 502 | `upstream_endpoint_not_found` / `upstream_request_too_large` / `upstream_rate_limit` |
+| 5xx | 502 | `upstream_service_error` |
+| 其他非成功 HTTP 状态 | 502 | `upstream_http_error` |
+
+网络故障和非流式无效成功响应仍返回通用 502；已经加载 resume 的上下文长度拒绝仍有专门的 413 提示。请求观察中的失败原因使用相同安全分类，失败请求不会记为成功交付。
+
+Eyes 关闭时，标准 OpenAI Chat Completions 的 `image_url`（data URL 或 remote URL）直接转发，Operit 重写遇到图片会跳过整次文本重写。配置为 Anthropic 协议时，标准 user `image_url` 会转换为 Messages 的 image block。Eyes 开启时，原图先转录，再按设计向主聊天模型发送转录文本。此验证不扩展到 Responses `input_image`、原生 Anthropic 请求或 assistant/tool 图片历史。
+
+公开 main `97993ded` 的离线测试通过真实客户端入口、`request_for` 和 httpx MockTransport 验证了上述标准路径，并覆盖协议、流式、Eyes 和 Operit 开关。测试使用合成 1×1 PNG 与合成 remote URL，没有调用真实模型或下载用户图片。这不能证明某次真实图片 502 已解决，也不能判断供应商是否支持具体图片或 thinking 参数。
+
+若需要继续定位真实拒绝，提供失败时的实际提交 HEAD、实际上游供应商及模型 ID、所选协议、Eyes/Operit 状态，以及脱敏后的请求结构（角色、content block 类型、data/remote 类别、thinking/reasoning 字段名和值）。同时提供上游 HTTP 状态和经人工脱敏的固定错误类型；不要提供图片内容、base64、完整图片 URL、prompt、凭据、聊天记录或完整配置。客户端显示名称和模型的自述不能证明真实上游身份。网关不会自动删图、关闭 thinking 或猜测供应商参数映射。

@@ -19,6 +19,27 @@ class UpstreamError(ValueError):
         self.response = response
 
 
+def safe_upstream_http_error(response):
+    """Classify by status only; provider bodies/headers may contain private input."""
+    status = response.status_code
+    categories = {
+        400: ('upstream_invalid_request', 'The upstream rejected the request. Check the configured provider/model supports the submitted inputs and options.'),
+        422: ('upstream_validation_error', 'The upstream could not process the request. Check the configured provider/model supports the submitted inputs and options.'),
+        401: ('upstream_authentication_error', 'The upstream rejected its configured credentials.'),
+        403: ('upstream_permission_error', 'The upstream denied access to the configured model or endpoint.'),
+        404: ('upstream_endpoint_not_found', 'The upstream model or endpoint was not found.'),
+        413: ('upstream_request_too_large', 'The upstream rejected the request size.'),
+        429: ('upstream_rate_limit', 'The upstream rate or quota limit was reached.'),
+    }
+    category, message = categories.get(status, (
+        ('upstream_service_error', 'The upstream service returned an error.') if status >= 500
+        else ('upstream_http_error', 'The upstream returned an unsuccessful HTTP response.')))
+    # Only request validation statuses are passed through. Authentication and
+    # capacity belong to the configured upstream, not to gateway authorization.
+    return status if status in (400, 422) else 502, {
+        'code': category, 'message': message, 'upstream_status': status}
+
+
 def non_thinking_options(model):
     """Disable reasoning only through provider/model controls known to support it."""
     base_url = str(model.get('base_url') or '')
