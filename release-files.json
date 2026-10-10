@@ -571,5 +571,6 @@
   "web/tests/event-mailbox-preview.jsx",
   "web/tests/event-mailbox.browser.mjs",
   "web/tests/event-mailbox-fixture.js",
-  "web/tests/event-mailbox.dom.mjs"
+  "web/tests/event-mailbox.dom.mjs",
+  "tests/test_chat_eyes_fallback.py"
 ]

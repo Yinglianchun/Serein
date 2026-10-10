@@ -109,7 +109,7 @@ def remove_images_for_eyes(messages):
             message['content'] = ''.join(str(part.get('text') or part.get('input_text') or '') for part in content)
         else:
             message['content'] = content or (
-                '[Serein Eyes transcribed the attached image; use the system-provided transcription.]')
+                '[Attached image omitted from the main-model input; refer to the image source notes.]')
     return rewritten
 
 
@@ -173,8 +173,20 @@ def routes(settings, services, auth):
         observation.start(window_id, query, use_memory)
         archive_input = prepare_turn(window_id, incoming)
         image_context = ''
+        image_receipt = {}
         if state['features'].get('image_eyes'):
-            image_context, image_receipt = await transcribe_image_turn(settings, archive_input)
+            try:
+                image_context, image_receipt = await transcribe_image_turn(settings, archive_input)
+            except HTTPException as exc:
+                # A read/model failure may fall back to text. Failure to retain
+                # the original source is still an error, not a successful save.
+                if exc.status_code not in (409, 502):
+                    raise
+                image_context = ('Serein Eyes could not read the attached images. '
+                    'No image transcription is available for this request. '
+                    'Respond using the user text only; do not claim to have seen the images.')
+                image_receipt = {'status':'failed', 'fallback':'text_only',
+                    'reason':'image_model_unconfigured' if exc.status_code == 409 else 'image_read_failed'}
             if image_receipt:
                 observation.payload['image_transcription'] = {**image_receipt, 'mode':'eyes'}
         elif state['features'].get('image_transcription_async') and archive_input and archive_input['user'].get('attachments'):
@@ -192,6 +204,7 @@ def routes(settings, services, auth):
         cache_contract={'model':{k:v for k,v in model.items() if k!='api_key'}, 'memory':use_memory,
                         'operit':state['upstream']['operit_enabled'], 'identity':state['identity'],
                         'features':state['features'],'assignments':state['assignments'], 'resume':state['resume'],
+                        'eyes_fallback':image_receipt.get('fallback') == 'text_only',
                         'clock':state['clock']}
         cache_window = window_id + ':' + digest(encode(cache_contract)) if window_id else uuid4().hex
         resume_query = chat_resume.continuation(query)
