@@ -4,6 +4,8 @@
 
 这份指南从拿到代码、第一次安装写到客户端连接和日常维护。已经装好但遇到问题，请直接看 [Serein 排错指南](troubleshooting.md)。更详细的迁移规则与安装实现见 [交互安装说明](interactive-install.md)。
 
+Zeabur 用户可参考 [Zeabur 手动部署说明](deploy-zeabur.md)。该路线按当前源码整理，尚未在 Zeabur 实测，不属于一键脚本覆盖范围。
+
 ## 先看这六步
 
 1. 准备运行环境，下载或克隆 Serein，进入安装目录。

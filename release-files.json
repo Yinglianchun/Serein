@@ -11,6 +11,7 @@
   "deploy/compose.yaml",
   "docs/automatic-events.md",
   "docs/deployment-guide.md",
+  "docs/deploy-zeabur.md",
   "docs/troubleshooting.md",
   "docs/memory-storage.md",
   "docs/companion.md",
