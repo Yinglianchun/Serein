@@ -1,8 +1,28 @@
 """Transport-sized chunks preserve complete reply envelopes and original IDs."""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from .pipeline_rules import dialogue_units
 
 DEFAULTS={'max_input_chars':40000,'max_prompt_chars':200000,'timeout_seconds':600}
+
+
+def settlement_window(unit):
+    """The first 03:00 UTC+8 watermark containing the WHOLE envelope."""
+    end=max(datetime.fromisoformat(m['created_at'].replace('Z','+00:00')) for m in unit)
+    end=end.astimezone(timezone(timedelta(hours=8)))
+    boundary=end.replace(hour=3,minute=0,second=0,microsecond=0)
+    return boundary if end<=boundary else boundary+timedelta(days=1)
+
+
+def routing_blocks(messages, max_chars=40000):
+    """Freeze transport frames within settlement windows, never split a unit."""
+    result=[];segment=[];window=None
+    for unit in dialogue_units(messages):
+        current=settlement_window(unit)
+        if segment and current!=window:
+            result.extend(blocks(segment,max_chars));segment=[]
+        segment.extend(unit);window=current
+    if segment:result.extend(blocks(segment,max_chars))
+    return result
 
 
 def blocks(messages, max_chars=40000):

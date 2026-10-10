@@ -144,6 +144,10 @@ Persona 是只读的状态卡片展示页：当前心情、内心独白/余韵�
 
 后台在 UTC+8 每日 03:00 窗口结算，以 03:00 为水位，最后二十分钟及未完成回复包作为 parked 供 Curator 阅读。Router 仍对进入粗分批次的消息逐条归 Track；parked 尾部可以提供上下文，但不作为本轮稳定来源。手动“继续整理”或 include_recent=true 可立即处理已完成原话。进度、冻结输入和角色输出持久化；失败不标记原话已处理。
 
+白天归线与夜间结算共用完整对话单元边界，持久 Router frame 不跨结算水位；跨水位的完整单元整体留到下一窗口。Frame 保存原文 ID／哈希、前置 Track 状态与历史上下文哈希；较晚写入的旧消息也不能读取时间较晚的历史上下文。
+
+冻结证据不足时，该聊天显示 needs_repair 并按序等待，其他独立聊天仍可推进。旧输入、成功输出与来源记录保留，不自动重建或跳过未结算原话；继续只能重验同一冻结证据，重建仍须用户明确确认。归线任务累计三次失败后暂停，未达上限的可重试失败按五分钟、十分钟退避；重复调度与预算调整不能通过新批次重置失败次数。明确手动恢复保留成功阶段，只重试失败阶段。设置页显示暂停范围、原因和下一次重试时间；存在未结算暂停范围时，当日调度不会显示全部完成。
+
 本基线按原始消息逐条路由，持久 ownership unit 是单条消息；完整问答 / 主动消息回复包用于判断是否可处理、是否整包 parked，不能与切分器看到的 unit 混为一谈。Curator 按 declared bridge 组成的 Track component 判断经历，必须完整覆盖 stable unit。相关 parked 纠正使前段延后；无关尾巴不拖住已落定经历。
 
 归线 Track 使用可调回看天数（默认三天）：Router 依据已保存归线原话的最近时间读取 Track，不要求 API 上游提供窗口身份。旧 Event 不按年龄退出候选；同一 Track 最多完整读取 8 条 active leaves，第 9 条出现时 host 在读取旧原话、调用 Curator 或 Writer 之前 fail closed，只 defer 该 Track 的稳定原话，其他 Track 继续处理。rolling_engineering 仍合并所有真正服务同一建设主线的相关 active leaves；不相关的唯一旧条目也不阻止 create。命中 protected/manual/forked/blocked/scene_ref/narrative_ref 时，host 把拟议替换转成 defer。旧原文与新原文由 host 取 exact union，并继承来源角色；Writer 读取完整前版正文及其 owned 原文，防止逐次合并丢掉早期内容。上下文不会因此获得证据所有权。
@@ -154,7 +158,7 @@ Writer 正文通常以 500 字为软预算，复杂经历可适当超出；host 
 
 “沉淀”自动展示有效、尚未晋升的 Event。人只做“选入”或“跳过”的单条／批量决定，不手写正文、不补绑定；选入不会创建 Scene。`list_event_mailbox` 只列已选、当前有效且未晋升的候选。现有 `promote_event_to_scene` 接收 `candidate_id、title、body、cues`，一次原子提交 AI 重写的正文、召回入口、全部有效原文绑定和候选完成状态。未决定或跳过的项不能通过旧接口绕过选择。并发核对 Event 与候选当前版本；失败保留候选，重复调用不重复创建 Scene。已完成项仍归入已选，未完成的决定可恢复为待选。左侧候选列表与右侧阅读各自固定高度、独立滚动。收藏、换窗选材、Scene 草稿审核各自独立。详见[候选协议](event-mailbox.md)。
 
-宿主改为公开版数据库和模型 API：只处理显式导入或归档的原话。Track 卡不设删除 TTL；归线默认读取同一 source、同一 runtime／workspace 边界下，在配置回看天数内实际归入过原话的 Track。再次使用会刷新最近归线锚点；超期卡不再参与 Router，但仍保存在库中。额外原文请求限定 declared Track / 可见会话 / 六个历史 unit，且仅一次。图片通过已归档的 URL / data URI 交给图片转录模型或 Curator；Writer 初写及修复只读已绑定的转录，不附原图。不读取私有聊天宿主的图片目录。各角色模型留空时，在设置页打开 Agent 配置弹窗，按说明接入后领取与提交任务；叙事卷 Writer 有独立 runner 引导。原先短版任务协议中尚未完成的任务保留为旧记录，新协议重新从未处理原话开始，已结算正文不重写。
+宿主改为公开版数据库和模型 API：只处理显式导入或归档的原话。Track 卡不设删除 TTL；归线默认读取同一 source、同一 runtime／workspace 边界下，在配置回看天数内实际归入过原话的 Track。再次使用会刷新最近归线锚点；超期卡不再参与 Router，但仍保存在库中。额外原文请求限定 declared Track / 可见会话 / 六个历史 unit，且仅一次。图片通过已归档的 URL / data URI 交给图片转录模型或 Curator；Writer 初写及修复只读已绑定的转录，不附原图。不读取私有聊天宿主的图片目录。各角色模型留空时，在设置页打开 Agent 配置弹窗，按说明接入后领取与提交任务；叙事卷 Writer 有独立 runner 引导。协议或运行时变更后，未完成冻结任务保留原证据并显示 needs_repair，等待明确修复或确认重建；不会自动丢弃失败账本另起批次，已结算正文不重写。
 
 执行方式与配置见 [自动摘要](automatic-events.md)、[扩展接口](extensions.md)。
 
