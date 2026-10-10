@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><link rel="icon" href="data:,"><title>Synthetic Scene restore acceptance</title></head>
+  <body>
+    <p style="padding: 1rem">合成验收页面：所有请求已拦截，不连接后端。三条归档 Scene 的原浮现开关分别为 false、null、true。</p>
+    <div id="root"></div>
+    <script type="module">
+      import {fixture} from './scene-restore-fixture.js';
+      import React from 'react';
+      import {createRoot} from 'react-dom/client';
+      import {MemoryPage} from '../src/pages/MemoryPage.jsx';
+      import '../src/styles.css';
+      window.syntheticSceneRestore = fixture;
+      createRoot(document.getElementById('root')).render(React.createElement(MemoryPage));
+    </script>
+  </body>
+</html>

@@ -1688,6 +1688,12 @@ function sereinMemoryBridge() {
           const sceneId = String(body.sceneId || "").trim();
           const expectedUpdatedAt = String(body.expectedUpdatedAt || "").trim();
           const status = body.status === "archived" ? "archived" : "active";
+          if ((body.restoreSurface !== undefined && typeof body.restoreSurface !== "boolean")
+              || (body.restoreSurface === true && body.status !== "active")) {
+            response.statusCode = 400;
+            response.end(JSON.stringify({ error: "invalid_scene_status", message: "恢复可浮现需要 active 状态和布尔开关。" }));
+            return;
+          }
           if (!/^[A-Za-z0-9_.:#-]{1,160}$/.test(sceneId) || !expectedUpdatedAt) {
             response.statusCode = 400;
             response.end(JSON.stringify({ error: "invalid_scene_status", message: "缺少 Scene 或版本信息。" }));
@@ -1697,6 +1703,7 @@ function sereinMemoryBridge() {
             scene_id: sceneId,
             expected_updated_at: expectedUpdatedAt,
             status,
+            ...(body.restoreSurface === undefined ? {} : { restore_surface: body.restoreSurface }),
           });
           response.statusCode = result?.status === "conflict" ? 409 : result?.status === "invalid" ? 400 : 200;
           response.end(JSON.stringify(result));

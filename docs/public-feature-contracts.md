@@ -24,7 +24,7 @@ Scene、日记和批注工具按自用版的名称、参数和默认值提供。
 | --- | --- |
 | 新建 Scene | `write_scene(content, cues, title='', date='', domain='', evidence_refs=None)`；只必填正文和 cues；可额外传 `favorite` |
 | 修改 Scene | `edit_scene(scene_id, expected_updated_at, title=None, content=None, cues=None)`；先读当前更新时间 |
-| Scene 状态 | `set_scene_status(scene_id, expected_updated_at, status)`；active / archived / deleted，删除为软删除 |
+| Scene 状态 | `set_scene_status(scene_id, expected_updated_at, status, restore_surface=false)`；active / archived / deleted，删除为软删除。普通状态修改保留手动浮现开关；明确 `active` + `restore_surface=true` 原子恢复生命周期和浮现资格，网页「恢复可浮现」使用此操作 |
 | 读取日记 | `read_diary(diary_id=None, date='', limit=5, query='', offset=0)`；无编号时列目录，支持标题／正文关键词搜索和日期筛选；指定编号才读全文与评论 |
 | 新建日记 | `write_diary(content, date='', title='', author='ai', unlock_at='')`；日期默认当天，未来解锁时间表示暗房日记 |
 | 修订日记 | `revise_diary(diary_id, content, title=None, date=None)`；保留作者及历史 |

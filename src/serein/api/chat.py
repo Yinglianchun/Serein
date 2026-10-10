@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from ..deployment import read_settings, task_model, chat_models, client_model_id
 from ..chat_context import ClientContext
-from ..model_runtime import request_for, AnthropicStream, complete, UpstreamError
+from ..model_runtime import request_for, AnthropicStream, complete, UpstreamError, safe_upstream_http_error
 from ..core.store import digest, encode, Conflict
 from .. import chat_resume
 from ..chat_observation import ChatObservation, recall_summary
@@ -348,7 +348,8 @@ def routes(settings, services, auth):
             except (UpstreamError, httpx.HTTPStatusError) as exc:
                 if headers_out['X-Serein-Resume']=='loaded' and chat_resume.context_limit(exc.response):
                     raise HTTPException(413, 'The upstream model rejected the context length. Reduce resume selections or chat history, or choose a model with a larger context window.') from None
-                raise HTTPException(502,'Upstream request failed or returned an invalid response') from None
+                status, detail = safe_upstream_http_error(exc.response)
+                raise HTTPException(status, detail) from None
             except (httpx.HTTPError,ValueError,KeyError,IndexError,TypeError):
                 raise HTTPException(502,'Upstream request failed or returned an invalid response') from None
             completed(message)
@@ -364,7 +365,9 @@ def routes(settings, services, auth):
                 if too_long:
                     await client.aclose()
                     raise HTTPException(413, 'The upstream model rejected the context length. Reduce resume selections or chat history, or choose a model with a larger context window.')
-                raise ValueError('Upstream rejected the request')
+                status, detail = safe_upstream_http_error(response)
+                await client.aclose()
+                raise HTTPException(status, detail)
         except (httpx.HTTPError,ValueError):
             await client.aclose()
             raise HTTPException(502,'Upstream streaming request failed') from None

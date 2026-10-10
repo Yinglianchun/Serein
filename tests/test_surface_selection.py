@@ -268,6 +268,36 @@ def test_replaced_and_scene_covered_events_are_filtered_before_reranker(legacy,m
     assert result['candidate_retrieval']['snapshot_suppressed']['manual_surface_not_enabled']==1
 
 
+@pytest.mark.parametrize('manual', [False, None, True])
+def test_explicit_scene_restore_reenters_real_typed_candidates(legacy, manual):
+    from serein.compat.scenes import Scenes
+    from serein.recall.index import refresh_index
+    settings, build = legacy
+    engine, calls = build([('restore', 'scene', .95, '2026-09-01')])
+    def refresh_with_synthetic_vector():
+        refresh_index(settings.database, settings.index, ['restore'])
+        with sqlite3.connect(settings.index) as db:
+            db.execute('INSERT OR REPLACE INTO vectors VALUES (?,?,2)',
+                       ('restore', json.dumps([.95, math.sqrt(1-.95**2)])))
+    with Store(settings.database) as store:
+        store.set_lifecycle('restore', 'archived')
+        store.set_manual_surface('restore', manual)
+        before = store.read('restore')
+    assert not engine.run('手机维修', method='semantic', min_cosine=.5)['selected_refs']
+    assert not calls
+    # Even when ordinary unarchive removes the lifecycle gate, false/null stay out.
+    ordinary = Scenes(settings.database).edit('restore', before['updated_at'], status='active')
+    refresh_with_synthetic_vector()
+    ordinary_result = engine.run('手机维修', method='semantic', min_cosine=.5)
+    assert bool(ordinary_result['selected_refs']) == (manual is True)
+    calls.clear()
+    Scenes(settings.database).edit('restore', ordinary['updated_at'], status='active', restore_surface=True)
+    refresh_with_synthetic_vector()
+    restored = engine.run('手机维修', method='semantic', min_cosine=.5)
+    assert [row['ref'] for row in calls] == ['scene:restore']
+    assert restored['selected_refs'] == ['scene:restore']
+
+
 def link_scenes(settings, edges, *, association=True):
     if association:save_settings(settings.database,{'features':{'association':True}})
     with Store(settings.database) as store:
