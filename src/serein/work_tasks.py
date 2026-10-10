@@ -150,7 +150,7 @@ async def execute(database,key,operation,*,queued_id=None):
                 elif followup is None and state in ('current','settled_today','waiting_settlement_window','auto_paused') and previous['status'] not in ('queued','running'):
                     value=previous
                 else:
-                    value.update(result=result,status=state if state in ('awaiting_agent','paused','needs_repair') else 'completed',
+                    value.update(result=result,status=state if state in ('awaiting_agent','paused','needs_repair','blocked','retry_wait') else 'completed',
                                  stage=state or 'completed',lease_until=0,updated_at=time.time(),
                                  error=str(result.get('reason','归线材料需要修复')) if state=='needs_repair' else '')
                 _save(store,key,value)
@@ -204,7 +204,7 @@ async def work(settings,key,arguments):
         events=0;deferred=0;skipped=0;protected=[];curator_omissions=[]
         # This worker is explicitly enqueued by Continue; scheduled_advance does
         # not set this flag. Recheck at most the first held batch per request.
-        retry_repair=True
+        retry_repair=True;continued_batches=set()
         while True:
             result=await _advance(settings.database,include_recent=arguments.get('include_recent',True),retry_repair=retry_repair)
             retry_repair=False
@@ -216,8 +216,12 @@ async def work(settings,key,arguments):
             result={**result,'deferred':deferred,'skipped':skipped,'protected_deferrals':protected,
                     'curator_omission_deferrals':curator_omissions}
             progress(events=events)
-            if result['status']=='paused' and result.get('job_id'):
-                continue  # The held scope is excluded; try independent chats.
+            if (result['status']=='paused' and result.get('job_id')) or result['status']=='routed' or (result['status']=='needs_repair' and not result.get('blocked_scopes')):
+                batch_id=result.get('batch_id') or result.get('job_id')
+                if batch_id and batch_id not in continued_batches:
+                    continued_batches.add(batch_id)
+                    continue  # Try independent chats once per newly held/routed batch.
+                return {**result,'events':events}  # Never spin on an unchanged hold.
             if result['status']!='processed':return {**result,'events':events}
             if not result.get('processed_originals',0):
                 if batch_curator_omissions:

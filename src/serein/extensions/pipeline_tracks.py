@@ -16,6 +16,22 @@ def next_ordinal(scope, cards):
     return max(numbers, default=0) + 1
 
 
+def assert_before(store, cards, before_id):
+    """Pre-routing cards must precede both the raw ID and the source clock."""
+    from . import pipeline as p
+    current=store.conn.execute('SELECT created_at FROM raw_events WHERE id=?',(before_id,)).fetchone()
+    if current is None:raise p.RoutingRecoveryError('Pre-routing source anchor is missing')
+    reference=datetime.fromisoformat(current[0].replace('Z','+00:00'))
+    for card in cards:
+        anchors=card.get('recent_source_message_ids')
+        if not isinstance(anchors,list) or not anchors:
+            raise p.RoutingRecoveryError('Pre-routing Track has no proved source anchors: '+card['track_id'])
+        for key in anchors:
+            row=store.conn.execute('SELECT created_at FROM raw_events WHERE id=?',(key,)).fetchone() if type(key) is int else None
+            if row is None or key>=before_id or datetime.fromisoformat(row[0].replace('Z','+00:00'))>reference:
+                raise p.RoutingRecoveryError('Pre-routing Track contains future source material: '+card['track_id'])
+
+
 def load_tracks(store, source, session, before_id, message, *, lookback_days=3):
     """Show tracks with proven routed activity in the preceding N days.
 
@@ -59,8 +75,28 @@ def load_tracks(store, source, session, before_id, message, *, lookback_days=3):
         match=re.fullmatch(r'session_(.+)_track_[0-9]+',card['track_id'])
         card.setdefault('origin_session_id',match[1] if match else row['scope'])
         original=message(anchor[1])
-        card['recent_source_message_ids']=[original['id']]
-        card['recent_turns']=latest.transcript_payload([original])
+        try:assert_before(store,[card],before_id);bounded=True
+        except ValueError:bounded=False
+        # Never re-anchor prose that has read material beyond this routing start.
+        # Recover the historical card from its accepted frame; a partial frame
+        # cannot provide an earlier throughline, even when its raw route survives.
+        if not bounded:
+            from . import pipeline as p
+            from .pipeline_recovery import _frames
+            producer=store.conn.execute('SELECT b.* FROM pipeline_route_provenance r '
+                'JOIN pipeline_batches b ON b.id=r.batch_id WHERE r.raw_id=?',(original['id'],)).fetchone()
+            historical=None
+            if producer:
+                for frame in _frames(store.conn.execute('PRAGMA database_list').fetchone()[2],dict(producer)):
+                    if max(m['id'] for m in frame['messages'])>=before_id:continue
+                    if any(datetime.fromisoformat(m['created_at'].replace('Z','+00:00'))>reference for m in frame['messages']):continue
+                    if original['id'] not in {m['id'] for m in frame['messages']}:continue
+                    historical=next((c for c in frame['tracks'] if c['track_id']==card['track_id']),None)
+                    if historical:break
+            if historical is None:
+                raise p.RoutingRecoveryError('No bounded historical pre-routing Track frame: '+card['track_id'])
+            card=historical
+            assert_before(store,[card],before_id)
         cards.append(card)
     all_ids=[{'track_id':row[0]} for row in store.conn.execute('SELECT id FROM pipeline_tracks')]
     return cards,next_ordinal(scope,all_ids)

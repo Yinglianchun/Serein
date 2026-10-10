@@ -165,7 +165,7 @@ def test_paused_writer_holds_its_chat_but_allows_another_and_resumes_frozen_step
     async def succeeds(role, request):return output_for(role, request)
     result = asyncio.run(p.advance(settings.database, include_recent=True, runner=succeeds))
     assert result['events'] == 1 and result['batch_id'] != paused['batch_id']
-    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=succeeds))['status'] == 'current'
+    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=succeeds))['status'] == 'blocked'
     with Store(settings.database, read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM raw_processing WHERE raw_id IN (1,2,3,4)').fetchone()[0] == 0
         assert store.conn.execute('SELECT count(*) FROM pipeline_jobs WHERE batch_id=? AND output_json IS NOT NULL',
@@ -195,7 +195,7 @@ def test_pause_budget_persists_api_attempts_and_retry_route_is_authenticated(set
     monkeypatch.setattr('serein.model_runtime.complete', broken)
     paused = asyncio.run(p.advance(settings.database, include_recent=True))
     assert paused['status'] == 'paused' and len(calls) == 3
-    assert asyncio.run(p.advance(settings.database, include_recent=True))['status'] == 'current'
+    assert asyncio.run(p.advance(settings.database, include_recent=True))['status'] == 'blocked'
     assert len(calls) == 3
     with Store(settings.database, read_only=True) as store:
         attempts_before_retry = [dict(row) for row in store.conn.execute('SELECT * FROM pipeline_attempts ORDER BY id')]
@@ -247,5 +247,5 @@ def test_continue_worker_moves_to_independent_chat_after_pausing_failed_batch(se
         return result
     monkeypatch.setattr(p, '_advance', controlled)
     result = asyncio.run(work(settings, 'pipeline', {'include_recent': True}))
-    assert results == ['paused', 'processed', 'current']
+    assert results == ['paused', 'processed', 'blocked']
     assert result['events'] == 1

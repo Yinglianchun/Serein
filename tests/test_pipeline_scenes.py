@@ -158,21 +158,18 @@ def test_upgrade_retires_pending_scene_protocol_and_keeps_history(settings,monke
         event=store.conn.execute('SELECT item_id FROM fact_events').fetchone()[0]
         previous=store.read(event)
     monkeypatch.setattr(p,'CONTRACT',current_contract)
-    with pytest.raises(ValueError,match='任务输入已更新'):
+    with pytest.raises(ValueError,match='Frozen runtime contract changed'):
         p.submit(settings.database,task['job_id'],output_for(task['role'],task['request']))
     with Store(settings.database,read_only=True) as store:
         assert [tuple(row) for row in store.conn.execute('SELECT id,output_json FROM pipeline_jobs ORDER BY id')]==history
         assert [tuple(row) for row in store.conn.execute('SELECT * FROM raw_processing ORDER BY raw_id')]==settled
         assert store.read(event)==previous
         assert store.conn.execute('SELECT count(*) FROM raw_events').fetchone()[0]==4
-        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(old_batch,)).fetchone()[0]=='superseded_protocol'
+        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?',(old_batch,)).fetchone()[0]=='needs_repair'
     next_task=asyncio.run(p.advance(settings.database,include_recent=True))
-    assert next_task['request']['batch_id']!=old_batch
-    assert next_task['request']['contract']==current_contract
-    while next_task.get('role'):
-        p.submit(settings.database,next_task['job_id'],output_for(next_task['role'],next_task['request']))
-        next_task=asyncio.run(p.advance(settings.database,include_recent=True))
-    assert next_task['events']==1
+    assert next_task['status']=='needs_repair'
+    assert next_task['batch_id']==old_batch
+
 
 
 def test_mixed_unit_retains_all_originals(settings):

@@ -27,12 +27,15 @@ def initialize(conn):
     ''')
 
 
-def record_routes(conn, batch_id, assignments):
+def record_routes(conn, batch_id, assignments, *, preserve_existing=False):
     """Call inside the SAME transaction that saves the producer's snapshot."""
     for assignment in assignments:
         raw_id = assignment['source_message_id']
         value = encode(assignment)
         conn.execute('INSERT OR REPLACE INTO pipeline_routes VALUES (?,?)', (raw_id, value))
+        if preserve_existing:
+            existing=conn.execute('SELECT route_json FROM pipeline_route_provenance WHERE raw_id=?',(raw_id,)).fetchone()
+            if existing and existing[0]==value:continue
         conn.execute('INSERT OR REPLACE INTO pipeline_route_provenance VALUES (?,?,?)',
                      (raw_id, batch_id, value))
 
@@ -76,11 +79,22 @@ def _frames(database, batch):
                  'next_track_ordinal': result['next_track_ordinal']}]
     frames = []
     cursor = 0
+    state=list(original.get('tracks',[]));ordinal=original.get('next_track_ordinal',1)
+    prior=list(original.get('recent',[]))
     for row in jobs:
         request = json.loads(row['request_json'])
         if request.get('batch_id') != batch['id']:
             raise p.RoutingRecoveryError('Router job belongs to another producer batch')
         messages = p._router_prefix(original, request, cursor)
+        p.assert_router_state(original,request,state,ordinal,prior)
+        if 'routing_frame' in request:
+            with Store(database,read_only=True) as store:
+                tracks.assert_before(store,request['active_tracks'],messages[0]['id'])
+        with Store(database,read_only=True) as store:
+            for key,value in request.get('routing_frame',{}).get('source_hashes',{}).items():
+                raw=store.conn.execute('SELECT event_hash FROM raw_events WHERE id=?',(int(key),)).fetchone()
+                if raw is None or raw[0]!=value:
+                    raise p.RoutingRecoveryError('frozen Router source hash changed: '+str(key))
         cursor += len(messages)
         if row['output_json'] is None:
             break  # An unfinished suffix is never rerun by recovery.
@@ -90,8 +104,9 @@ def _frames(database, batch):
             output, messages, request['active_tracks'], session_id=original['scope'],
             next_track_ordinal=request['next_track_ordinal'])
         with p.latest.identity_scope(request['identity']):
-            cards = tracks.update_cards(request['active_tracks'], assignments, updates,
+            cards = tracks.update_cards(state, assignments, updates,
                                         messages, original['scope'])
+        state=cards;prior.extend(messages)
         used = {key for a in assignments for key in [a['primary_track_id'], *a['context_track_ids']]}
         frames.append({'batch_id': batch['id'], 'job_id': row['id'], 'messages': messages,
                        'assignments': assignments, 'tracks': [c for c in cards if c['track_id'] in used],
@@ -251,7 +266,7 @@ def _rebuild(database, batch_id):
         data = json.loads(batch['input_json'])
         if data.get('contract') != p.CONTRACT:
             raise Conflict('旧批次契约不兼容，不能自动重建')
-        stable = [m['id'] for m in data['messages']]
+        stable = [m['id'] for m in data.get('messages',data['routing_messages'])]
         routing = data['routing_messages']
         if not stable or not _same_scope(data, routing):
             raise Conflict('冻结原话范围无法验证，不能自动重建')
@@ -298,13 +313,14 @@ def _rebuild(database, batch_id):
         fresh['ignore_route_cache'] = True
         fresh['rebuild_of'] = batch_id
         fresh['queue_order'] = data.get('queue_order', batch['queue_order'])
-        replacement = 'pipeline:'+digest(encode([batch_id, uuid4().hex]))
+        route_only=batch_id.startswith('route:')
+        replacement = ('route:' if route_only else 'pipeline:')+digest(encode([batch_id, uuid4().hex]))
         audit = {'status': 'superseded_repair', 'replacement_batch_id': replacement,
                  'confirmed_at': now(), 'previous_result': json.loads(batch['result_json'] or '{}'),
                  'discarded_route_cache': cache}
         store.conn.execute("UPDATE pipeline_batches SET status='superseded_repair',result_json=? WHERE id=?",
                            (encode(audit), batch_id))
-        store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json) VALUES (?,?,?)',
-                           (replacement, data['scope'], encode(fresh)))
+        store.conn.execute('INSERT INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,?)',
+                           (replacement, data['scope'], encode(fresh),'routing_only' if route_only else 'pending'))
         return {'status': 'rebuilt', 'batch_id': replacement, 'superseded_batch_id': batch_id,
                 'note': '旧计划与模型结果已保留，尚未处理的原话将重新归线；已保存的 Event 不变。'}

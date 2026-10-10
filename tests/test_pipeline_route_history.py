@@ -310,8 +310,9 @@ def test_future_producer_job_is_not_shortened_into_a_fake_old_card(settings):
     ingest(settings, 2)
     with Store(settings.database, read_only=True) as store:
         messages = [p.message(r) for r in store.conn.execute('SELECT * FROM raw_events ORDER BY id')]
-    # Unknown timestamps put both pairs in one real Router job.
+    # An existing producer frame inside one settlement window still cannot be trimmed.
     messages = [{**m, 'metadata': {**m['metadata'], 'timestamp_source': 'import_time'}} for m in messages]
+    messages=[{**m,'created_at':'2025-01-01T00:02:00Z' if m['id']==3 else '2025-01-01T00:03:00Z'} if m['id']>2 else m for m in messages]
     source = {**early, 'routing_messages': messages, 'input_policy': {'max_input_chars': 5000}}
     routed = history(settings, source)
     move_card(settings, routed)

@@ -18,6 +18,12 @@ def card(key, **values):
             'event_policy': 'default', 'status': 'active', **values}
 
 
+def anchored_card(key,raw):
+    # Model state is anchored to the actual fixture source, not invented on load.
+    return card(key,recent_source_message_ids=[raw['id']],
+                recent_turns=latest.transcript_payload([p.message(raw)]))
+
+
 def exchanges(count, start=None, session=1, first_id=1):
     start = start or datetime(2026, 9, 14, tzinfo=timezone.utc)
     return [{'id': first_id + i, 'source_event_id': str(first_id + i), 'session_id': session,
@@ -399,6 +405,10 @@ def test_recent_route_boundaries_and_old_anchor_rehydration(settings):
             'source_message_id': 2, 'primary_track_id': b_key, 'context_track_ids': [], 'routing_role': 'origin'})))
         # A high ordinal whose last window moved must still reserve its ID.
         tracks.persist(store.conn, [card('session_'+scopes['c']+'_track_0042', last_session_id='elsewhere')], scopes['c'])
+        with pytest.raises(p.RoutingRecoveryError,match='No bounded historical'):
+            tracks.load_tracks(store, 'test', 'c', 5, p.message)
+        raw=store.conn.execute('SELECT * FROM raw_events WHERE id=2').fetchone()
+        tracks.persist(store.conn,[anchored_card(b_key,raw)],scopes['b'])
         cards, ordinal = tracks.load_tracks(store, 'test', 'c', 5, p.message)
         assert {c['track_id'] for c in cards} == {b_key}
     assert next(c for c in cards if c['track_id'] == b_key)['recent_turns'][0]['message_id'] == 2
@@ -415,9 +425,9 @@ def test_track_lookback_crosses_sessions_without_window_metadata(settings):
                          'text':'Synthetic '+session,'created_at':stamp}],source='test')
     p.initialize(settings.database)
     with Store(settings.database) as store:
-        for raw in store.conn.execute('SELECT id,session_id FROM raw_events WHERE id<4'):
+        for raw in store.conn.execute('SELECT * FROM raw_events WHERE id<4'):
             key='session_'+tracks.scope_for('test',raw['session_id'])+'_track_0001'
-            tracks.persist(store.conn,[card(key)],tracks.scope_for('test',raw['session_id']))
+            tracks.persist(store.conn,[anchored_card(key,raw)],tracks.scope_for('test',raw['session_id']))
             store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(raw['id'],encode({
                 'source_message_id':raw['id'],'primary_track_id':key,'context_track_ids':[],
                 'routing_role':'origin'})))
@@ -445,8 +455,8 @@ def test_track_lookback_keeps_runtime_boundary_and_latest_activity(settings):
     with Store(settings.database) as store:
         first='session_'+tracks.scope_for('test','first')+'_track_0001'
         foreign='session_'+tracks.scope_for('test','foreign')+'_track_0001'
-        tracks.persist(store.conn,[card(first)],tracks.scope_for('test','first'))
-        tracks.persist(store.conn,[card(foreign)],tracks.scope_for('test','foreign'))
+        tracks.persist(store.conn,[anchored_card(first,store.conn.execute('SELECT * FROM raw_events WHERE id=3').fetchone())],tracks.scope_for('test','first'))
+        tracks.persist(store.conn,[anchored_card(foreign,store.conn.execute('SELECT * FROM raw_events WHERE id=2').fetchone())],tracks.scope_for('test','foreign'))
         for raw_id,key in [(1,first),(2,foreign),(3,first)]:
             store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(raw_id,encode({
                 'source_message_id':raw_id,'primary_track_id':key,'context_track_ids':[],
@@ -473,7 +483,7 @@ def test_pipeline_setting_controls_router_track_visibility(settings,days,visible
     old_scope=tracks.scope_for('test','old')
     key='session_'+old_scope+'_track_0001'
     with Store(settings.database) as store:
-        tracks.persist(store.conn,[card(key)],old_scope)
+        tracks.persist(store.conn,[anchored_card(key,store.conn.execute('SELECT * FROM raw_events WHERE id=2').fetchone())],old_scope)
         store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(2,encode({
             'source_message_id':2,'primary_track_id':key,'context_track_ids':[],
             'routing_role':'primary_activity'})))
@@ -509,5 +519,5 @@ def test_old_pending_contract_is_retired_without_processing_raw_data(settings, o
         store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?', (encode(data), batch['id']))
     p.initialize(settings.database)
     with Store(settings.database, read_only=True) as store:
-        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?', (batch['id'],)).fetchone()[0] == 'superseded_protocol'
+        assert store.conn.execute('SELECT status FROM pipeline_batches WHERE id=?', (batch['id'],)).fetchone()[0] == 'needs_repair'
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0

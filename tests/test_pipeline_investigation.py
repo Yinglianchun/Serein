@@ -31,7 +31,10 @@ def test_deleted_predecessor_holds_batch_without_repeating_models(settings):
     assert calls.count('event_writer')==1
     async def forbidden(*args):
         raise AssertionError('accepted model result must not be requested again')
-    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))==held
+    blocked=asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden))
+    assert {key:blocked[key] for key in held}==held
+    assert blocked['blocked_scopes'][0]['hold_status']=='needs_repair'
+    assert blocked['blocked_scopes'][0]['batch_id']==held['batch_id']
     retried=asyncio.run(p.advance(settings.database,include_recent=True,runner=forbidden,retry_repair=True))
     assert retried['status']=='needs_repair' and 'no_active_leaf' in retried['reason']
     with Store(settings.database,read_only=True) as store:

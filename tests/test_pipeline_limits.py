@@ -108,8 +108,7 @@ def test_rebatch_reuses_only_exact_router_frame_with_explicit_provenance(setting
     data['input_policy']['max_input_chars']=1000
     with Store(settings.database) as store:
         store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch['id']))
-    request=p.request_for(settings.database,batch,'track_router')
-    request['messages']=data['routing_messages'][:2]
+    request=p.request_for(settings.database,{**batch,'input_json':encode({**data,'routing_messages':data['routing_messages'][:2]})},'track_router')
     output=output_for('track_router',request)
     with Store(settings.database) as store:
         store.conn.execute('INSERT INTO pipeline_jobs(id,batch_id,role,request_json,output_json) VALUES (?,?,?,?,?)',
@@ -245,7 +244,8 @@ def test_import_boundary_keeps_concurrent_new_chats_and_retires_mixed_plan(setti
                                     'assignments':{'track_router':'local'}})
     monkeypatch.setattr(p,'route_batch',routing)
     asyncio.run(p.flush_routes(settings.database))
-    assert len(calls)==10 and not set(calls)&set(imported)
+    assert calls==[]  # The frozen settlement reserves this scope before daytime routing.
+    assert all(m['id'] not in imported for m in json.loads(batch['input_json'])['routing_messages'])
     found=Originals(settings.database).source_message_search('historical',limit=50)['items']
     assert len(found)==26
     assert Originals(settings.database).source_message_read([found[-1]['id']])['items'][0]['content'].startswith('historical')
@@ -620,9 +620,15 @@ def test_router_replay_uses_ordinal_in_accepted_request(settings):
     ingest(settings)
     p.initialize(settings.database)
     batch=p.new_batch(settings.database,True);data=json.loads(batch['input_json'])
+    data['next_track_ordinal']=7
+    batch={**batch,'input_json':encode(data)}
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(batch['input_json'],batch['id']))
     request=p.request_for(settings.database,batch,'track_router')
-    request['next_track_ordinal']=7
     asyncio.run(p.job(settings.database,batch,request,'track_router:0',synthetic_runner))
+    with Store(settings.database) as store:
+        key='session_'+data['scope']+'_track_0042'
+        store.conn.execute('INSERT INTO pipeline_tracks VALUES (?,?,?)',(key,data['scope'],encode({'track_id':key})))
     async def forbidden(*args):pytest.fail('Accepted Router was repeated')
     recovered=asyncio.run(p.route_batch(settings.database,batch,data,forbidden))
     assert recovered['assignments'][0]['primary_track_id']=='session_'+data['scope']+'_track_0007'
@@ -673,6 +679,17 @@ def test_manual_pipeline_worker_retries_only_first_held_batch(settings,monkeypat
     monkeypatch.setattr(p,'_advance',advance)
     result=asyncio.run(work.work(settings,'pipeline',{'include_recent':True}))
     assert flags==[True,False] and result['status']=='needs_repair'
+
+
+def test_manual_pipeline_worker_never_spins_on_same_hold(settings,monkeypatch):
+    calls=[]
+    async def advance(database,**kwargs):
+        calls.append(kwargs['retry_repair'])
+        assert len(calls)<=2
+        return {'status':'needs_repair','batch_id':'held','reason':'unchanged frozen proof'}
+    monkeypatch.setattr(p,'_advance',advance)
+    result=asyncio.run(work.work(settings,'pipeline',{}))
+    assert calls==[True,False] and result['batch_id']=='held'
 
 
 def test_manual_pipeline_worker_continues_after_curator_omission(settings,monkeypatch):

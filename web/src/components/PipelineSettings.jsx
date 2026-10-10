@@ -9,7 +9,9 @@ export function PipelineSettings({onOpenSummary}) {
   const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null),restoreDialog=useRef(null);
   const [rebuildTarget,setRebuildTarget]=useState('');
   const running=['queued','running'].includes(work?.status);
-  const needsRepair=work?.status==='needs_repair'||work?.result?.status==='needs_repair';
+  const holds=work?.blocked_scopes||[];
+  const repairHold=holds.find(item=>item.hold_status==='needs_repair');
+  const needsRepair=work?.status==='needs_repair'||work?.result?.status==='needs_repair'||Boolean(repairHold);
   const failure=work?.error||(needsRepair?work?.result?.reason:'');
   const candidateOverflows=work?.result?.candidate_overflow_deferrals||[];
   const curatorOmissions=work?.result?.curator_omission_deferrals||[];
@@ -24,7 +26,7 @@ export function PipelineSettings({onOpenSummary}) {
     :work?.execution_mode==='agent'?'自动整理已开启，当前为 Agent 模式；点击“继续整理”可创建任务，等待 Agent 领取。'
     :work?.stage==='settled_today'?'今天的自动检查已完成；新原话会在下一轮检查。'
     :'自动整理已开启；后台在每天 03:00 后检查新原话。要立即运行可点击“继续整理”。';
-  const stages={paused:'本批已暂停',idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复',rebuilt:'计划已重建'};
+  const stages={paused:'本批已暂停',idle:'尚未开始',queued:'等待后台处理',starting:'正在准备',track_router:'归线',event_curator:'切分整理',event_writer:'Event 写作',awaiting_agent:'等待 Agent',processed:'已保存',current:'整理完成',needs_repair:'归线材料待修复',rebuilt:'计划已重建',blocked:'部分聊天等待处理',retry_wait:'等待有限重试'};
   async function call(action,body) {
     const response=await fetch('/__serein/pipeline/'+action,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const result=await response.json();
@@ -53,8 +55,8 @@ export function PipelineSettings({onOpenSummary}) {
       setStatus('后台任务已提交，可离开页面；已完成步骤会保留。');
     }catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
-  function beginRebuild() {
-    setRebuildTarget(work?.result?.batch_id||work?.batch_id||'');
+  function beginRebuild(batchId) {
+    setRebuildTarget(typeof batchId==='string'?batchId:repairHold?.batch_id||work?.result?.batch_id||work?.batch_id||'');
     rebuildDialog.current.showModal();
   }
   async function retryBatch(batchId) {
@@ -136,9 +138,15 @@ export function PipelineSettings({onOpenSummary}) {
       {(work.failed_images||[]).map(image=><p className="import-error" key={image.sha256}>
         图片 {image.sha256.slice(0,8)} 转录失败三次，已暂停自动重试；依赖它的原话仍保留。
         <button type="button" disabled={busy||running} onClick={()=>retryImage(image.sha256)}>重试这张图片</button></p>)}
+      {holds.filter(item=>item.hold_status!=='paused_failure').map(item=><p className="import-error" key={item.batch_id}>
+        聊天 <code>{item.scope}</code>：{item.hold_status==='needs_repair'?'归线证据待修复':item.hold_status==='retry_wait'?'等待有限重试':'归线尚未完成'}。{item.reason}
+        {item.next_retry_at&&<> 下次重试：{new Date(item.next_retry_at).toLocaleString()}。</>}
+        {' '}原文保留，此聊天按序等待，其他聊天可继续；当日尚未全部结算。
+        {item.hold_status==='needs_repair'&&<button type="button" disabled={busy||running} onClick={()=>beginRebuild(item.batch_id)}>查看重建确认</button>}
+      </p>)}
       {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批已暂停：{batch.reason}。同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button></p>)}
       {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
-      {needsRepair&&<p>批次：<code>{work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。不会跳过原话或删除已保存的 Event。</p>}
+      {needsRepair&&<p>批次：<code>{repairHold?.batch_id||work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。不会跳过原话或删除已保存的 Event。</p>}
       {task&&<p>等待 {stages[task.role]||task.role}：下载任务交给 Agent，再提交返回的 JSON。</p>}</div>}
     {work?.attempts?.length>0&&<details><summary>模型返回与纠错记录</summary>{work.attempts.map(item=><p key={item.id}>
       第 {item.attempt} 次：{item.error||'校验通过'} · {item.output_chars} 字符 <button type="button" onClick={()=>downloadAttempt(item.id)}>下载返回</button></p>)}</details>}

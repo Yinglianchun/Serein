@@ -23,6 +23,10 @@ jobs:
       - name: Offline index and API regression tests
         run: >-
           python -m pytest -q tests/test_index_safety.py tests/test_embedding.py
+          tests/test_route_scope_holds.py tests/test_pipeline_route_history.py tests/test_pipeline_rule_parity.py
+          tests/test_pipeline_limits.py tests/test_latest_pipeline.py
+          tests/test_track_continuation_parity.py tests/test_pipeline_scenes.py
+          tests/test_pipeline_investigation.py tests/test_hook_source_refs.py
           tests/test_vectors.py tests/test_live_index_worker.py tests/test_public_settings.py
           tests/test_chat_resume.py tests/test_resume_shadows.py
           tests/test_chat_image_transport.py tests/test_chat_upstream_errors.py
@@ -38,6 +42,8 @@ jobs:
       - run: npm test
         working-directory: web
       - run: npm run test:mailbox-dom
+        working-directory: web
+      - run: node tests/pipeline-holds.dom.mjs
         working-directory: web
       - run: npm run test:scene-restore-dom
         working-directory: web
