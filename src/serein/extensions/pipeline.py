@@ -1436,7 +1436,13 @@ async def advance(database,*,include_recent=False,runner=None,retry_repair=False
 
 async def _advance(database,*,include_recent=False,runner=None,retry_repair=False):
     with execution(database):
-        return await _advance_frozen(database,include_recent=include_recent,runner=runner,retry_repair=retry_repair)
+        result=await _advance_frozen(database,include_recent=include_recent,runner=runner,retry_repair=retry_repair)
+    # Progress sampling is best-effort; it must never affect the pipeline.
+    from .pipeline_progress import record_sample
+    try:
+        record_sample(database,result.get('status','') if isinstance(result,dict) else '')
+    except Exception:pass
+    return result
 
 
 async def transcribe_component(database,batch,component,index,runner,*,key_prefix='image_transcription'):

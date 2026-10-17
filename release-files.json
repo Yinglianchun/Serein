@@ -598,5 +598,8 @@
   "src/serein/recall/embedding_batches.py",
   "tests/test_index_throughput.py",
   "scripts/benchmark_memory_jobs.py",
-  "web/tests/index-throughput.dom.mjs"
+  "web/tests/index-throughput.dom.mjs",
+  "src/serein/api/pipeline_progress.py",
+  "src/serein/extensions/pipeline_progress.py",
+  "tests/test_pipeline_progress.py"
 ]

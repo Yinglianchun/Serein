@@ -149,6 +149,8 @@ def create_app(settings, *, token: str, live: bool=False):
         app.include_router(routes(settings, services, auth))
         from .raw_archive import routes as raw_routes
         app.include_router(raw_routes(settings, auth))
+        from .pipeline_progress import routes as pipeline_progress_routes
+        app.include_router(pipeline_progress_routes(settings, auth))
         from .notebook import routes as notebook_routes
         from .scenes import routes as scene_routes
         from .gateway import routes as gateway_routes
