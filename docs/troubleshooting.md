@@ -18,6 +18,14 @@ python3 scripts/doctor.py
 
 Windows 用 `python .\scripts\doctor.py`。排查只读，不重启、不修改配置、不调用模型，只检查当前实例；日志仅显示错误类别和次数，不打印原句。独立排查发现硬错误时退出码为 1。
 
+## 更新卡在 pip 安装
+
+先区分依赖下载慢与版本解析回溯：日志反复尝试同一个包的不同版本、出现 `looking at multiple versions`，才说明正在回溯；某个文件下载久不能单凭耗时归因为版本冲突。参见 [pip 官方依赖解析说明](https://pip.pypa.io/en/stable/topics/dependency-resolution/)。
+
+官方 Docker 和 Python 直跑安装共用发行包内的 `constraints-runtime.txt`，固定 HTTP、MCP、OpenAI SDK、Pydantic 及其传递依赖的版本组合。构建工具先按同一约束安装，再构建 jieba／本项目，最后执行 `pip check`。无需手工改成猜测的 Pydantic 版本，也不要使用旧解析器绕过冲突。
+
+修复后重新通过菜单 **1** 更新；保留 `deploy` 下的数据库、密钥、配置和备份。镜像重建与摘要积压是两个问题：更新不需要删除积压；服务启动后在“自动摘要管理 → 待处理材料”继续、重新整理或预览拆批。
+
 ## 现象速查
 
 | 现象 | 先看哪里 | 下一步 |

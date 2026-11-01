@@ -137,7 +137,11 @@ def build_runtime(*,backup=True):
         local_action('stop')
         if backup:backup_runtime()
     else:run([sys.executable,'-m','venv',str(DEPLOY/'venv')])
-    run([str(local_python()),'-m','pip','install','.[http,embedding,mcp,background]'],cwd=ROOT)
+    constraint=str(ROOT/'constraints-runtime.txt')
+    run([str(local_python()),'-m','pip','install','-c',constraint,'setuptools','wheel'],cwd=ROOT)
+    run([str(local_python()),'-m','pip','install','--no-build-isolation','--prefer-binary',
+         '-c',constraint,'.[http,embedding,mcp,background]'],cwd=ROOT)
+    run([str(local_python()),'-m','pip','check'],cwd=ROOT)
     # Calling npm's JS entry avoids cmd.exe quoting of paths on Windows.
     npm=shutil.which('npm')
     if os.name=='nt':

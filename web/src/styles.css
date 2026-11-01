@@ -7587,6 +7587,56 @@ label:has(input:focus-visible) {
 .settings-disclosure > summary { cursor: pointer; font-family: var(--font-editorial-cjk); font-size: 17px; color: #48564e; }
 .settings-disclosure > p { color: var(--muted); font-size: 12px; line-height: 1.8; }
 .settings-disclosure .settings-field { margin: 16px 0; }
+
+/* Keep everyday controls visible; reveal less frequent settings by purpose. */
+.settings-menu { margin-top: 22px; border-top: 1px solid var(--line); }
+.settings-menu + .settings-menu { margin-top: 0; }
+.settings-menu > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  min-height: 68px; padding: 16px 2px; list-style: none; cursor: pointer;
+  color: var(--ink); font-family: var(--font-editorial-cjk); font-size: 17px;
+}
+.settings-menu > summary::-webkit-details-marker { display: none; }
+.settings-menu > summary::after {
+  content: ''; width: 7px; height: 7px; margin-right: 5px; flex: 0 0 auto;
+  border-right: 1px solid currentColor; border-bottom: 1px solid currentColor;
+  transform: rotate(45deg); transition: transform .16s ease;
+}
+.settings-menu[open] > summary::after { transform: rotate(225deg); }
+.settings-menu > summary small {
+  display: block; margin-top: 5px; color: var(--muted); font-family: inherit;
+  font-size: 12px; line-height: 1.65; overflow-wrap: anywhere;
+}
+.settings-menu > summary:hover { color: #425d50; }
+.settings-menu > summary:focus-visible { outline: 2px solid #657a72; outline-offset: 3px; }
+.settings-menu[open] { padding-bottom: 22px; }
+.settings-menu .model-assignment-group { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.settings-menu .settings-group__heading { margin-top: 8px; }
+.settings-menu .settings-field { margin-block: 16px; }
+.settings-menu .settings-toggle { padding-block: 16px; }
+@media (prefers-reduced-motion: reduce) { .settings-menu > summary::after { transition: none; } }
+
+.pending-materials__notice { padding: 14px 16px; border-left: 3px solid #657a72; background: #f0f4f1; font-size: 13px; line-height: 1.8; }
+.pending-material { padding: 22px 0; border-top: 1px solid var(--line); }
+.pending-material h4, .pending-material-detail h4 { margin: 0 0 12px; font-size: 16px; font-weight: 500; }
+.pending-material p, .pending-material-detail p { line-height: 1.8; overflow-wrap: anywhere; }
+.pending-material__meta { color: var(--muted); font-size: 12px; }
+.pending-material__excerpt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; margin: 14px 0; padding-left: 14px; border-left: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.8; }
+.pending-material__reason { font-size: 14px; }
+.pending-recovery { margin-top: 18px; padding: 16px; border: 1px solid var(--line); }
+.pending-recovery h5, .pending-material-detail h5 { margin: 24px 0 10px; font-size: 14px; font-weight: 600; }
+.pending-material-detail { padding-top: 24px; margin-top: 24px; border-top: 1px solid var(--line); }
+.pending-material-detail > header, .pending-originals article > header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pending-material-detail > header button { padding: 6px 10px; border: 1px solid var(--line); background: transparent; color: inherit; cursor: pointer; }
+.pending-originals { max-height: 32rem; overflow-y: auto; overscroll-behavior: contain; border-block: 1px solid var(--line); }
+.pending-originals article { padding: 16px 4px; border-bottom: 1px solid var(--line); }
+.pending-originals article:last-child { border-bottom: 0; }
+.pending-originals article:focus-visible, .pending-material-detail:focus-visible { outline: 2px solid #657a72; outline-offset: -2px; }
+.pending-originals article > header { font-size: 12px; line-height: 1.8; color: var(--muted); }
+.pending-originals article > header strong { color: var(--ink); font-weight: 500; }
+.pending-originals summary { cursor: pointer; margin-top: 10px; font-size: 13px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pending-originals pre, .pending-output { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 13px; line-height: 1.85; }
+.pending-output { max-height: 28rem; overflow-y: auto; padding: 14px; background: #f4f6f4; }
 .import-upload input[type="file"] { max-width: 100%; color: #7d8982; font: inherit; font-size: 12px; }
 .import-upload input[type="file"]::file-selector-button {
   border: 1px solid #cbd2cd; border-radius: 5px; background: #f6f8f5;

@@ -68,6 +68,16 @@ def routes(settings,auth):
     @router.get('/v1/pipeline/status')
     def pipeline_status():
         value=status(settings.database,'pipeline')
+        from ..extensions.pipeline_pending import initialize as initialize_pending,retain_legacy_batches
+        with Store(settings.database) as store,store.transaction(immediate=True):
+            initialize_pending(store.conn)
+            if value['status'] not in ('queued','running') and store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='pipeline_batches'").fetchone():
+                retain_legacy_batches(store.conn)
+                job_id=value.get('job_id') or (value.get('result') or {}).get('job_id')
+                if job_id and value['status'] in ('awaiting_agent','interrupted'):
+                    job=store.conn.execute('SELECT b.status FROM pipeline_jobs j JOIN pipeline_batches b ON b.id=j.batch_id WHERE j.id=?',(job_id,)).fetchone()
+                    if job and job['status'] not in ('pending','routing_only'):
+                        value.update(status='idle',stage='idle',job_id='',result=None)
         from ..deployment import read_settings, configured_models
         config=read_settings(settings.database)
         value['execution_mode']=config['pipeline']['execution_mode']

@@ -529,7 +529,7 @@ def test_upgrade_rebuild_freezes_current_revision_and_preserves_old_producer(set
             store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?', (encode(old), key))
         producer = store.conn.execute("SELECT input_json FROM pipeline_batches WHERE id='route:synthetic'").fetchone()[0]
     held = asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))
-    assert held['status'] == 'needs_repair' and 'Frozen runtime contract changed' in held['reason']
+    assert held['status'] == 'needs_repair' and held['repair_kind'] == 'runtime_contract'
     rebuilt = asyncio.run(recovery.rebuild(settings.database, batch['id'], 'REBUILD_PIPELINE_BATCH'))
     with Store(settings.database, read_only=True) as store:
         fresh = json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',

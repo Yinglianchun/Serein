@@ -90,27 +90,7 @@ def initialize(database):
                   ON b.upload_id=json_extract(m.value,'$.metadata.import_upload_id') AND b.released=0)""")
         # A code upgrade is not permission to rebuild frozen work or reset its
         # failure budget. Retain requests, outputs, provenance and existing holds.
-        revision=runtime_revision()
-        for row in store.conn.execute("""SELECT * FROM pipeline_batches
-            WHERE status IN ('pending','routing_only','retry_wait','needs_repair')
-              AND (status<>'needs_repair' OR COALESCE(json_extract(result_json,'$.repair_kind'),'')<>'runtime_contract')
-              AND (json_extract(input_json,'$.contract') IS NULL
-                   OR json_extract(input_json,'$.contract')<>?
-                   OR json_extract(input_json,'$.runtime_revision') IS NULL
-                   OR json_extract(input_json,'$.runtime_revision')<>?)""",(CONTRACT,revision)).fetchall():
-            detail={'status':'needs_repair','batch_id':row['id'],'scope':row['scope'],
-                    'repair_kind':'runtime_contract',
-                    'reason':'Frozen runtime contract changed; explicitly review or rebuild the plan.',
-                    'note':'原文与已完成输出保留；此聊天暂停，其他聊天可继续。'}
-            if row['status']=='needs_repair':
-                detail['previous_result']=json.loads(row['result_json'] or '{}')
-            store.conn.execute("UPDATE pipeline_batches SET status='needs_repair',result_json=? WHERE id=?",
-                               (encode(detail),row['id']))
-        for held in store.conn.execute("SELECT b.* FROM pipeline_batches b WHERE b.status IN ('needs_repair','paused_failure','waiting_materials') AND NOT EXISTS (SELECT 1 FROM pipeline_pending_materials pm WHERE pm.batch_id=b.id)").fetchall():
-            data=json.loads(held['input_json'])
-            ids=[m['id'] for m in data.get('messages',data.get('routing_messages',[]))
-                 if not store.conn.execute('SELECT 1 FROM raw_processing WHERE raw_id=?',(m['id'],)).fetchone()]
-            pending_materials.retain(store.conn,dict(held),data,ids,json.loads(held['result_json'] or '{}').get('reason','原有未完成批次'),publish_routes=False)
+        pending_materials.retain_legacy_batches(store.conn)
         compact_completed_snapshots(store)
         expire_completed_media(store)
 

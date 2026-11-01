@@ -406,8 +406,9 @@ def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None):
         split = _recovery_chunks(data, max_input_chars) if recovery_action == 'rebatch' else None
         if split is not None and len(split) < 2:
             raise ValueError('当前上限无法把本批拆成更小的完整问答；可降低上限，或选择跳过本批')
-        if data.get('contract') != p.CONTRACT:
-            raise Conflict('旧批次契约不兼容，不能自动重建')
+        legacy_contract = data.get('contract') != p.CONTRACT
+        if legacy_contract and not recovery_action:
+            _recovery_scope(store,batch_id)
         stable = [m['id'] for m in data.get('messages',data['routing_messages'])]
         routing = data['routing_messages']
         if not stable or not _same_scope(data, routing):
@@ -451,17 +452,16 @@ def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None):
         fresh['runtime_revision'] = p.runtime_revision()
         # Explicit rebuilding creates a new summary-first plan; old jobs and
         # their original reading policy remain available in the retired batch.
-        fresh['input_policy'] = {**fresh.get('input_policy', {}), 'curator_summary_first': True,
-                                'event_history_enabled': read_from_store(store)['pipeline']['event_history_enabled']}
-        fresh['tracks'] = [c for c in fresh['tracks'] if p._card_is_complete(c)]
+        fresh['input_policy'] = {**read_from_store(store)['pipeline'], 'curator_summary_first': True}
+        fresh['tracks'] = [c for c in fresh.get('tracks',[]) if p._card_is_complete(c)]
         previous_result = json.loads(batch['result_json'] or '{}')
         history_error = data.get('routing_evidence_error') or previous_result.get('reason', '')
-        if data.get('routing_evidence_error') or 'No bounded historical pre-routing Track frame:' in history_error:
+        if legacy_contract or data.get('routing_evidence_error') or 'No bounded historical pre-routing Track frame:' in history_error:
             # The existing explicit rebuild starts a new history segment for
             # this scope. Later windows must not reintroduce the same gap.
             fresh['tracks'] = []
             fresh['recent'] = []
-            fresh['recovery_downgrade'] = {'reason': history_error,
+            fresh['recovery_downgrade'] = {'reason': '旧执行方案不兼容，按已核对原话重新归线' if legacy_contract else history_error,
                 'history_before_id': min(m['id'] for m in routing),
                 'confirmed_by': 'REBUILD_PIPELINE_BATCH', 'source_batch_id': batch_id}
         fresh['next_track_ordinal'] = max(data.get('next_track_ordinal', 1),

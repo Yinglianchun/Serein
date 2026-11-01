@@ -15,6 +15,28 @@ def initialize(conn):
         resolved_event_ids_json TEXT NOT NULL DEFAULT '[]')''')
 
 
+def retain_legacy_batches(conn):
+    """Expose old unfinished work even before the first post-upgrade model run."""
+    from . import pipeline as p
+    revision=p.runtime_revision()
+    for row in conn.execute("""SELECT * FROM pipeline_batches
+        WHERE status IN ('pending','routing_only','retry_wait','needs_repair')
+          AND (status<>'needs_repair' OR COALESCE(json_extract(result_json,'$.repair_kind'),'')<>'runtime_contract')
+          AND (json_extract(input_json,'$.contract') IS NULL OR json_extract(input_json,'$.contract')<>?
+               OR json_extract(input_json,'$.runtime_revision') IS NULL OR json_extract(input_json,'$.runtime_revision')<>?)""",
+        (p.CONTRACT,revision)).fetchall():
+        detail={'status':'needs_repair','batch_id':row['id'],'scope':row['scope'],'repair_kind':'runtime_contract',
+                'reason':'版本已更新，旧任务原话与输出已保留；可按当前设置重新整理或预览拆批。',
+                'note':'其他聊天可继续，旧任务不会自动重发。'}
+        if row['status']=='needs_repair':detail['previous_result']=json.loads(row['result_json'] or '{}')
+        conn.execute("UPDATE pipeline_batches SET status='needs_repair',result_json=? WHERE id=?",(encode(detail),row['id']))
+    for row in conn.execute("SELECT b.* FROM pipeline_batches b WHERE b.status IN ('needs_repair','paused_failure','waiting_materials') AND NOT EXISTS (SELECT 1 FROM pipeline_pending_materials pm WHERE pm.batch_id=b.id)").fetchall():
+        data=json.loads(row['input_json'])
+        ids=[m['id'] for m in data.get('messages',data.get('routing_messages',[]))
+             if not conn.execute('SELECT 1 FROM raw_processing WHERE raw_id=?',(m['id'],)).fetchone()]
+        retain(conn,dict(row),data,ids,json.loads(row['result_json'] or '{}').get('reason','原有未完成批次'),publish_routes=False)
+
+
 def reservation_clause(alias='r'):
     return " AND NOT EXISTS (SELECT 1 FROM pipeline_pending_materials pm, json_each(pm.source_ids_json) ps WHERE pm.status IN ('open','running') AND ps.value="+alias+".id)"
 
@@ -59,8 +81,22 @@ def park(database,batch,error):
         return result
 
 
+def source_locator(messages):
+    """Small identifying excerpts for the UI; full originals remain on demand."""
+    if not messages:return {}
+    first,last=messages[0],messages[-1]
+    longest=max(messages,key=lambda m:len(m.get('content','')))
+    return {'source':first.get('source',''),'session_id':first.get('original_session_id',first.get('session_id','')),
+            'timestamp_source':(first.get('metadata') or {}).get('timestamp_source',''),
+            'first_at':first.get('created_at'),'last_at':last.get('created_at'),
+            'first_raw_id':first['id'],'last_raw_id':last['id'],
+            'preview':first.get('content','')[:160],
+            'longest_message':{'id':longest['id'],'role':longest.get('role',''),
+                               'chars':len(longest.get('content','')),'preview':longest.get('content','')[:160]}}
+
+
 def entries(conn, *, limit=100):
-    rows=conn.execute('''SELECT pm.*,b.input_json FROM pipeline_pending_materials pm
+    rows=conn.execute('''SELECT pm.*,b.input_json,b.status AS batch_status FROM pipeline_pending_materials pm
         JOIN pipeline_batches b ON b.id=pm.batch_id ORDER BY CASE WHEN pm.status IN ('open','running') THEN 0 ELSE 1 END,pm.id DESC LIMIT ?''',(limit,)).fetchall()
     result=[]
     for row in rows:
@@ -70,6 +106,8 @@ def entries(conn, *, limit=100):
         attempt=last_attempt(conn,row['batch_id'],data,compact=True)
         result.append({key:row[key] for key in ('id','batch_id','scope','status','kind','reason','updated_at')} |
             {'source_ids':ids,'originals':len(ids),'original_chars':sum(len(m['content']) for m in source),
+             'locator':source_locator(source),'batch_status':row['batch_status'],
+             'can_skip':row['batch_status'] in ('pending','paused_failure','retry_wait','routing_only','needs_repair','waiting_materials'),
              'summary':'；'.join(str(c.get('subject',''))+': '+str(c.get('throughline','')) for c in cards)[:240],
              'last_attempt':dict(attempt) if attempt else None,
              'resolved_event_ids':json.loads(row['resolved_event_ids_json'])})
@@ -77,7 +115,7 @@ def entries(conn, *, limit=100):
 
 
 def last_attempt(conn,batch_id,data,*,compact=False,errors_only=False):
-    columns='a.id,a.error,length(a.output_text) AS output_chars,j.role' if compact else 'a.*,j.role'
+    columns='a.id,a.attempt,a.created_at,a.error,length(a.output_text) AS output_chars,j.role' if compact else 'a.*,j.role'
     # A resumed completed batch gets a new ID; keep its previous output visible.
     seen=set()
     while batch_id and batch_id not in seen:
@@ -100,14 +138,16 @@ def detail(database,pending_id):
     with Store(database,read_only=True) as store:
         row=store.conn.execute('SELECT * FROM pipeline_pending_materials WHERE id=?',(pending_id,)).fetchone()
         if row is None:raise ValueError('找不到待处理材料')
-        batch=store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(row['batch_id'],)).fetchone()
-        data=json.loads(batch[0]);ids=set(json.loads(row['source_ids_json']))
+        batch=store.conn.execute('SELECT input_json,status FROM pipeline_batches WHERE id=?',(row['batch_id'],)).fetchone()
+        data=json.loads(batch['input_json']);ids=set(json.loads(row['source_ids_json']))
+        messages=[m for m in data.get('routing_messages',[]) if m['id'] in ids]
         jobs=[{'role':j['role'],'output':json.loads(j['output_json']) if j['output_json'] else None}
               for j in store.conn.execute('SELECT role,output_json FROM pipeline_jobs WHERE batch_id=? ORDER BY rowid',(row['batch_id'],))]
         attempt=last_attempt(store.conn,row['batch_id'],data)
         error=last_attempt(store.conn,row['batch_id'],data,errors_only=True)
-        return {'id':row['id'],'kind':row['kind'],'reason':row['reason'],
-                'messages':[m for m in data.get('routing_messages',[]) if m['id'] in ids],
+        return {'id':row['id'],'batch_id':row['batch_id'],'status':row['status'],'batch_status':batch['status'],
+                'kind':row['kind'],'reason':row['reason'],'locator':source_locator(messages),
+                'originals':len(messages),'original_chars':sum(len(m['content']) for m in messages),'messages':messages,
                 'jobs':jobs,'last_attempt':dict(attempt) if attempt else None,
                 'last_error':dict(error) if error else None}
 
@@ -201,7 +241,7 @@ def resume(database,pending_id,*,replan=False):
     from . import pipeline as p
     p.initialize(database)
     with Store(database) as store,store.transaction(immediate=True):
-        row=store.conn.execute("SELECT pm.*,b.input_json,b.status AS batch_status FROM pipeline_pending_materials pm JOIN pipeline_batches b ON b.id=pm.batch_id WHERE pm.id=? AND pm.status='open'",(pending_id,)).fetchone()
+        row=store.conn.execute("SELECT pm.*,b.input_json,b.status AS batch_status,b.rowid AS queue_order,b.result_json AS previous_result FROM pipeline_pending_materials pm JOIN pipeline_batches b ON b.id=pm.batch_id WHERE pm.id=? AND pm.status='open'",(pending_id,)).fetchone()
         if row is None:raise Conflict('待办已被领取或完成，请刷新')
         data=json.loads(row['input_json']);ids=set(json.loads(row['source_ids_json']))
         if data.get('runtime_revision')!=p.runtime_revision() and not replan:raise Conflict('版本已变化，请选择重新切分，不复用旧执行计划')
@@ -216,11 +256,12 @@ def resume(database,pending_id,*,replan=False):
         if row['batch_status']=='done' or replan:
             new_id='pipeline:'+uuid4().hex
             fresh=deepcopy(data);fresh.pop('task_snapshot_compacted',None)
+            fresh.setdefault('queue_order',row['queue_order'])
             fresh['pending_previous_batch_id']=batch_id
             fresh['messages']=[m for m in data.get('messages',data['routing_messages']) if m['id'] in ids]
             fresh.setdefault('parked',[])
             if replan:
-                fresh.update(runtime_revision=p.runtime_revision(),input_policy=p.read_settings(database)['pipeline'])
+                fresh.update(contract=p.CONTRACT,runtime_revision=p.runtime_revision(),input_policy=p.read_settings(database)['pipeline'])
             fresh.pop('components',None)
             if fresh.get('routing_result'):fresh['components']=p.components(database,fresh,fresh['routing_result'])
             store.conn.execute("INSERT INTO pipeline_batches(id,scope,input_json,status) VALUES (?,?,?,'pending')",(new_id,row['scope'],encode(fresh)))
@@ -238,6 +279,10 @@ def resume(database,pending_id,*,replan=False):
                         if output and (json.loads(output).get('evidence_sufficient') is False or '_host_curator_omission' in json.loads(output)):output=None
                         store.conn.execute('INSERT INTO pipeline_jobs VALUES (?,?,?,?,?)',(new_id+':'+role,new_id,role,encode(req),output))
             store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(fresh),new_id))
+            if row['batch_status']!='done':
+                store.conn.execute("UPDATE pipeline_batches SET status='superseded_repair',result_json=? WHERE id=?",
+                    (encode({'status':'superseded_repair','replacement_batch_id':new_id,
+                             'previous_result':json.loads(row['previous_result'] or '{}')}),batch_id))
             store.conn.execute('UPDATE pipeline_pending_materials SET batch_id=? WHERE id=?',(new_id,pending_id));batch_id=new_id
         else:
             store.conn.execute("UPDATE pipeline_batches SET status=?,result_json=NULL,input_json=? WHERE id=?",('routing_only' if batch_id.startswith('route:') else 'pending',encode(data),batch_id))

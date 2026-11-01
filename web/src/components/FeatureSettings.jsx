@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {Fragment,useEffect,useState} from 'react';
 import {instanceSettings} from '../storage/instanceStore.js';
 
 const features = {
@@ -25,6 +25,12 @@ const features = {
 
 const fallbackTimeZones = ['Asia/Shanghai','UTC','Asia/Tokyo','Asia/Singapore','Europe/London','Europe/Berlin','America/New_York','America/Chicago','America/Denver','America/Los_Angeles','Australia/Sydney'];
 const timeZones = [...new Set([...fallbackTimeZones,...(Intl.supportedValuesOf?.('timeZone')||[])])];
+const featureGroups = [
+  ['陪伴与日常','备忘、心绪、梦境与窗影',['memos','persona','anti_retreat','dream_read','dream_morning','window_shadows']],
+  ['记忆与工具','原话查阅、收藏、记忆候选与关系',['originals','favorites','memory_candidates','event_to_scene','association','write_context','relations_auto_accept']],
+  ['叙事卷','主模型读写与夜间整理',['narrative_tools','narrative_nightly_organize']],
+  ['图片识别补充','聊天主模型不能识图时的处理方式',['image_eyes']],
+];
 
 export function FeatureSettings({onOpenSummary}) {
   const [values,setValues]=useState(null),[resumeEntries,setResumeEntries]=useState({command_enabled:true,mcp_enabled:false}),[settingsVersion,setSettingsVersion]=useState(null),[clock,setClock]=useState({timezone:'Asia/Shanghai'}),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
@@ -36,22 +42,30 @@ export function FeatureSettings({onOpenSummary}) {
     try {const result=await instanceSettings({expected_version:settingsVersion,features:Object.fromEntries(Object.entries(values).filter(([key])=>key!=='pipeline_agent')),resume:resumeEntries,clock});setValues(result.features);setResumeEntries({command_enabled:result.resume.command_enabled,mcp_enabled:result.resume.mcp_enabled});setSettingsVersion(result.settings_version);setClock(result.clock);setStatus('已保存并生效。已有内容会保留。');}
     catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
-  return <section className="settings-group"><div className="settings-group__heading"><h3>可选功能</h3><p>按需开启，保存后生效。</p></div>
-    {values&&<form onSubmit={save}>
-      <p><button type="button" className="settings-link" onClick={onOpenSummary}>前往自动摘要管理</button></p>
-      {Object.entries(features).map(([key,[label,help]])=><label className="settings-toggle" key={key}>
+  function feature(key) {
+    const [label,help]=features[key];
+    return <Fragment key={key}><label className="settings-toggle">
       <span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" aria-label={label} disabled={busy} checked={!!values[key]}
         onChange={event=>setValues(current=>({...current,[key]:event.target.checked,
-          ...(event.target.checked&&key==='image_transcription_async'?{image_eyes:false}:event.target.checked&&key==='image_eyes'?{image_transcription_async:false}:{})}))}/></label>)}
-      {(values.current_time||values.dream_morning)&&<label className="settings-field time-context-zone"><span>时间戳时区</span><select disabled={busy} value={clock.timezone}
+          ...(event.target.checked&&key==='image_transcription_async'?{image_eyes:false}:event.target.checked&&key==='image_eyes'?{image_transcription_async:false}:{})}))}/></label>
+      {((key==='current_time'&&values.current_time)||(key==='dream_morning'&&values.dream_morning&&!values.current_time))&&<label className="settings-field time-context-zone"><span>时间戳时区</span><select disabled={busy} value={clock.timezone}
         onChange={event=>setClock({timezone:event.target.value})}>{timeZones.map(zone=><option value={zone} key={zone}>{zone}</option>)}</select>
         <small>默认 Asia/Shanghai（东八区）；注入内容也会写明当时的 UTC 偏移。</small></label>}
-      {values.resume&&<div>
+      {key==='resume'&&values.resume&&<div>
         {Object.entries({command_enabled:['网关 /resume 指令','聊天经过本实例网关时，发送 /resume 读取资料；关闭后也停止携带此前的续接快照。'],mcp_enabled:['MCP resume 工具','向客户端提供只读 resume 工具；可与网关指令同时开启。已通过指令读取本轮资料时，无须再次调用工具。']}).map(([key,[label,help]])=><label className="settings-toggle" key={key}>
           <span><strong>{label}</strong><small>{help}</small></span><input type="checkbox" role="switch" aria-label={label} disabled={busy} checked={!!resumeEntries[key]}
             onChange={event=>setResumeEntries(current=>({...current,[key]:event.target.checked}))}/></label>)}
         <p>两个入口均关闭时，仍可在侧栏“换窗”页选择、预览与复制资料。</p>
-      </div>}
+      </div>}</Fragment>;
+  }
+  return <section className="settings-group"><div className="settings-group__heading"><h3>常用功能</h3><p>常用开关在这里，其他功能按用途展开。修改后保存生效。</p></div>
+    {values&&<form onSubmit={save}>
+      <p><button type="button" className="settings-link" onClick={onOpenSummary}>前往自动摘要管理</button></p>
+      {['current_time','image_transcription_async','resume'].map(feature)}
+      {featureGroups.map(([title,help,keys])=><details className="settings-menu" key={title}>
+        <summary><span>{title}<small>{help} · {keys.filter(key=>values[key]).length} 项已开启</small></span></summary>
+        {keys.map(feature)}
+      </details>)}
       <div className="settings-actions"><button disabled={busy} type="submit">保存功能设置</button></div></form>}
     <p role="status">{status}</p></section>;
 }
