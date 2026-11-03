@@ -240,6 +240,17 @@ def finish_adoptions(conn,plans,processed,event_ids):
 def resume(database,pending_id,*,replan=False):
     from . import pipeline as p
     p.initialize(database)
+    if replan:
+        with Store(database,read_only=True) as store:
+            broken=store.conn.execute("""SELECT pm.batch_id FROM pipeline_pending_materials pm
+                JOIN pipeline_batches b ON b.id=pm.batch_id
+                WHERE pm.id=? AND pm.status='open' AND pm.kind='unrouted' AND b.status='needs_repair'""",
+                (pending_id,)).fetchone()
+        if broken:
+            # No accepted routing can be preserved. Use the existing explicit
+            # rebuild so broken cache/history is retired along with the error.
+            from .pipeline_recovery import _rebuild
+            return {**_rebuild(database,broken['batch_id'],resume_pending_id=pending_id),'status':'resumed'}
     with Store(database) as store,store.transaction(immediate=True):
         row=store.conn.execute("SELECT pm.*,b.input_json,b.status AS batch_status,b.rowid AS queue_order,b.result_json AS previous_result FROM pipeline_pending_materials pm JOIN pipeline_batches b ON b.id=pm.batch_id WHERE pm.id=? AND pm.status='open'",(pending_id,)).fetchone()
         if row is None:raise Conflict('待办已被领取或完成，请刷新')

@@ -225,6 +225,9 @@ class PipelinePatch(BaseModel):
     material_review_enabled: bool | None = None
     round_gate_enabled: bool | None = None
     append_protected_enabled: bool | None = None
+    # Older clients still submit this retired switch. Saving normalizes it to
+    # True, matching the public edition's standard reduced-input behavior.
+    curator_summary_first: bool | None = Field(default=None,strict=True)
     event_history_enabled: bool | None = Field(default=None,strict=True)
 
 

@@ -47,6 +47,58 @@ def test_status_exposes_legacy_backlog_before_any_model_call(settings):
     assert rows(settings,'raw_processing')==[]
 
 
+def test_pending_reroute_does_not_replay_the_recorded_routing_error(settings):
+    from serein.extensions import pipeline_pending as pending
+    batch_id=legacy_backlog(settings)
+    with Store(settings.database) as store:
+        data=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(batch_id,)).fetchone()[0])
+        data['routing_evidence_error']='No bounded historical pre-routing Track frame: synthetic-old-track'
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch_id))
+    p.initialize(settings.database)
+    with Store(settings.database) as store:item=pending.entries(store.conn)[0]
+    assert item['kind']=='unrouted'
+    pending.resume(settings.database,item['id'],replan=True)
+    result=asyncio.run(p.advance(settings.database,include_recent=True,runner=short_runner))
+    assert result['status']=='processed',result
+    assert len(rows(settings,'raw_processing'))==10
+    with Store(settings.database) as store:
+        old=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(batch_id,)).fetchone()[0])
+        assert old['routing_evidence_error']==data['routing_evidence_error']
+        assert store.conn.execute('SELECT status FROM pipeline_pending_materials WHERE id=?',(item['id'],)).fetchone()[0]=='resolved'
+
+
+def test_pending_reroute_retires_unverifiable_cache(settings):
+    from serein.extensions import pipeline_pending as pending
+    from test_public_features import ingest,synthetic_runner
+    from test_pipeline_route_history import hold_bad_cache
+    ingest(settings)
+    batch,_=hold_bad_cache(settings)
+    originals=rows(settings,'raw_events')
+    with Store(settings.database) as store:item=pending.entries(store.conn)[0]
+    assert item['kind']=='unrouted'
+    result=pending.resume(settings.database,item['id'],replan=True)
+    assert result['status']=='resumed'
+    assert asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))['events']==1
+    assert rows(settings,'raw_events')==originals
+    with Store(settings.database) as store:
+        audit=json.loads(store.conn.execute('SELECT result_json FROM pipeline_batches WHERE id=?',(batch['id'],)).fetchone()[0])
+        assert len(audit['discarded_route_cache'])==2
+
+
+def test_legacy_direct_rebuild_without_runtime_revision_is_available(settings):
+    batch_id=legacy_backlog(settings,contract='public-event-message-tracks-v7',failed=True)
+    with Store(settings.database) as store:
+        data=json.loads(store.conn.execute('SELECT input_json FROM pipeline_batches WHERE id=?',(batch_id,)).fetchone()[0])
+        data.pop('runtime_revision')
+        store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encode(data),batch_id))
+    p.initialize(settings.database)
+    result=asyncio.run(recovery.rebuild(settings.database,batch_id,'REBUILD_PIPELINE_BATCH'))
+    assert result['status']=='rebuilt'
+    for _ in range(5):
+        assert asyncio.run(p.advance(settings.database,include_recent=True,runner=short_runner))['status']=='processed'
+    assert len(rows(settings,'raw_processing'))==10
+
+
 def test_old_agent_request_is_not_advertised_again_after_upgrade(settings):
     batch_id=legacy_backlog(settings)
     with Store(settings.database) as store:

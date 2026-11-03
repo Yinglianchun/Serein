@@ -392,7 +392,7 @@ async def recover_batch(database, batch_id, action, confirm, max_input_chars=Non
     return await execute(database, 'pipeline', operation)
 
 
-def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None):
+def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None, resume_pending_id=None):
     from . import pipeline as p
     p.initialize(database)
     with Store(database) as store, store.transaction(immediate=True):
@@ -402,6 +402,10 @@ def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None):
             batch, data, _, _ = _recovery_scope(store, batch_id)
         elif batch is None or batch['status'] != 'needs_repair':
             raise Conflict('此批已不处于待修复状态，请刷新后确认')
+        if resume_pending_id is not None and not store.conn.execute(
+                "SELECT 1 FROM pipeline_pending_materials WHERE id=? AND batch_id=? AND status='open' AND kind='unrouted'",
+                (resume_pending_id,batch_id)).fetchone():
+            raise Conflict('待办已被领取或完成，请刷新')
         data = json.loads(batch['input_json'])
         split = _recovery_chunks(data, max_input_chars) if recovery_action == 'rebatch' else None
         if split is not None and len(split) < 2:
@@ -469,7 +473,9 @@ def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None):
         fresh['ignore_route_cache'] = True
         fresh['rebuild_of'] = batch_id
         fresh['queue_order'] = data.get('queue_order', batch['queue_order'])
-        route_only=batch_id.startswith('route:') and not recovery_action
+        if resume_pending_id is not None:
+            fresh.update(resume_pending_id=resume_pending_id,pending_previous_batch_id=batch_id)
+        route_only=batch_id.startswith('route:') and not recovery_action and resume_pending_id is None
         replacement = ('route:' if route_only else 'pipeline:')+digest(encode([batch_id, uuid4().hex]))
         audit = {'status': 'superseded_repair', 'replacement_batch_id': replacement,
                  'confirmed_at': now(), 'previous_result': previous_result,
@@ -508,6 +514,10 @@ def _rebuild(database, batch_id, *, recovery_action=None, max_input_chars=None):
                       'note': '旧计划与模型结果已保留，尚未处理的原话将重新归线；已保存的 Event 不变。'}
         store.conn.execute("UPDATE pipeline_batches SET status='superseded_repair',result_json=? WHERE id=?",
                            (encode(audit), batch_id))
-        store.conn.execute("UPDATE pipeline_pending_materials SET status=?,updated_at=? WHERE batch_id=? AND status IN ('open','running')",
-                           ('resolved_skipped' if recovery_action=='skip' else 'resolved_rebuilt',now(),batch_id))
+        if resume_pending_id is not None:
+            store.conn.execute("UPDATE pipeline_pending_materials SET batch_id=?,status='running',updated_at=? WHERE id=?",
+                               (replacement,now(),resume_pending_id))
+        else:
+            store.conn.execute("UPDATE pipeline_pending_materials SET status=?,updated_at=? WHERE batch_id=? AND status IN ('open','running')",
+                               ('resolved_skipped' if recovery_action=='skip' else 'resolved_rebuilt',now(),batch_id))
         return result

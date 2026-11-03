@@ -17,6 +17,16 @@ def client_for(settings):
     return TestClient(create_app(settings, token='synthetic', live=True), headers={'Authorization': 'Bearer synthetic'})
 
 
+@pytest.mark.parametrize('legacy_value', [True, False])
+def test_legacy_reduce_input_field_does_not_reject_other_settings(settings, legacy_value):
+    client = client_for(settings)
+    response = client.patch('/v1/settings', json={'pipeline': {
+        'curator_summary_first': legacy_value, 'timeout_seconds': 900}})
+    assert response.status_code == 200, response.text
+    assert response.json()['pipeline']['curator_summary_first'] is True
+    assert client.get('/v1/settings').json()['pipeline']['timeout_seconds'] == 900
+
+
 def test_event_history_defaults_on_and_roundtrips_without_changing_chat_memory(settings):
     client = client_for(settings)
     before = client.get('/v1/settings').json()
