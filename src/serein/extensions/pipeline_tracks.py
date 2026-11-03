@@ -50,15 +50,8 @@ def load_tracks(store, source, session, before_id, message, *, lookback_days=3):
     metadata=json.loads(current['metadata_json'] or '{}')
     boundary=(metadata.get('runtime',''),metadata.get('workspace_root',''))
     scope=scope_for(source,session)
-    # Only a successfully published explicit rebuild can retire earlier
-    # unprovable history, and only for its own scope.
-    cutoff=store.conn.execute("SELECT MAX(CAST(json_extract(old.result_json,"
-        "'$.recovery_downgrade.history_before_id') AS INTEGER)) FROM pipeline_batches old "
-        "JOIN pipeline_batches fresh ON fresh.id=json_extract(old.result_json,'$.replacement_batch_id') "
-        "WHERE old.scope=? AND old.status='superseded_repair' AND fresh.status IN ('routed','done') AND "
-        "CAST(json_extract(old.result_json,'$.recovery_downgrade.history_before_id') AS INTEGER)<=? AND "
-        "json_extract(old.result_json,'$.recovery_downgrade.confirmed_by')='REBUILD_PIPELINE_BATCH'",
-        (scope,before_id)).fetchone()[0] or 0
+    from .pipeline_recovery import history_reset_cutoff
+    cutoff=history_reset_cutoff(store,scope,before_id)
     anchors={}
     rows=store.conn.execute('SELECT r.*,p.route_json FROM pipeline_routes p JOIN raw_events r ON r.id=p.raw_id '
         'WHERE r.source=? AND r.id<? AND julianday(r.created_at)>=julianday(?) '

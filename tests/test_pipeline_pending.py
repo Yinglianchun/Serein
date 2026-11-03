@@ -15,16 +15,16 @@ async def insufficient(role,request):
     return {'evidence_sufficient':False,'self_review':{}} if role=='event_writer' else output_for(role,request)
 
 
-def test_curator_extra_primary_activity_is_retained_without_writing(settings):
+def test_curator_unknown_field_is_retained_without_writing(settings):
     ingest(settings)
     calls=[]
     async def extra_field(role,request):
         calls.append(role)
         output=output_for(role,request)
-        if role=='event_curator':output['events'][0]['primary_activity']='Synthetic extra summary'
+        if role=='event_curator':output['events'][0]['primary_activity_details']='Synthetic extra summary'
         return output
     for _ in range(2):
-        with pytest.raises(ValueError,match="unexpected=\\['primary_activity'\\]"):
+        with pytest.raises(ValueError,match="unexpected=\\['primary_activity_details'\\]"):
             asyncio.run(p.advance(settings.database,include_recent=True,runner=extra_field))
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=extra_field))['status']=='retained'
     before=list(calls)

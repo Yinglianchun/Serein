@@ -58,6 +58,31 @@ def _same_scope(data, messages):
         for m in messages)
 
 
+def history_reset_cutoff(store, scope, before_id):
+    """A confirmed reset survives downstream state changes after accepted routing."""
+    from . import pipeline as p
+    rows = store.conn.execute("SELECT fresh.input_json,CAST(json_extract(old.result_json,"
+        "'$.recovery_downgrade.history_before_id') AS INTEGER) AS cutoff FROM pipeline_batches old "
+        "JOIN pipeline_batches fresh ON fresh.id=json_extract(old.result_json,'$.replacement_batch_id') "
+        "WHERE old.scope=? AND fresh.scope=old.scope AND old.status='superseded_repair' "
+        "AND json_extract(fresh.input_json,'$.routing_result._public_normalized')=1 "
+        "AND CAST(json_extract(old.result_json,'$.recovery_downgrade.history_before_id') AS INTEGER)<=? "
+        "AND json_extract(old.result_json,'$.recovery_downgrade.confirmed_by')='REBUILD_PIPELINE_BATCH' "
+        "ORDER BY cutoff DESC", (scope, before_id))
+    for row in rows:
+        data = json.loads(row['input_json'])
+        try:
+            if data.get('scope') != scope or not _same_scope(data, data.get('routing_messages', [])):
+                continue
+            p.validate_routing_result(data, data['routing_result'])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
+        # Skip/rebatch inputs deliberately omit this accepted snapshot. Merely
+        # finishing an unrouted batch therefore cannot publish a history reset.
+        return row['cutoff']
+    return 0
+
+
 def _frames(database, batch):
     """Replay accepted jobs against THEIR inputs/ordinals, without invoking job()."""
     from . import pipeline as p

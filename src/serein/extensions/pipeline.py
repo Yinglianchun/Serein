@@ -1007,6 +1007,8 @@ def request_for(database,batch,role,**fields):
 def prepare_stage_output(request, output):
     if not isinstance(output, dict):
         return output
+    if request['role'] == 'event_curator':
+        output = latest.prepare_compact_event_curator_output(output)
     if (request['role'] == 'event_writer' and set(output) == {'type', 'content'}
             and output['type'] == 'json_object' and isinstance(output['content'], dict)):
         output = output['content']
@@ -1313,6 +1315,13 @@ async def job(database,batch,request,key,runner):
     incoming=request
     current_execution=request['execution']
     request=hydrate_request_images(database,batch['id'],json.loads(row['request_json']))
+    capacity_recovery=incoming.get('event',{}).get('capacity_recovery',{})
+    if (request['role']=='event_writer' and not row['output_json']
+            and (request.get('writer_mode')=='append' or request.get('event',{}).get('action')=='extend')
+            and capacity_recovery.get('action')=='create'
+            and capacity_recovery.get('base_event_id') in request.get('event',{}).get('base_event_ids',[])):
+        # Use the validated follow-up plan when an unfinished frozen append no longer fits.
+        request=dict(incoming)
     if request['role']=='event_writer' and not row['output_json'] and request.get('writer_previous_body_only')!=3:
         request=request_for(database,batch,'event_writer',**{key:request[key] for key in
             ('messages','event','component','context_read') if key in request})
@@ -1333,8 +1342,10 @@ async def job(database,batch,request,key,runner):
         total=store.conn.execute("SELECT count(*) FROM pipeline_jobs WHERE batch_id=? AND json_extract(request_json,'$.role')!='event_evidence'",(batch['id'],)).fetchone()[0]
     progress(stage=request['role'],batch_id=batch['id'],completed=completed,total=total,job_id=identifier)
     if row['output_json']:return json.loads(row['output_json'])
-    if request.get('writer_mode')=='append' and request['append_remaining_chars']<=0:
-        raise FactEventSettlementBlockedError('旧 Event 已达整篇 1500 字符上限，无法追加；请作废本批计划并重新归线，新计划会处理容量不足；旧正文与原话仍保留。')
+    if request.get('writer_mode')=='append' and request['append_remaining_chars']<latest.EVENT_APPEND_MIN_REMAINING_CHARS:
+        raise FactEventSettlementBlockedError(
+            f"旧 Event 仅剩 {request['append_remaining_chars']} 字符，追加空间不足；"
+            '请作废本批计划并重新归线，新计划会处理容量不足；旧正文与原话仍保留。')
     config=snapshot(database,batch['id']);policy=config['policy']
     prompt_chars=len(request['prompt'])+len(request['rules'])
     progress(prompt_chars=prompt_chars,timeout_seconds=policy['timeout_seconds'])

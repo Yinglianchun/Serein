@@ -616,3 +616,80 @@ def test_upgrade_does_not_accept_incomplete_or_incompatible_producer(settings, d
     assert 'producer=route:synthetic' in str(error.value)
     assert "runtime_revision='synthetic-before-upgrade'" in str(error.value)
     assert 'current_runtime_revision=' in str(error.value)
+
+
+def legacy_history_gap(settings):
+    ingest(settings)
+    p.initialize(settings.database)
+    scope = p.track_state.scope_for('test', 'books')
+    key = 'session_'+scope+'_track_0042'
+    with Store(settings.database) as store:
+        p.track_state.persist(store.conn, [{'track_id': key, 'subject': 'Legacy book plan',
+            'throughline': 'UNPROVED LEGACY HISTORY', 'status': 'active',
+            'event_policy': 'rolling_engineering', 'recent_source_message_ids': [999]}], scope)
+        for raw_id in (1, 2):
+            store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)', (raw_id, encode({
+                'source_message_id': raw_id, 'primary_track_id': key,
+                'context_track_ids': [], 'routing_role': 'primary_activity'})))
+            store.conn.execute("INSERT INTO raw_processing VALUES (?,'old','settled')", (raw_id,))
+    ingest(settings, 2)
+    result = asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))
+    assert result['status'] == 'needs_repair' and 'No bounded historical' in result['reason']
+    return result['batch_id']
+
+
+@pytest.mark.parametrize('skip_after_routing', [False, True])
+def test_confirmed_history_reset_survives_retained_downstream_failure(settings, skip_after_routing):
+    batch_id = legacy_history_gap(settings)
+    rebuilt = asyncio.run(recovery.rebuild(settings.database, batch_id, 'REBUILD_PIPELINE_BATCH'))
+    async def broken_curator(role, request):
+        assert 'UNPROVED LEGACY HISTORY' not in request['prompt']
+        if role == 'event_curator':
+            raise OSError('Synthetic downstream failure after accepted routing')
+        return output_for(role, request)
+    for _ in range(2):
+        with pytest.raises(OSError, match='Synthetic downstream'):
+            asyncio.run(p.advance(settings.database, include_recent=True, runner=broken_curator))
+    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=broken_curator))['status'] == 'retained'
+    with Store(settings.database, read_only=True) as store:
+        row = store.conn.execute('SELECT * FROM pipeline_batches WHERE id=?', (rebuilt['batch_id'],)).fetchone()
+        assert row['status'] == 'waiting_materials'
+        assert json.loads(row['input_json'])['routing_result']['assignments']
+        assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance WHERE batch_id=?',
+                                  (rebuilt['batch_id'],)).fetchone()[0] == 2
+    if skip_after_routing:
+        asyncio.run(recovery.recover_batch(settings.database, rebuilt['batch_id'], 'skip', 'SKIP_PIPELINE_BATCH'))
+    ingest(settings, 3)
+    result = asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))
+    assert result['status'] == 'processed' and result['events'] == 1
+
+
+@pytest.mark.parametrize('malformed_snapshot', [False, True])
+def test_skipping_unrouted_rebuild_does_not_publish_a_history_reset(settings, malformed_snapshot):
+    batch_id = legacy_history_gap(settings)
+    rebuilt = asyncio.run(recovery.rebuild(settings.database, batch_id, 'REBUILD_PIPELINE_BATCH'))
+    asyncio.run(recovery.recover_batch(settings.database, rebuilt['batch_id'], 'skip', 'SKIP_PIPELINE_BATCH'))
+    with Store(settings.database) as store:
+        assert store.conn.execute('SELECT count(*) FROM pipeline_route_provenance').fetchone()[0] == 0
+        if malformed_snapshot:
+            row = store.conn.execute("SELECT id,input_json FROM pipeline_batches WHERE status='done'").fetchone()
+            data = json.loads(row['input_json'])
+            data['routing_result'] = {'_public_normalized': True}
+            store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?', (encode(data), row['id']))
+    ingest(settings, 3)
+    result = asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))
+    assert result['status'] == 'needs_repair' and 'No bounded historical' in result['reason']
+
+
+@pytest.mark.parametrize('status', ['pending', 'paused_failure', 'retry_wait', 'needs_repair',
+                                  'superseded_input_budget', 'superseded_repair'])
+def test_history_reset_uses_accepted_routing_independently_of_later_status(settings, status):
+    batch_id = legacy_history_gap(settings)
+    rebuilt = asyncio.run(recovery.rebuild(settings.database, batch_id, 'REBUILD_PIPELINE_BATCH'))
+    assert asyncio.run(p.advance(settings.database, include_recent=True, runner=synthetic_runner))['events'] == 1
+    ingest(settings, 3)
+    with Store(settings.database) as store:
+        store.conn.execute('UPDATE pipeline_batches SET status=? WHERE id=?', (status, rebuilt['batch_id']))
+        cards, _ = p.track_state.load_tracks(store, 'test', 'books', 5, p.task_message)
+        assert len(cards) == 1 and cards[0]['track_id'].endswith('_0043')
+        assert cards[0]['recent_source_message_ids'] == [4]

@@ -31,6 +31,9 @@ def materialize_agent_rules(role):
 
 EVENT_WRITER_GUIDE_MAX_CHARS = 500
 EVENT_BODY_ACCEPT_MAX_CHARS = 1500
+# A short factual sentence needs some room; this reserve avoids unusable tails,
+# without claiming every new paragraph can fit within it.
+EVENT_APPEND_MIN_REMAINING_CHARS = 50
 CURATOR_CONTEXT_MAX_CHARS = 30_000
 
 TRACK_EVENT_POLICIES = {'default', 'rolling_engineering'}
@@ -46,7 +49,8 @@ EVENT_CURATOR_PRIMARY_OWNERSHIP_RULE = (
     '来源，或来自本轮一枚同 Track、未共享的 stable unit。不要把唯一的同 Track unit 同时分给多条 Event。'
     '若当前 Track 的 stable units 全是其他 Track 给它的 bridge，不得为这一侧 create；只有所选 base 确实继承了 '
     'primary_activity 时才可能接续，否则按原文实际情况放入 skip/defer，并在 dispositions 说明。不要在输出中填写 '
-    'activity_role，也不要伪造 primary。\n'
+    'activity_role 或 primary_activity；events 每项只填写 action、base_event_ids、primary_track_id、'
+    'owned_unit_roots，活动说明写在 decision_review.events 的 reason，不要伪造 primary。\n'
 )
 
 
@@ -281,7 +285,7 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
             'action 与 base_event_ids 数量必须匹配：create 为 0，extend/rewrite 恰好为 1，merge 至少为 2；base 只能从输入的 base_events 选择。'
             'extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；确认新原文接续该候选时，直接提出 extend，不另加交接标签或等待另一轮归线。同一 Track 的后续消息不等于 extend。目标不在本轮 base_events 时暂不交接，不猜 event_id，也不为查找候选发起 context_request；仍按现有入选、边界与暂缓规则处理本轮原文，不能仅因缺少旧 Event 就 skip 实质回应。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。'
             '接续已保存 Event 时 Writer 仅写新增段落；只有必须整篇重新组织时才显式用 rewrite（一条 base），合并多条已保存 base 用 merge。'
-            'base_events 给出 body_chars 和 append_remaining_chars（已扣除段落间两个换行）；容量为 0 或不足以表达新增内容时，为新增来源 create 后续 Event，沿用同一 primary_track_id，旧来源与旧正文只作背景；不要因为容量限制 rewrite 或 merge 旧 Event。受保护前版仍遵守原有续接开关和保护条件。'
+            f'base_events 给出 body_chars 和 append_remaining_chars（已扣除段落间两个换行）；剩余少于 {EVENT_APPEND_MIN_REMAINING_CHARS} 字符或不足以表达新增内容时，为新增来源 create 后续 Event，沿用同一 primary_track_id，旧来源与旧正文只作背景；不要因为容量限制 rewrite 或 merge 旧 Event。受保护前版仍遵守原有续接开关和保护条件。'
             'parked 直接纠正紧邻 stable 结果时 defer；无关 parked 不影响已落定材料。'
             'rolling_engineering 逐条核对实际建设，相关 base 全选；容量耗尽的前版只作背景，不选入 merge。其他受保护前版仍拟议 extend/merge，由 host 按冻结配置检查能否原文后追加，否则暂缓。\n'
             f'{base_reading_rule}'
@@ -297,7 +301,19 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
             + f'<event_curator_input_json>\n{json.dumps(model_input, ensure_ascii=False, separators=(",", ":"))}\n</event_curator_input_json>\n'
             f'{lookahead}')
 
+def prepare_compact_event_curator_output(output: dict[str, Any]) -> dict[str, Any]:
+    """Discard only a known extra prose summary, never ownership or evidence."""
+    if not {'skip_unit_roots', 'defer_unit_roots'}.issubset(output) or not isinstance(output.get('events'), list):
+        return output
+    fields = {'action', 'base_event_ids', 'primary_track_id', 'owned_unit_roots', 'primary_activity'}
+    events = [({key: value for key, value in event.items() if key != 'primary_activity'}
+               if isinstance(event, dict) and set(event) == fields and isinstance(event['primary_activity'], str)
+               else event) for event in output['events']]
+    return {**output, 'events': events}
+
+
 def _expand_compact_event_curator_output(output: dict[str, Any], component: dict[str, Any]) -> dict[str, Any]:
+    output = prepare_compact_event_curator_output(output)
     metadata_keys = {'_splitter_provider', '_splitter_model', '_splitter_provider_index', '_track_context_receipt', '_codex_job'}
     payload_keys = set(output).difference(metadata_keys)
     expected_keys = {'events', 'skip_unit_roots', 'defer_unit_roots'}
@@ -608,8 +624,8 @@ def _normalize_expanded_event_curator_output(output: dict[str, Any], component: 
                 raise ValueError('Track Curator selected a base from another Track')
             selected_candidates.append(candidate)
         if action in {'rewrite','merge'} and any(
-                candidate['append_remaining_chars'] == 0 for candidate in selected_candidates):
-            raise ValueError('容量耗尽的旧 Event 只作背景，不参与自动 rewrite/merge；'
+                candidate['append_remaining_chars'] < EVENT_APPEND_MIN_REMAINING_CHARS for candidate in selected_candidates):
+            raise ValueError(f'容量耗尽或剩余不足 {EVENT_APPEND_MIN_REMAINING_CHARS} 字符的旧 Event 只作背景，不参与自动 rewrite/merge；'
                              '请为新增原话 create，或只选择仍有容量的后续 Event 作为 base。')
         if not isinstance(raw_bindings, list) or not raw_bindings:
             raise ValueError('Track Curator Event needs source bindings')
@@ -638,7 +654,7 @@ def _normalize_expanded_event_curator_output(output: dict[str, Any], component: 
             raise ValueError('Track Curator source already belongs to an unselected base')
         blocked_candidates = list({candidate['event_id']: candidate for candidate in [*selected_candidates, *colliding_candidates] if candidate['blocking_flags']}.values())
         capacity_rollover = (action == 'extend' and len(selected_candidates) == 1
-            and selected_candidates[0]['append_remaining_chars'] == 0 and not colliding_candidates
+            and selected_candidates[0]['append_remaining_chars'] < EVENT_APPEND_MIN_REMAINING_CHARS and not colliding_candidates
             and (not selected_candidates[0]['blocking_flags']
                  or (selected_candidates[0]['continuation_allowed']
                      and 'forked' not in selected_candidates[0]['blocking_flags']))
@@ -646,7 +662,7 @@ def _normalize_expanded_event_curator_output(output: dict[str, Any], component: 
             and any(row['activity_role'] == 'primary_activity'
                     and row['source_message_id'] not in selected_source_ids for row in bindings))
         append_only = (bool(blocked_candidates) and len(selected_candidates) == 1 and action == 'extend'
-                       and selected_candidates[0]['append_remaining_chars'] > 0
+                       and selected_candidates[0]['append_remaining_chars'] >= EVENT_APPEND_MIN_REMAINING_CHARS
                        and not colliding_candidates and selected_candidates[0]['continuation_allowed']
                        and 'forked' not in selected_candidates[0]['blocking_flags']
                        and any(item['source_message_id'] in stable_ids - selected_source_ids for item in bindings))
@@ -686,7 +702,7 @@ def _normalize_expanded_event_curator_output(output: dict[str, Any], component: 
                 'requested_base_event_ids':base_event_ids,'active_base_event_ids':normalized_base_ids,
                 'blocking_flags':[],'defer_source_message_ids':held})
             continue
-        if (action == 'extend' and selected_candidates[0]['append_remaining_chars'] == 0
+        if (action == 'extend' and selected_candidates[0]['append_remaining_chars'] < EVENT_APPEND_MIN_REMAINING_CHARS
                 and not capacity_rollover):
             held=normalize_disposition([row['source_message_id'] for row in bindings
                                         if row['source_message_id'] in stable_ids],'defer')
@@ -792,7 +808,7 @@ def normalize_event_curator_output(output: dict[str, Any], component: dict[str, 
         if event['action'] != 'extend':
             continue
         base = bases[event['base_event_ids'][0]]
-        if append_remaining_chars(base) > 0:
+        if append_remaining_chars(base) >= EVENT_APPEND_MIN_REMAINING_CHARS:
             continue
         event['capacity_recovery'] = {'reason': 'append_capacity_exhausted',
             'base_event_id': event['base_event_ids'][0], 'requested_action': 'extend',
