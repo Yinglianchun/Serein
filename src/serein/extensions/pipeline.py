@@ -579,9 +579,19 @@ def candidates(database,track_ids,*,overflow_out=None):
                 continue
             for row in rows:
                 refs=[dict(ref) for ref in store.conn.execute('SELECT * FROM fact_event_sources WHERE item_id=? ORDER BY id',(row['item_id'],))]
+                # The nonempty predicate lets SQLite use the existing partial
+                # source/event-id index instead of scanning the source per ref.
+                raw_by_key={}
+                if any(ref['message_id'] for ref in refs):
+                    for raw in store.conn.execute('SELECT r.* FROM fact_event_sources s JOIN raw_events r '
+                            'ON r.source=s.source_system AND r.session_id=s.session_id AND r.source_event_id=s.message_id '
+                            "WHERE s.item_id=? AND r.source_event_id!=''",(row['item_id'],)):
+                        raw_by_key[(raw['source'],raw['session_id'],raw['source_event_id'])]=raw
                 originals=[]
                 for ref in refs:
-                    raw=store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND source_event_id=?',source_key(ref)).fetchone()
+                    # Legacy empty IDs are not unique; retain their first-row lookup.
+                    raw=(raw_by_key.get(source_key(ref)) if ref['message_id'] else
+                         store.conn.execute('SELECT * FROM raw_events WHERE source=? AND session_id=? AND source_event_id=?',source_key(ref)).fetchone())
                     originals.append(task_message(raw) if raw else task_message({'id':-int(digest(encode(source_key(ref)))[:12],16),'source':ref['source_system'],'source_event_id':ref['message_id'],'session_id':ref['session_id'],'role':ref['role'],'text':ref['content'],'created_at':ref['created_at']}))
                 detail=store.conn.execute('SELECT details_json FROM pipeline_event_details WHERE event_id=?',(row['item_id'],)).fetchone()
                 details=json.loads(detail[0]) if detail else {}
