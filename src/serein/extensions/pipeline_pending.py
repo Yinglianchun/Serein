@@ -211,13 +211,13 @@ def adopted_component(component,output):
     return {**component,'messages':list(messages.values()),'adopted_pending_ids':ids}
 
 
-def check_adoption(component,plan):
+def check_adoption(component,plan,*,missing=()):
     reading=component.get('pending_material_read')
     if not reading:return
     ids={m['id'] for m in reading['messages']}
     owned={key for event in plan['events'] for key in event['source_message_ids']}
     if component.get('adopted_pending_ids'):
-        if not ids.issubset(owned) or ids.intersection(plan['skip_source_message_ids']+plan['defer_source_message_ids']):
+        if not ids.difference(missing).issubset(owned) or ids.intersection(plan['skip_source_message_ids']+plan['defer_source_message_ids']):
             raise ValueError('整份承接必须将待办全部原话纳入 Event，不允许部分承接或 skip/defer')
     elif ids.intersection(owned):raise ValueError('待办仅作背景；写入这些原话前必须明确 adopt_pending_material_ids')
 

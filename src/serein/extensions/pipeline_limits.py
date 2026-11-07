@@ -53,8 +53,10 @@ def blocks(messages, max_chars=40000):
 def allowed_ids(request):
     component=request.get('component',{})
     messages=request.get('messages',component.get('messages',[]))
+    stable_ids={int(m['id']) for m in component.get('messages',[])}
     return {'message_ids':[m['id'] for m in messages],
-            'stable_unit_roots':[m['unit_root_message_id'] for m in component.get('memberships',[])
-                                 if m['unit_root_message_id'] in {r['id'] for r in component.get('messages',[])}],
+            'stable_unit_roots':[int(m['unit_root_message_id']) for m in component.get('memberships',[])
+                                 if all(int(sid) in stable_ids for sid in
+                                        (m.get('source_message_ids') or [m['unit_root_message_id']]))],
             'track_ids':component.get('track_ids',[t['track_id'] for t in request.get('active_tracks',[])]),
             'base_event_ids':[b['event_id'] for b in component.get('base_event_candidates',[])]}

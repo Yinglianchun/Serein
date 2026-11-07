@@ -45,8 +45,11 @@ def validate_bridge_owners(output, component, review=None):
         if (root, track) in seen:
             raise ValueError(f'Duplicate bridge exclusion {(root, track)!r}; keep one evidenced entry')
         if (root, track) not in missing:
+            known_tracks = {unit['track_id'] for unit in units.values()}
+            known_tracks.update(edge['track_id'] for edge in component.get('context_edges') or [])
+            track_label = track if track in known_tracks else 'unknown'
             raise ValueError(
-                f'Unexpected bridge exclusion {(root, track)!r}; required exclusion pairs for the current '
+                f'Unexpected bridge exclusion {(root, track_label)!r}; required exclusion pairs for the current '
                 f'Event ownership are {sorted(missing)!r}. '
                 + ('No missing side needs an exclusion. Return bridge_exclusions: [] or omit it. '
                    if not missing else 'Remove this extra exclusion entry. ')

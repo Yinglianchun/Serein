@@ -1057,7 +1057,7 @@ def validate(request,output):
     if request.get('transcription_only'):
         if set(output)!={'image_transcriptions'}:
             raise ValueError('补读图片只允许返回转录，不改变 Event 归属；顶层只能有 image_transcriptions，'
-                             f"missing={sorted({'image_transcriptions'}-set(output))}, extra={sorted(set(output)-{'image_transcriptions'})}。")
+                             f"missing={sorted({'image_transcriptions'}-set(output))}, extra={latest.curator_extra_fields(set(output)-{'image_transcriptions'})}。")
         bind_transcriptions(output,request.get('images',[]));return
     if role in ('event_curator','event_writer') and output.get('context_request') is not None:
         c=output['context_request'];component=request['component']
@@ -1065,7 +1065,7 @@ def validate(request,output):
             raise ValueError('此 component 已补读一次，不得再次返回非空 context_request；请返回正常任务结果，证据不足则按证据不足格式返回。')
         if set(output)!={'context_request'}:
             raise ValueError('申请补读时顶层只允许 context_request；'
-                             f"请删除额外字段 extra={sorted(set(output)-{'context_request'})}，即使它们为 false、空字符串、空数组或空对象。")
+                             f"请删除额外字段 extra={latest.curator_extra_fields(set(output)-{'context_request'})}，即使它们为 false、空字符串、空数组或空对象。")
         if not isinstance(c,dict):
             raise ValueError('context_request 必须是对象，包含 track_id、before_message_id、reason。')
         if role=='event_curator' and 'pending_material_id' in c:
@@ -1086,15 +1086,17 @@ def validate(request,output):
         fields={'track_id','before_message_id','reason'}
         if set(c)!=fields:
             raise ValueError('context_request 字段不符：'
-                             f'missing={sorted(fields-set(c))}, extra={sorted(set(c)-fields)}。')
+                             f'missing={sorted(fields-set(c))}, extra={latest.curator_extra_fields(set(c)-fields)}。')
         if c['track_id'] not in component['track_ids']:
-            raise ValueError(f"context_request.track_id 必须属于本 component：allowed={component['track_ids']!r}, received={c['track_id']!r}。")
+            raise ValueError(f"context_request.track_id 必须属于本 component：allowed={component['track_ids']!r}, received={latest.curator_received_value(c['track_id'])}。")
         before=min(m['id'] for m in component['messages'])
         if type(c['before_message_id']) is not int or c['before_message_id']!=before:
-            raise ValueError(f"context_request.before_message_id 必须是本 component 的最小消息 ID：expected={before}, received={c['before_message_id']!r}。")
+            value=c['before_message_id']
+            received=repr(value) if type(value) in (bool,int) or value==str(before) else latest.curator_received_value(value)
+            raise ValueError(f"context_request.before_message_id 必须是本 component 的最小消息 ID：expected={before}, received={received}。")
         reasons=('missing_subject','missing_origin','missing_prior_claim')
         if c['reason'] not in reasons:
-            raise ValueError(f"context_request.reason 只能为 {reasons!r}，received={c['reason']!r}。")
+            raise ValueError(f"context_request.reason 只能为 {reasons!r}，received={latest.curator_received_value(c['reason'])}。")
         return
     with latest.identity_scope(request['identity']):
         if role=='track_router':
@@ -1141,24 +1143,47 @@ def curator_omission_attempts(database,job_id):
 
 def curator_repair_prompt(request, output, error):
     missing=set(error.missing_source_ids)
-    messages=[item for item in request['component']['messages'] if int(item['id']) in missing]
+    component=pending_materials.adopted_component(request['component'],output)
+    messages=[item for item in component['messages'] if int(item['id']) in missing]
+    effective_request={**request,'component':component}
     return request['prompt']+'\n漏项修复：保留上一份结果中已有的有效归属和处置，对照完整上下文补全遗漏。必要时修正关联的边界和回执；不得为通过校验一律 skip/defer，不得猜测归属。返回修复后的完整 JSON，程序会重新检查全部来源、重复归属和冲突。\n'+encode({
         'missing_source_message_ids':error.missing_source_ids,
+        'missing_unit_roots':error.missing_unit_roots,
         'missing_messages':messages,
-        'previous_output':output, **curator_material_repair_scope(request, output)})
+        'allowed_ids':allowed_ids(effective_request),
+        'previous_output':output, **curator_material_repair_scope(request, output, component=component)})
 
 
-def curator_material_repair_scope(request, output):
+def correction_scope(request, output):
+    if request['role']!='event_curator' or not isinstance(output,dict):
+        return {'allowed_ids':allowed_ids(request)}
+    try:
+        component=pending_materials.adopted_component(request['component'],output)
+    except ValueError:
+        return {'allowed_ids':allowed_ids(request)}
+    return {'allowed_ids':allowed_ids({**request,'component':component}),
+            **curator_material_repair_scope(request,output,component=component)}
+
+
+def curator_material_repair_scope(request, output, *, component=None):
     """Host-owned annotation IDs; malformed ownership is repaired separately."""
-    component=request.get('component') or {}
-    if (request.get('role')!='event_curator' or not component.get('writer_material_review')
+    if (request.get('role')!='event_curator' or not request.get('component',{}).get('writer_material_review')
             or not isinstance(output,dict)):
         return {}
     try:
+        if component is None:
+            component=pending_materials.adopted_component(request['component'],output)
         expanded=decision(output)
         expanded={key:value for key,value in expanded.items() if key!='decision_review'}
         if 'skip_unit_roots' in expanded:
             expanded=latest._expand_compact_event_curator_output(expanded,component)
+        elif component.get('pending_material_read'):
+            # Expanded replies supply their own bindings. Check ownership before
+            # labeling any of those IDs as host-approved annotation sources.
+            try:
+                latest._normalize_expanded_event_curator_output(expanded,component)
+            except latest.CuratorCoverageError:
+                pass  # Existing bindings are in scope even when other units were omitted.
         contracts=pipeline_materials.material_contracts(expanded,component)
         return {'material_annotation_source_ids_by_event':{
             str(index):contract['annotation_source_message_ids'] for index,contract in contracts.items()}}
@@ -1166,18 +1191,21 @@ def curator_material_repair_scope(request, output):
         return {}
 
 
-def accept_curator_omission(database,job_id,error):
+def accept_curator_omission(database,job_id,error,previous_output,frozen_request):
     # Discard the incomplete decision; only the host may retain its full scope.
     with Store(database) as store,store.transaction(immediate=True):
         row=store.conn.execute('SELECT j.request_json,j.output_json,b.status FROM pipeline_jobs j JOIN pipeline_batches b ON b.id=j.batch_id WHERE j.id=?',(job_id,)).fetchone()
-        if row is None or row['status'].startswith('superseded_'):
+        if row is None or row['request_json']!=frozen_request or row['status'].startswith('superseded_'):
             raise Conflict('Curator job changed before its omission could be retained')
         request=json.loads(row['request_json'])
-        stable_ids={int(item['id']) for item in request.get('component',{}).get('messages') or []}
+        component=pending_materials.adopted_component(request.get('component',{}),previous_output)
+        stable_ids={int(item['id']) for item in component.get('messages') or []}
         missing=sorted(set(error.missing_source_ids))
         if request['role']!='event_curator' or not missing or not set(missing).issubset(stable_ids):
             raise ValueError('Host Curator omission record is outside its frozen stable sources')
         output={'_host_curator_omission':{'job_id':job_id,'missing_source_message_ids':missing}}
+        if component.get('adopted_pending_ids'):
+            output['_host_curator_omission']['adopt_pending_material_ids']=component['adopted_pending_ids']
         if row['output_json'] and row['output_json']!=encode(output):
             raise Conflict('This job already has a different result')
         store.conn.execute('UPDATE pipeline_jobs SET output_json=? WHERE id=?',(encode(output),job_id))
@@ -1186,11 +1214,8 @@ def accept_curator_omission(database,job_id,error):
 
 def submit(database,job_id,output):
     try:return _submit(database,job_id,output)
-    except latest.CuratorCoverageError as error:
-        record_attempt(database,job_id,encode(output),str(error))
-        if curator_omission_attempts(database,job_id)<2:
-            raise
-        return accept_curator_omission(database,job_id,error)
+    except latest.CuratorCoverageError:
+        raise  # The validation attempt was already recorded against its frozen request.
     except ValueError as error:
         record_attempt(database,job_id,encode(output),str(error))
         raise
@@ -1217,6 +1242,11 @@ def _submit(database,job_id,output):
         return {'status':'unchanged','job_id':job_id}
     try:
         validate(request,output)
+    except latest.CuratorCoverageError as error:
+        record_attempt(database,job_id,encode(output),str(error))
+        if curator_omission_attempts(database,job_id)<2:
+            raise
+        return accept_curator_omission(database,job_id,error,output,frozen_request)
     except ValueError as error:
         if request.get('transcription_only') and len(request.get('images',[]))==1:
             from ..image_transcription import record_image_failure, image_failures, FAILURE_LIMIT
@@ -1429,17 +1459,17 @@ async def job(database,batch,request,key,runner):
                 progress(error=reason,attempt=attempt+1)
                 if isinstance(error,latest.CuratorCoverageError):
                     if curator_omission_attempts(database,identifier)>=2:
-                        return accept_curator_omission(database,identifier,error)['output']
+                        return accept_curator_omission(database,identifier,error,output,encoded_request)['output']
                     prompt=curator_repair_prompt(request,output,error)
                     if len(prompt)+len(request['rules'])>policy['max_prompt_chars']:
-                        return accept_curator_omission(database,identifier,error)['output']
+                        return accept_curator_omission(database,identifier,error,output,encoded_request)['output']
                     if attempt==attempts-1:
-                        return accept_curator_omission(database,identifier,error)['output']
+                        return accept_curator_omission(database,identifier,error,output,encoded_request)['output']
                     continue
                 elif image:record_image_failure(database,image,error)
                 else:fail_stage(database,batch,identifier,error)
                 if (not image and (not received or not isinstance(error,ValueError))) or attempt==attempts-1:raise
-                correction='\n请按原角色规则纠正结构或证据校验错误，只返回完整 JSON。保留人物归属、比喻及不确定程度，不按词句数量改写文风。编号使用原始编号，不得按展示位置重新编号。\n'+('materials 必须只覆盖 host 指定的 material_annotation_source_ids_by_event；继承标注只读，不重复输出。\n' if request['role']=='event_curator' and request.get('component',{}).get('writer_material_review') else '')+encode({'validation_error':reason,'allowed_ids':allowed_ids(request), **curator_material_repair_scope(request,output)})
+                correction='\n请按原角色规则纠正结构或证据校验错误，只返回完整 JSON。保留人物归属、比喻及不确定程度，不按词句数量改写文风。编号使用原始编号，不得按展示位置重新编号。\n'+('materials 必须只覆盖 host 指定的 material_annotation_source_ids_by_event；继承标注只读，不重复输出。\n' if request['role']=='event_curator' and request.get('component',{}).get('writer_material_review') else '')+encode({'validation_error':reason,**correction_scope(request,output)})
                 room=policy['max_prompt_chars']-len(request['rules'])-len(request['prompt'])-len(correction)-80
                 if room<0:raise PromptLimitError('提示词上限不足以容纳纠错请求，请使用待处理材料中的“按更小材料重新整理”。') from error
                 prompt=request['prompt']+correction+'\n上一份不合格输出（仅用于纠错，可能截断）：\n'+raw[:min(room,10000)]
@@ -1452,7 +1482,7 @@ async def job(database,batch,request,key,runner):
             raise
         retry_request={**request,'prompt':curator_repair_prompt(request,output,error)}
         if len(retry_request['prompt'])+len(request['rules'])>policy['max_prompt_chars']:
-            return accept_curator_omission(database,identifier,error)['output']
+            return accept_curator_omission(database,identifier,error,output,encoded_request)['output']
         try:
             output=prepare_stage_output(request,await runner(request['role'],retry_request))
             accepted=submit(database,identifier,output)
@@ -1906,10 +1936,6 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
             with Store(database) as store:store.conn.execute('UPDATE pipeline_batches SET input_json=? WHERE id=?',(encoded_data,batch['id']))
             output=await job(database,batch,request,f'event_curator:{index}',runner)
             component=request['component']
-            if '_host_curator_omission' in output:
-                pause_repeated_curator_omission(database,batch,component,output)
-                plans.append((component,curator_omission_plan(component,output),[]))
-                continue
             if output.get('context_request') is not None:
                 previous_component=component
                 component=extend_context(database,component,output['context_request'],curator=True)
@@ -1921,11 +1947,12 @@ async def _advance_frozen(database,*,include_recent=False,runner=None,retry_repa
                         pretranscribed=bool(component.get('images')))
                 output=await job(database,batch,request,f'event_curator:{index}:context',runner)
                 component=request['component']
-                if '_host_curator_omission' in output:
-                    pause_repeated_curator_omission(database,batch,component,output)
-                    plans.append((component,curator_omission_plan(component,output),[]))
-                    continue
-            component=pending_materials.adopted_component(component,output)
+            component=pending_materials.adopted_component(component,output.get('_host_curator_omission',output))
+            if '_host_curator_omission' in output:
+                plan=curator_omission_plan(component,output)
+                pause_repeated_curator_omission(database,batch,component,output)
+                plans.append((component,plan,[]))
+                continue
             # job() restores its frozen request on resume; use that contract,
             # not the cache state computed before loading the saved task.
             if not request.get('pretranscribed'):
