@@ -104,6 +104,32 @@ test('writer preserves long source-bound narrative bodies',()=>{
   const body='The story continues.\n'.repeat(600)+'🌧️ A final paragraph.';
   assert.equal(normalizeNarrativeWriterResult({evidence_sufficient:true,body,issues:[],self_review}).body,body);
 });
+test('API Writer still rejects schema-valid but inconsistent evidence and self-review',async()=>{
+  const schema=JSON.parse(readFileSync(new URL('../codex_agents/narrative_writer/output.schema.json',import.meta.url),'utf8'));
+  const self_review=Object.fromEntries(schema.properties.self_review.required.map(key=>[key,true]));
+  const valid={evidence_sufficient:true,body:'Synthetic sourced body.',issues:[],self_review};
+  const insufficient={...valid,evidence_sufficient:false,body:'',issues:['More source text is needed.'],
+    self_review:{...self_review,source_bound:false}};
+  const args={mode:'rewrite',title:'Synthetic narrative',currentBody:'',materials:{},
+    roleDir:fileURLToPath(new URL('../codex_agents/narrative_writer/',import.meta.url))};
+  const backendFor=result=>async path=>path==='/v1/settings'
+    ?{ok:true,payload:{identity:{user_name:'Nori',ai_name:'Atlas'},upstream:{writer_enabled:true},
+      models:[{id:'writer',model:'deepseek-v4-pro'}],assignments:{writer:'writer'}}}
+    :{ok:true,payload:{result}};
+  for(const output of [
+    {...valid,body:''}, {...valid,issues:['Unresolved evidence.']},
+    {...valid,self_review:{...self_review,no_new_inference:false}},
+    {...insufficient,body:'Must not publish this.'}, {...insufficient,issues:[]},
+    {...insufficient,self_review},
+  ])await assert.rejects(runNarrativeCodexTask(args,{backend:backendFor(output)}),
+    /narrative_writer_(sufficient|insufficient)_result_invalid/);
+  for(const output of [valid,insufficient]){
+    const preview=await runNarrativeCodexTask(args,{backend:backendFor(output)});
+    assert.equal(preview.status,output.evidence_sufficient?'ok':'insufficient');
+    assert.equal(preview.publication_status,'not_published');
+    assert.deepEqual(preview.writes_performed,[]);
+  }
+});
 test('writer disabled means no runner starts',async()=>{
   delete process.env.SEREIN_WRITER_ENABLED;
   await assert.rejects(runNarrativeCodexTask({}, {backend:async()=>({ok:true,payload:{identity:{user_name:"User",ai_name:"AI"},upstream:{writer_enabled:false}}})}),/disabled/);

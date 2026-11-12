@@ -6,8 +6,13 @@ import logging
 from copy import deepcopy
 from datetime import datetime
 from uuid import uuid4
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 import httpx
+from jsonschema.exceptions import SchemaError, ValidationError
+from jsonschema.validators import Draft202012Validator, validator_for
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
 from fastapi.responses import JSONResponse, StreamingResponse
 from ..deployment import read_settings, task_model, chat_models, client_model_id
@@ -413,10 +418,42 @@ def routes(settings, services, auth):
             raise HTTPException(400,'Writer requires prompt and output_schema')
         if body.get('image_inputs'):
             raise HTTPException(400,'Narrative Writer accepts text materials only')
+        schema = body['output_schema']
         try:
-            result=await asyncio.wait_for(complete({**model,'request_timeout_seconds':300},{'messages':[{'role':'user','content':body['prompt']}],
-                'response_format':{'type':'json_schema','json_schema':{'name':'narrative_preview','strict':True,'schema':body['output_schema']}}}),timeout=300)
-            return {'result':json.loads(result['choices'][0]['message']['content'])}
+            if '$schema' in schema and not isinstance(schema['$schema'], str):
+                raise ValueError('Invalid schema dialect')
+            validator_class = (validator_for(schema, default=None)
+                               if '$schema' in schema else Draft202012Validator)
+            if validator_class is None:
+                raise ValueError('Unsupported schema dialect')
+            validator_class.check_schema(schema)
+            # Never retrieve external schema references from a caller's schema.
+            validator = validator_class(schema, registry=Registry())
+        except (SchemaError, ValueError, TypeError, RecursionError):
+            raise HTTPException(400,'Writer requires a valid output_schema') from None
+        payload = {'messages': [{'role': 'user', 'content': body['prompt']}],
+            'response_format': {'type': 'json_schema', 'json_schema': {
+                'name': 'narrative_preview', 'strict': True, 'schema': schema}}}
+        # DeepSeek's official Chat Completions supports JSON mode, not strict
+        # json_schema. Do not infer the capabilities of proxies from model names
+        # or relax structured output for other providers or authoring tasks.
+        if (model.get('protocol', 'openai') == 'openai'
+                and urlsplit(model['base_url']).hostname == 'api.deepseek.com'):
+            payload['response_format'] = {'type': 'json_object'}
+            payload['messages'].insert(0, {'role': 'system', 'content': (
+                'Return only a JSON object conforming to this JSON schema. '
+                'Do not include Markdown fences or commentary.\n'
+                + json.dumps(schema, ensure_ascii=False))})
+        try:
+            result=await asyncio.wait_for(complete({**model,'request_timeout_seconds':300},payload),timeout=300)
+            choice = result['choices'][0]
+            if not isinstance(choice, dict) or choice.get('finish_reason') in ('length', 'content_filter'):
+                raise ValueError('Incomplete Writer result')
+            output = json.loads(choice['message']['content'])
+            validator.validate(output)
+            # The host still applies narrative business checks before preview
+            # and rechecks frozen materials/version fingerprints before saving.
+            return {'result':output}
         except (httpx.TimeoutException,TimeoutError):
             raise HTTPException(504,'Narrative Writer exceeded 5 minutes') from None
         except (UpstreamError, httpx.HTTPStatusError) as exc:
@@ -425,13 +462,14 @@ def routes(settings, services, auth):
                 ('narrative_writer_auth_failed', 'Writer 模型凭据失效，请检查上游密钥。') if code in (401, 403)
                 else ('narrative_writer_rate_limited', 'Writer 模型额度不足或触发限流，请稍后重试。') if code == 429
                 else ('narrative_writer_input_too_large', '材料总量超过上游容量，请减少材料后重试。') if code == 413
-                else ('narrative_writer_model_unavailable', '上游不支持所选 Writer 模型或请求，请检查模型配置。') if code in (400, 404, 422)
+                else ('narrative_writer_request_rejected', '上游拒绝 Writer 请求，请检查输出格式、输入与接口兼容性。') if code in (400, 422)
+                else ('narrative_writer_model_unavailable', '找不到所选 Writer 模型或接口，请检查模型与上游地址。') if code == 404
                 else ('narrative_writer_upstream_unavailable', 'Writer 上游服务暂不可用，请稍后重试。'))
             return JSONResponse({'status': 'error', 'reason': reason, 'message': message,
                                  'upstream_status': code}, status_code=502)
         except httpx.HTTPError:
             return JSONResponse({'status': 'error', 'reason': 'narrative_writer_upstream_unavailable',
                 'message': '无法连接 Writer 上游服务，请稍后重试。'}, status_code=502)
-        except (ValueError,KeyError,IndexError,TypeError):
+        except (ValueError,KeyError,IndexError,TypeError,ValidationError,Unresolvable,RecursionError):
             raise HTTPException(502,'Writer returned an invalid result') from None
     return router

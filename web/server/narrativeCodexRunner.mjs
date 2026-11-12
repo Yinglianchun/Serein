@@ -140,7 +140,7 @@ export async function runNarrativeCodexTask({mode,title,writingFocus = "",curren
     const result = await backend("/v1/models/writer", {method:"POST",body:task,signal}, {timeout:310_000});
     if (!result.ok) {
       const known = new Set(['narrative_writer_auth_failed', 'narrative_writer_rate_limited',
-        'narrative_writer_model_unavailable', 'narrative_writer_upstream_unavailable',
+        'narrative_writer_model_unavailable', 'narrative_writer_request_rejected', 'narrative_writer_upstream_unavailable',
         'narrative_writer_invalid_output', 'narrative_writer_input_too_large']);
       const reason = known.has(result.payload?.reason) ? result.payload.reason
         : result.status === 504 ? 'narrative_writer_timeout'

@@ -15,7 +15,7 @@ test = ["pytest>=8"]
 mcp = ["mcp>=1.27,<2"]
 tokenizer = ["transformers>=4.40,<5"]
 embedding = ["httpx>=0.27,<1"]
-http = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "mcp>=1.27,<2"]
+http = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "mcp>=1.27,<2", "jsonschema>=4.26,<5"]
 background = ["openai>=1.60,<3"]
 
 [project.scripts]

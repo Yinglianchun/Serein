@@ -35,6 +35,10 @@ Agent 交付的原话只在 `request.prompt` 中出现一次；`messages`、`com
 
 设置页可以直接为 Writer 选择已配置的模型，省去外部 runner。两种入口均在运行前读取服务端身份配置，并由宿主复查输出 schema 与保存 fingerprint。
 
+叙事 API Writer 对 DeepSeek 官方 `api.deepseek.com` 的 OpenAI / Chat Completions 接口使用 `json_object`，在提示中提供完整 schema，并在后端校验返回结构；其他 OpenAI 兼容上游仍使用 `json_schema`，不会按模型名称猜测中转能力或失败后自动降级重试。宿主的证据充分性、自检、材料及保存 fingerprint 校验保持不变。HTTP 400/422 表示请求被拒绝，需要检查输出格式、输入及接口兼容性；404 才归为模型或接口不可用，不回传上游原始错误正文。
+
+**仍不建议使用 DeepSeek 作为 Writer。** JSON 模式兼容仅解决请求格式问题，不代表叙事质量或严格遵守写作契约得到保证；请优先选择已验证能稳定遵守 schema 和写作规则的模型。这项兼容不改变 Event Writer 或其他模型任务。
+
 设置页“配置 Agent 撰写叙事卷”弹窗提供配置步骤。使用外部 runner 时，关闭“启用 API Writer”，在前端 Node 服务环境设置 `SEREIN_WRITER_ENABLED=1`、`SEREIN_WRITER_MODEL`，并在修改这些进程环境后重启该 Node 服务。
 
 `SEREIN_WRITER_COMMAND` 为 JSON 字符串数组，例如 `["python","/absolute/path/writer.py"]`。runner 接收 `task=narrative_preview`、显式 `model`、`prompt`、冻结 `materials` 与 `output_schema`，返回严格符合 schema 的 JSON。证据不足必须返回 `evidence_sufficient=false`、空 body 和问题列表。Writer 只读取本次绑定的文字材料，不加载原消息图片；文字不足时不能猜测图片内容。

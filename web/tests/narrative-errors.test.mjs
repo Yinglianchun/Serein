@@ -41,7 +41,9 @@ test('writer failures expose safe, specific causes without stderr', () => {
 
 test('public API Writer preserves safe upstream categories through preview errors', async () => {
   for (const [status, reason] of [[401, 'narrative_writer_auth_failed'],
-    [429, 'narrative_writer_rate_limited'], [413, 'narrative_writer_input_too_large']]) {
+    [429, 'narrative_writer_rate_limited'], [413, 'narrative_writer_input_too_large'],
+    [400, 'narrative_writer_request_rejected'], [422, 'narrative_writer_request_rejected'],
+    [404, 'narrative_writer_model_unavailable']]) {
     const backend = async path => path === '/v1/settings'
       ? { ok: true, payload: { identity: { user_name: 'Nori', ai_name: 'Atlas' },
           upstream: { writer_enabled: true }, models: [{ id: 'writer', model: 'synthetic' }], assignments: { writer: 'writer' } } }

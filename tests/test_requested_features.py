@@ -204,6 +204,7 @@ def test_narrative_api_writer_uses_text_only(settings, monkeypatch):
 @pytest.mark.parametrize('status,reason', [
     (401, 'narrative_writer_auth_failed'), (403, 'narrative_writer_auth_failed'),
     (429, 'narrative_writer_rate_limited'), (404, 'narrative_writer_model_unavailable'),
+    (400, 'narrative_writer_request_rejected'), (422, 'narrative_writer_request_rejected'),
     (413, 'narrative_writer_input_too_large'), (503, 'narrative_writer_upstream_unavailable'),
 ])
 def test_narrative_writer_reports_provider_failure_without_private_payload(settings, monkeypatch, status, reason):

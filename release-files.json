@@ -352,6 +352,7 @@
   "tests/test_narrative_import.py",
   "tests/test_narrative_review.py",
   "tests/test_narrative_theme.py",
+  "tests/test_narrative_writer_compat.py",
   "tests/test_originals.py",
   "tests/test_passage_options.py",
   "tests/test_passages_entities.py",
