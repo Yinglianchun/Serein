@@ -45,6 +45,51 @@ def setup(tmp_path):
 def response(value):return {'choices':[{'message':{'content':json.dumps(value)}}]}
 
 
+@pytest.mark.parametrize('existing_policies', [False, True])
+def test_wizard_domain_confirmation_does_not_submit_null_policies(tmp_path, monkeypatch, existing_policies):
+    from serein.legacy_migration.__main__ import domains
+    settings=Settings(tmp_path/'memory.db',tmp_path/'index.db',writable=True)
+    initialize(settings)
+    if existing_policies:
+        save_settings(settings.database, {'tagging': {'policies': {
+            'event': {'life': 'explicit_only'}, 'scene': {'life': 'excluded'}}}})
+    before=read_settings(settings.database)
+    monkeypatch.setattr('builtins.input', lambda prompt: 'yes')
+    domains(settings.database)
+    after=read_settings(settings.database)
+    assert after['tagging']==before['tagging']
+    assert after['tagging_version']==before['tagging_version']
+    assert after['identity']==before['identity']
+    assert after['models']==before['models']
+
+
+@pytest.mark.parametrize('answers,keys', [
+    (['e','0','life','Edited life','Edited description','yes'], ['life','tech']),
+    (['a','art','Art','Creative work','yes'], ['life','tech','art']),
+    (['d','1','yes'], ['life']),
+])
+def test_wizard_domain_edits_preserve_policies_for_retained_domains(tmp_path, monkeypatch, answers, keys):
+    from serein.legacy_migration.__main__ import domains
+    settings=Settings(tmp_path/'memory.db',tmp_path/'index.db',writable=True)
+    initialize(settings)
+    catalog=[{'key': key, 'label': key.title(), 'description': key, 'policy': 'normal'}
+             for key in ('life','tech')]
+    policies={'event': {'life': 'explicit_only', 'tech': 'excluded'},
+              'scene': {'life': 'excluded', 'tech': 'normal'}}
+    save_settings(settings.database, {'tagging': {'domains': catalog, 'policies': policies}})
+    prompts=iter(answers)
+    monkeypatch.setattr('builtins.input', lambda prompt: next(prompts))
+    domains(settings.database)
+    saved=read_settings(settings.database)['tagging']
+    assert [row['key'] for row in saved['domains']]==keys
+    assert saved['policies']=={kind: {key: rule for key,rule in rules.items() if key in keys}
+                              for kind,rules in policies.items()}
+    if answers[0]=='e':
+        assert saved['domains'][0]=={**catalog[0], 'label': 'Edited life', 'description': 'Edited description'}
+    elif answers[0]=='a':
+        assert saved['domains'][-1]=={'key':'art','label':'Art','description':'Creative work','policy':'normal'}
+
+
 def test_section_cleanup():
     body='起点\n### reflection\n删除\n#### 小标题\n也删除\n### moment\n保留\n### affect_anchor\n删除锚点\n## 后续\n结尾'
     cleaned,count=clean_body(body)

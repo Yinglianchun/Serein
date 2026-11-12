@@ -28,7 +28,7 @@ def domains(database):
         if choice=='yes':
             valid=TaggingPatch(domains=catalog)
             if not valid.domains:raise ValueError('至少保留一个主域')
-            save_settings(database,{'tagging':valid.model_dump()});return
+            save_settings(database,{'tagging':valid.model_dump(exclude_none=True)});return
         try:
             if choice=='d':catalog.pop(int(ask('删除哪一项的序号')))
             if choice in ('a','e'):
