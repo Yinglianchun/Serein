@@ -68,4 +68,4 @@ def test_api_event_mode_reports_the_missing_stage_assignments(tmp_path):
         'pipeline': {'execution_mode': 'api'},
     })
     assert response.status_code == 400
-    assert response.json() == {'detail': 'API 自动摘要需要为三个阶段选择模型'}
+    assert response.json() == {'detail': 'API 自动摘要需要选择模型：原话 · 归线、原话 · 切分、原话 · Event 写作'}
