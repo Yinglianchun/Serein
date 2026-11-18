@@ -28,6 +28,10 @@ DEFAULT_DOMAINS = [
 ]
 TASKS = ('chat', 'writer', 'embedding', 'reranker', 'relations', 'dreams', 'narrative_scout', 'event_pipeline',
          'persona', 'anti_retreat', 'track_router', 'image_transcription', 'event_curator', 'event_writer', 'operit_tagging', 'arc_linker')
+TASK_LABELS = {'chat':'聊天', 'writer':'Narrative Writer', 'embedding':'Embedding', 'reranker':'Reranker',
+               'relations':'Scene 关系', 'dreams':'梦境', 'narrative_scout':'叙事卷找材料', 'event_pipeline':'原话自动摘要',
+               'persona':'心绪/防撤退', 'track_router':'原话 · 归线', 'image_transcription':'图片转录 / 眼睛',
+               'event_curator':'原话 · 切分', 'event_writer':'原话 · Event 写作', 'operit_tagging':'打标', 'arc_linker':'Event · Arc 归档'}
 
 
 def read_from_store(store):
@@ -214,8 +218,9 @@ def save_settings(database, changes):
         public_names = [client_model_id(model) for model in chat_models(current)]
         if len(set(public_names)) != len(public_names):
             raise ValueError('Models in an upstream need distinct aliases; upstream names must distinguish their models')
-        if any(value and value not in known for value in current['assignments'].values()):
-            raise ValueError('A selected model is missing; clear its task assignment before removing it')
+        missing = [TASK_LABELS.get(task, task) for task, value in current['assignments'].items() if value and value not in known]
+        if missing:
+            raise ValueError('以下功能选择的模型已移除，请重新选择模型或清空选择：' + '、'.join(missing))
         image_features = current['features']['image_transcription_async'], current['features']['image_eyes']
         if all(image_features):
             raise ValueError('“异步图片转录”和“眼睛”只能开启一个')
@@ -242,9 +247,12 @@ def save_settings(database, changes):
         mode=current['pipeline']['execution_mode']
         if mode not in ('legacy','api','agent'):raise ValueError('Unknown Event execution mode')
         if mode=='api':
+            missing = [TASK_LABELS[role] for role in ('track_router','event_curator','event_writer')
+                       if not current['assignments'].get(role)]
+            if missing:
+                raise ValueError('API 自动摘要需要选择模型：' + '、'.join(missing))
             for role in ('track_router','event_curator','event_writer'):
                 model=next((item for item in catalog if item['id']==current['assignments'].get(role)),None)
-                if not model:raise ValueError('API 自动摘要需要为三个阶段选择模型')
                 if not model.get('api_key') and urlsplit(model['base_url']).hostname not in ('localhost','127.0.0.1','::1'):
                     raise ValueError('API 自动摘要所选上游缺少访问密钥')
         if not previous_auto_enabled and current['pipeline']['auto_enabled']:
