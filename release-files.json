@@ -447,6 +447,7 @@
   "web/src/components/SceneCueEditor.jsx",
   "web/src/components/SceneEvidenceEditor.jsx",
   "web/src/components/SettingsPanel.jsx",
+  "web/src/components/VersionUpdate.jsx",
   "web/src/components/Sidebar.jsx",
   "web/src/components/UpstreamSettings.jsx",
   "web/src/components/UsageGuide.jsx",

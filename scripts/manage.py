@@ -68,11 +68,30 @@ def ensure_tools():
 def run(args,**kwargs):return subprocess.run(args,check=True,**kwargs)
 
 
+def build_commit():
+    state_path = DEPLOY/'update-state.json'
+    try:
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            commit = state['commit']
+            if (state['phase'] in ('building', 'starting', 'complete') and isinstance(commit, str)
+                    and len(commit)==40 and all(c in '0123456789abcdef' for c in commit)):
+                return commit
+            return ''
+        if (ROOT/'.git').exists():
+            return subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
+                                           text=True, stderr=subprocess.DEVNULL).strip()
+    except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
+        pass
+    return ''
+
+
 def compose(*args,**kwargs):
     source=installation().get('legacy_source_root')
     host_source=source or str(DEPLOY/'runtime'/'legacy-input')
     return run(['docker','compose','-p',installation().get('compose_project','serein-public'),'--project-directory',str(DEPLOY),
         '-f',str(DEPLOY/'compose.yaml'),*args],env={**os.environ,'SEREIN_INSTALL_ROOT':str(ROOT),
+        **({'VITE_SEREIN_COMMIT':build_commit()} if args==('build','gateway') else {}),
         'SEREIN_LEGACY_SOURCE':host_source,'SEREIN_LEGACY_SOURCE_HOST':host_source,
         'SEREIN_LEGACY_SOURCE_CONFIGURED':'1' if source else '0'},**kwargs)
 
@@ -150,7 +169,7 @@ def build_runtime(*,backup=True):
         prefix=[shutil.which('node'),str(cli)]
     else:prefix=[npm]
     run([*prefix,'ci'],cwd=ROOT/'web')
-    run([*prefix,'run','build'],cwd=ROOT/'web')
+    run([*prefix,'run','build'],cwd=ROOT/'web',env={**os.environ,'VITE_SEREIN_COMMIT':build_commit()})
 
 
 def backup_runtime():

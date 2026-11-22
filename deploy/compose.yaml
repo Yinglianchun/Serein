@@ -24,6 +24,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Gateway.Dockerfile
+      args:
+        VITE_SEREIN_COMMIT: ${VITE_SEREIN_COMMIT:-}
     restart: unless-stopped
     depends_on:
       memory:
