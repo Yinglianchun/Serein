@@ -3,9 +3,21 @@ import {ConversationImport} from './ConversationImport.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 import {PendingMaterials} from './PendingMaterials.jsx';
 
+function progressMessage(report) {
+  if(report.stage==='done')return '已完成整理。';
+  if(report.stage==='empty')return '目前没有已进入整理的原话。';
+  if(report.stage==='blocked')return '当前整理已暂停或受阻，暂不估算剩余时间。';
+  const stage=report.stage==='routing'?'归线':'结算';
+  if(report.eta_reliable)return `${stage}阶段预计还需约 ${report.eta_human}（按近期速度估算，不含后续阶段）。`;
+  if(report.eta_reason==='stalled')return `${stage}阶段近期没有进展，暂不估算剩余时间。`;
+  if(report.eta_reason==='paused_or_throttled')return `${stage}阶段近期没有新的处理记录，暂不估算剩余时间。`;
+  return `${stage}阶段近期样本不足，暂不估算剩余时间。`;
+}
+
 export function PipelineSettings({onOpenSummary,active=true}) {
   const [task,setTask]=useState(null),[output,setOutput]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
   const [work,setWork]=useState(null);
+  const [progressReport,setProgressReport]=useState(null),[progressBusy,setProgressBusy]=useState(false);
   const [limits,setLimits]=useState(null);
   const mounted=useRef(true),polling=useRef(false),rebuildDialog=useRef(null),restoreDialog=useRef(null);
   const [rebuildTarget,setRebuildTarget]=useState('');
@@ -41,6 +53,11 @@ export function PipelineSettings({onOpenSummary,active=true}) {
     return result;
   }
   function accept(result){setWork(result);setTask(result.status==='awaiting_agent'?result.result:null);}
+  async function showProgress() {
+    setProgressBusy(true);
+    try {setProgressReport(await call('progress'));setStatus('');}
+    catch(error){setStatus(error.message);}finally{setProgressBusy(false);}
+  }
   useEffect(()=>{
     mounted.current=true;
     return()=>{mounted.current=false;};
@@ -169,6 +186,8 @@ export function PipelineSettings({onOpenSummary,active=true}) {
   return <section className="settings-group"><div className="settings-group__heading"><h3>原话整理</h3>
     <p>归线 → 切分与转录 → Event 写作。在“自动摘要管理”页选择执行方式、三阶段模型和整理参数。Scene 由聊天中的 agent 主动写。</p></div>
     <ConversationImport active={active} onImported={()=>setStatus('原话已导入。点击继续整理，进入下一步。')} />
+    <p><button type="button" className="settings-link" disabled={progressBusy} onClick={showProgress}>查看 Event 整理进度与预计时间</button></p>
+    {progressReport&&<p role="status">本次查看：原话档案 {progressReport.archived} 条 · 已进入整理 {progressReport.admitted} 条 · 已归线 {progressReport.routed} 条 · 已结算 {progressReport.processed} 条 · 当前阶段剩余 {progressReport.pending} 条。{progressMessage(progressReport)}</p>}
     {limits&&<p>{autoMessage}</p>}
     {work?.auto_boundary_originals>0&&<p>有 {work.auto_boundary_originals} 条原话在开启自动整理时被划到边界外。它们仍保存在原话档案中，点击“继续整理”不会处理这些原话。<button type="button" disabled={busy||running} onClick={()=>restoreDialog.current.showModal()}>恢复并整理这批原话</button></p>}
     <button type="button" className="settings-link" onClick={onOpenSummary}>自动摘要管理</button>

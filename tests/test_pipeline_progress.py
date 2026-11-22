@@ -279,6 +279,7 @@ def test_progress_api_endpoint(settings):
     assert data["total"] == 100 and data["completed"] == 40
     assert data["eta_reliable"] is True
     assert data["eta_human"] == "6 分 0 秒"
+    assert client.get("/v1/pipeline/progress").json() == data
 
 
 # --- Review fixes: archived-only scope, routing vs settlement, pause ETA ---

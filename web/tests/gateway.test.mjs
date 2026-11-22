@@ -131,7 +131,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     assert.ok(requests.some(r=>r.path==='/v1/settings/models/discover'&&r.method==='POST'&&r.auth==='Bearer synthetic-api-key'));
     assert.equal((await fetch(base+'/__serein/settings/models/discover',{method:'POST',headers:{...auth,'Content-Type':'application/json',Origin:'https://foreign.invalid'},body:'{}'})).status,403);
     assert.equal((await fetch(base+'/__serein/settings',{method:'PATCH',headers:{...auth,'Content-Type':'application/json',Origin:'https://foreign.invalid'},body:'{}'})).status,403);
-    for(const path of ['/__serein/pipeline/status','/__serein/pipeline/attempts/1','/__serein/pipeline/pending/17']){
+    for(const path of ['/__serein/pipeline/status','/__serein/pipeline/progress','/__serein/pipeline/attempts/1','/__serein/pipeline/pending/17']){
       assert.equal((await fetch(base+path,{headers:auth})).status,200);
       assert.ok(requests.some(r=>r.path===path.replace('/__serein/','/v1/')&&r.method==='GET'));
     }
