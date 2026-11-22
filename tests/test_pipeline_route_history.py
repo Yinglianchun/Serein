@@ -53,6 +53,44 @@ def move_card(settings, routed, *, missing=False):
     return card
 
 
+def test_router_replays_two_frames_when_previous_reply_clock_is_later(settings):
+    from serein.compat.raw_archive import raw_archive
+    raw_archive(settings).ingest([
+        {'source_event_id':str(i),'session_id':'books','role':role,'text':'Book club '+str(i),
+         'created_at':'2025-01-01T00:'+stamp+'Z','metadata':{'timestamp_source':clock}}
+        for i,(role,stamp,clock) in enumerate([
+            ('user','00:00','proxy_received'),('assistant','01:00','response_completed'),
+            ('user','00:49','proxy_received'),('assistant','01:30','response_completed')])
+    ],source='test')
+    _, data = freeze(settings)
+    data['input_policy']['max_input_chars'] = 30
+    with Store(settings.database, read_only=True) as store:
+        data['routing_messages'] = [p.task_message(row) for row in store.conn.execute('SELECT * FROM raw_events ORDER BY id')]
+    routed = history(settings, data)
+    with Store(settings.database, read_only=True) as store:
+        producer = dict(store.conn.execute("SELECT * FROM pipeline_batches WHERE id='route:synthetic'").fetchone())
+    frames = recovery._frames(settings.database, producer)
+    assert [[m['id'] for m in frame['messages']] for frame in frames] == [[1, 2], [3, 4]]
+    assert frames[-1]['tracks'] == routed['tracks']
+    assert p.cached_route_result(settings.database, data)['assignments'] == routed['assignments']
+    from test_pipeline_snapshot_compaction import legacy_compact
+    compacted = {**producer, 'status':'done', 'input_json':encode(legacy_compact(json.loads(producer['input_json'])))}
+    assert recovery._frames(settings.database, compacted) == frames
+    async def no_model(*args):
+        pytest.fail('accepted Router frame was rerun')
+    assert asyncio.run(p.route_batch(settings.database, producer, data, no_model)) == routed
+
+
+def test_earlier_id_in_another_window_still_obeys_the_source_clock(settings):
+    ingest(settings)
+    ingest(settings, 2)
+    with Store(settings.database) as store:
+        store.conn.execute("UPDATE raw_events SET session_id='elsewhere',created_at='2025-02-01T00:00:00Z' WHERE id=2")
+        for key in (2, 3, 4):
+            with pytest.raises(p.RoutingRecoveryError, match='future source material'):
+                p.track_state.assert_before(store,[{'track_id':'synthetic','recent_source_message_ids':[key]}],3,routed_ids={2})
+
+
 @pytest.mark.parametrize('legacy', [False, True])
 @pytest.mark.parametrize('missing', [False, True])
 def test_recover_producer_without_rerouting_or_overwriting_later_card(settings, legacy, missing):

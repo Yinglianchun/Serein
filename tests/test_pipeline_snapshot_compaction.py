@@ -55,21 +55,25 @@ def test_compaction_retains_complete_replay_seed_and_policy():
     assert 'components' not in compact and 'messages' not in compact
 
 
-def completed_history(settings,monkeypatch,legacy):
+def completed_history(settings,monkeypatch,legacy,*,interleaved=False):
     from test_pipeline_route_history import freeze, history
     from serein.extensions import pipeline_track_candidates as candidates
     ingest(settings)
     assert asyncio.run(p.advance(settings.database,include_recent=True,runner=synthetic_runner))['events']==1
-    for number in (2,3,4):ingest(settings,number)
+    for number in (2,3,4):
+        if interleaved and number==3:
+            raw_archive(settings).ingest([{'source_event_id':'gap','session_id':'other','role':'user',
+                'text':'Earlier independent activity','created_at':'2025-01-02T02:00:00Z'}],source='test')
+        ingest(settings,number)
     consumer,data=freeze(settings)
     with Store(settings.database,read_only=True) as store:
-        data['routing_messages']=[p.task_message(row) for row in store.conn.execute('SELECT * FROM raw_events WHERE id>2 ORDER BY id')]
+        data['routing_messages']=[p.task_message(row) for row in store.conn.execute("SELECT * FROM raw_events WHERE id>2 AND session_id='books' ORDER BY id")]
     extra=copy.deepcopy(data['tracks'][0]);extra['track_id']='session_'+data['scope']+'_track_0009'
     data['tracks'].append(extra);data['next_track_ordinal']=10
     data['input_policy']['track_candidates_enabled']=True
     def alternating(cards,messages,recent,policy):
         if not policy.get('track_candidates_enabled'):return list(cards)
-        return [cards[1 if messages[0]['id']==5 else 0]]
+        return [cards[1 if messages[0]['id']==(6 if interleaved else 5) else 0]]
     monkeypatch.setattr(candidates,'select',alternating)
     routed=history(settings,data)
     with Store(settings.database) as store:
@@ -79,6 +83,27 @@ def completed_history(settings,monkeypatch,legacy):
         store.conn.execute("UPDATE pipeline_batches SET input_json=?,status='done',result_json=? WHERE id=?",
                            (batch['input_json'],encode({'task_snapshot_compacted':True}),batch['id']))
     return consumer,batch,routed
+
+
+def test_legacy_candidate_first_seen_in_second_frame_requires_its_gap_receipt(settings,monkeypatch):
+    _,batch,_=completed_history(settings,monkeypatch,True,interleaved=True)
+    with Store(settings.database) as store:
+        job=store.conn.execute("SELECT * FROM pipeline_jobs WHERE batch_id=? AND role='track_router:1'",(batch['id'],)).fetchone()
+        request=json.loads(job['request_json'])
+        card=request['active_tracks'][0]
+        raw=p.task_message(store.conn.execute('SELECT * FROM raw_events WHERE id=5').fetchone())
+        card['recent_source_message_ids']=[raw['id']]
+        with p.latest.identity_scope(request['identity']):
+            card['recent_turns']=p.latest.transcript_payload([raw])
+        request['routing_frame']['pre_tracks_sha256']=digest(encode(request['active_tracks']))
+        store.conn.execute('UPDATE pipeline_jobs SET request_json=? WHERE id=?',(encode(request),job['id']))
+        receipt={'source_message_id':5,'primary_track_id':card['track_id'],'context_track_ids':[],'routing_role':'origin'}
+        store.conn.execute('INSERT INTO pipeline_routes VALUES (?,?)',(5,encode(receipt)))
+    assert [f['messages'][0]['id'] for f in recovery._frames(settings.database,batch)]==[3,6,8]
+    with Store(settings.database) as store:
+        store.conn.execute('DELETE FROM pipeline_routes WHERE raw_id=5')
+    with pytest.raises(p.RoutingRecoveryError,match='Unproved Track anchor'):
+        recovery._frames(settings.database,batch)
 
 
 @pytest.mark.parametrize('legacy',[False,True])

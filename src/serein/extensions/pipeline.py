@@ -558,11 +558,12 @@ async def route_batch(database,batch,data,runner):
             cards=track_state.update_cards(cards,routed,updates,block,data['scope'])
         assignments.extend(routed);prior.extend(block);cursor+=len(block)
     max_chars=data.get('input_policy',{}).get('max_input_chars',read_settings(database)['pipeline']['max_input_chars'])
+    routed_ids={a['source_message_id'] for a in assignments}
     for index,block in enumerate(routing_blocks(data['routing_messages'][cursor:],max_chars),len(frozen)):
         bounded={**data,'routing_messages':block,'tracks':track_state.parked(cards),'next_track_ordinal':ordinal,'recent':router_recent(prior,block)}
         prompt_batch={**batch,'input_json':encode(bounded)}
         with Store(database,read_only=True) as store:
-            track_state.assert_before(store,cards,block[0]['id'])
+            track_state.assert_before(store,cards,block[0]['id'],routed_ids=routed_ids)
         request=request_for(database,prompt_batch,'track_router')
         output=await job(database,batch,request,f'track_router:{index}',runner)
         block=_router_prefix(data,request,cursor)
@@ -571,6 +572,7 @@ async def route_batch(database,batch,data,runner):
         with latest.identity_scope(identity(database)):
             cards=track_state.update_cards(cards,routed,updates,block,data['scope'])
         assignments.extend(routed);prior.extend(block);cursor+=len(block)
+        routed_ids.update(a['source_message_id'] for a in routed)
     used={t for a in assignments for t in [a['primary_track_id'],*a['context_track_ids']]}
     return {'assignments':assignments,'tracks':[t for t in cards if t['track_id'] in used],
             'track_state_updates':cards,'next_track_ordinal':ordinal,'_public_normalized':True}

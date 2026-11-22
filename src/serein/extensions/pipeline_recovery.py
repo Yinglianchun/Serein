@@ -125,6 +125,7 @@ def _frames(database, batch):
                  'assignments': result['assignments'], 'tracks': result['tracks'],
                  'next_track_ordinal': result['next_track_ordinal']}]
     frames = []
+    replayed_ids = set()
     cursor = 0
     state=list(original.get('tracks',[]));ordinal=original.get('next_track_ordinal',1)
     prior=list(original.get('recent',[]))
@@ -146,16 +147,25 @@ def _frames(database, batch):
             known={card['track_id']:card for card in state}
             with Store(database,read_only=True) as store:
                 for card in request['active_tracks']:
-                    if card['track_id'] not in known:
-                        tracks.assert_before(store,[card],original['routing_messages'][0]['id'])
-                        state.append(card);known[card['track_id']]=card
+                    if card['track_id'] in known:continue
+                    tracks.assert_before(store,[card],messages[0]['id'])
+                    for anchor in card['recent_source_message_ids']:
+                        if anchor < original['routing_messages'][0]['id']:continue
+                        # This candidate appeared after the seed. A predecessor's
+                        # own track is already in state; a gap needs its own receipt.
+                        route=store.conn.execute('SELECT route_json FROM pipeline_routes WHERE raw_id=?',(anchor,)).fetchone()
+                        receipt=json.loads(route[0]) if route else {}
+                        if (anchor in replayed_ids or receipt.get('source_message_id')!=anchor or
+                                card['track_id'] not in [receipt.get('primary_track_id'),*receipt.get('context_track_ids',[])]):
+                            raise p.RoutingRecoveryError('Unproved Track anchor between frozen Router frames')
+                    state.append(card);known[card['track_id']]=card
             selected=[known[card['track_id']] for card in request['active_tracks']]
             p.assert_router_state({'input_policy':{}},request,selected,ordinal,prior)
         else:
             p.assert_router_state(original,request,state,ordinal,prior)
         if 'routing_frame' in request:
             with Store(database,read_only=True) as store:
-                tracks.assert_before(store,request['active_tracks'],messages[0]['id'])
+                tracks.assert_before(store,request['active_tracks'],messages[0]['id'],routed_ids=replayed_ids)
         with Store(database,read_only=True) as store:
             for key,value in request.get('routing_frame',{}).get('source_hashes',{}).items():
                 raw=store.conn.execute('SELECT event_hash FROM raw_events WHERE id=?',(int(key),)).fetchone()
@@ -173,6 +183,7 @@ def _frames(database, batch):
             cards = tracks.update_cards(state, assignments, updates,
                                         messages, original['scope'])
         state=cards;prior.extend(messages)
+        replayed_ids.update(m['id'] for m in messages)
         used = {key for a in assignments for key in [a['primary_track_id'], *a['context_track_ids']]}
         frames.append({'batch_id': batch['id'], 'job_id': row['id'], 'messages': messages,
                        'assignments': assignments, 'tracks': [c for c in cards if c['track_id'] in used],
