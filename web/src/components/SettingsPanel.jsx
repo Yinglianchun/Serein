@@ -235,7 +235,7 @@ export function SettingsPanel({
             candidateThresholdDraft={candidateThresholdDraft} setCandidateThresholdDraft={setCandidateThresholdDraft}
             passageDraft={passageDraft} setPassageDraft={setPassageDraft} onOpenPipeline={()=>showTab("imports")} onOpenCatalog={()=>showTab("models")} onOpenAssignments={()=>showTab("configuration")} />}
           <div role="tabpanel" id="settings-content-imports" aria-labelledby="settings-tab-imports" aria-hidden={tab !== "imports"} inert={tab !== "imports"}>
-            {open && <PipelineSettings onOpenSummary={openSummary} />}
+            {open && <PipelineSettings active={tab === "imports"} onOpenSummary={openSummary} />}
           </div>
           <div role="tabpanel" id="settings-content-migration" aria-labelledby="settings-tab-migration" aria-hidden={tab !== "migration"} inert={tab !== "migration"}>
             {open && tab === "migration" && <LegacyMigration />}

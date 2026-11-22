@@ -22,7 +22,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
   writeFileSync(join(dir,'auth.json'),record('password-one'));writeFileSync(join(dir,'token'),'synthetic-api-key');
   const requests=[];
   const core=http.createServer((req,res)=>{
-    if(req.url==='/health'){res.setHeader('Content-Type','application/json');res.end('{"status":"ok"}');return;}
+    if(['/live','/health'].includes(req.url)){requests.push({path:req.url});res.setHeader('Content-Type','application/json');res.end('{"status":"ok"}');return;}
     requests.push({path:req.url,auth:req.headers.authorization,method:req.method,forwardedHost:req.headers['x-forwarded-host'],forwardedProto:req.headers['x-forwarded-proto'],protocol:req.headers['mcp-protocol-version']});
     if(req.url.startsWith('/.well-known/oauth-') || ['/authorize','/token','/register'].includes(req.url)){
       res.writeHead(req.url==='/register'?201:200,{'Content-Type':'application/json'});res.end('{"oauth":true}');return;
@@ -99,6 +99,8 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     assert.ok(started,output);
     assert.equal((await fetch(base)).status,401);
     assert.equal((await fetch(base+'/ready')).status,200);
+    assert.equal((await fetch(base+'/live')).status,200);
+    assert.deepEqual(requests.filter(r=>['/health','/live'].includes(r.path)).map(r=>r.path),['/health','/live']);
     for(const [path,method] of [['/.well-known/oauth-protected-resource','GET'],['/.well-known/oauth-authorization-server','GET'],['/register','POST'],['/authorize','GET'],['/token','POST']]){
       const response=await fetch(base+path,{method,headers:method==='POST'?{'Content-Type':'application/json'}:{},body:method==='POST'?'{}':undefined});
       assert.ok([200,201].includes(response.status));

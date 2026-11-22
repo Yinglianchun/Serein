@@ -9,7 +9,7 @@ async function request(path='',body) {
   return result;
 }
 
-export function ConversationImport({onImported}) {
+export function ConversationImport({onImported,active=true}) {
   const [mode,setMode]=useState('auto'),[tagging,setTagging]=useState(true),[job,setJob]=useState(null);
   const [history,setHistory]=useState([]),[tags,setTags]=useState({}),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
   const [dragging,setDragging]=useState(false);
@@ -29,13 +29,17 @@ export function ConversationImport({onImported}) {
   }
   useEffect(()=>{
     mounted.current=true;
-    const poll=async()=>{if(polling.current)return;polling.current=true;
+    return()=>{mounted.current=false;};
+  },[]);
+  useEffect(()=>{
+    if(!active)return;
+    const poll=async()=>{if(document.hidden||polling.current)return;polling.current=true;
       try{await refresh();}catch(error){if(mounted.current)setStatus(error.message);}finally{polling.current=false;}};
     poll();const timer=setInterval(poll,2000);
     const visible=()=>{if(!document.hidden)poll();};
     document.addEventListener('visibilitychange',visible);
-    return()=>{mounted.current=false;clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
-  },[]);
+    return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
+  },[active]);
   async function preview(file) {
     if(!file || busy)return;
     if(file.size>32_000_000){setStatus('文件超过 32 MB，请按会话拆分后导入。');return;}

@@ -289,8 +289,11 @@ def expanded_identity(names):
 
 
 def task_model(database, task, *, requested=''):
+    return task_model_from_settings(read_settings(database), task, requested=requested)
+
+
+def task_model_from_settings(state, task, *, requested=''):
     if task == 'anti_retreat':task = 'persona'
-    state = read_settings(database)
     catalog = chat_models(state) if task == 'chat' else configured_models(state)
     if task == 'chat' and state['upstreams'] and not requested and not state['assignments'].get('chat'):
         if len(state['upstreams']) != 1 or state['models']:

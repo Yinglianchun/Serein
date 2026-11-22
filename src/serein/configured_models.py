@@ -6,7 +6,7 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
-from .deployment import read_settings, task_model
+from .deployment import read_settings, task_model, task_model_from_settings
 
 _prepare_lock = threading.Lock()
 _resources = Path(__file__).parent / 'resources'
@@ -32,9 +32,10 @@ def recall_settings(settings):
 
 
 def effective_settings(settings, *, preparing=False):
-    embedding=task_model(settings.database,'embedding')
-    reranker=task_model(settings.database,'reranker')
-    changes={'recall':recall_settings(settings)}
+    saved = read_settings(settings.database)
+    embedding = task_model_from_settings(saved, 'embedding')
+    reranker = task_model_from_settings(saved, 'reranker')
+    changes = {'recall': {**settings.recall, **saved['recall']}}
     if embedding:
         root=model_index(settings,embedding)
         if not preparing:

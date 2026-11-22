@@ -3,7 +3,7 @@ import {ConversationImport} from './ConversationImport.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 import {PendingMaterials} from './PendingMaterials.jsx';
 
-export function PipelineSettings({onOpenSummary}) {
+export function PipelineSettings({onOpenSummary,active=true}) {
   const [task,setTask]=useState(null),[output,setOutput]=useState(''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
   const [work,setWork]=useState(null);
   const [limits,setLimits]=useState(null);
@@ -43,17 +43,21 @@ export function PipelineSettings({onOpenSummary}) {
   function accept(result){setWork(result);setTask(result.status==='awaiting_agent'?result.result:null);}
   useEffect(()=>{
     mounted.current=true;
+    return()=>{mounted.current=false;};
+  },[]);
+  useEffect(()=>{
+    if(!active)return;
     instanceSettings().then(value=>{if(mounted.current){setLimits(value.pipeline);}}).catch(error=>{if(mounted.current)setStatus(error.message);});
     const refresh=async()=>{
-      if(polling.current)return;polling.current=true;
+      if(document.hidden||polling.current)return;polling.current=true;
       try{const result=await call('status');if(mounted.current)accept(result);}
       catch(error){if(mounted.current)setStatus(error.message);}finally{polling.current=false;}
     };
     const saved=event=>setLimits(event.detail.pipeline);window.addEventListener('serein:settings-saved',saved);
     refresh();const timer=setInterval(refresh,2000);
     const visible=()=>{if(!document.hidden)refresh();};document.addEventListener('visibilitychange',visible);
-    return()=>{window.removeEventListener('serein:settings-saved',saved);mounted.current=false;clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
-  },[]);
+    return()=>{window.removeEventListener('serein:settings-saved',saved);clearInterval(timer);document.removeEventListener('visibilitychange',visible);};
+  },[active]);
   async function next() {
     if(busy||running)return;
     setBusy(true);setStatus(runtimeContractRepair?'正在请求继续整理其他聊天；旧计划仍等待明确重建…':needsRepair?'正在请求重新校验归线材料…':'正在提交后台整理任务…');
@@ -164,7 +168,7 @@ export function PipelineSettings({onOpenSummary}) {
   }
   return <section className="settings-group"><div className="settings-group__heading"><h3>原话整理</h3>
     <p>归线 → 切分与转录 → Event 写作。在“自动摘要管理”页选择执行方式、三阶段模型和整理参数。Scene 由聊天中的 agent 主动写。</p></div>
-    <ConversationImport onImported={()=>setStatus('原话已导入。点击继续整理，进入下一步。')} />
+    <ConversationImport active={active} onImported={()=>setStatus('原话已导入。点击继续整理，进入下一步。')} />
     {limits&&<p>{autoMessage}</p>}
     {work?.auto_boundary_originals>0&&<p>有 {work.auto_boundary_originals} 条原话在开启自动整理时被划到边界外。它们仍保存在原话档案中，点击“继续整理”不会处理这些原话。<button type="button" disabled={busy||running} onClick={()=>restoreDialog.current.showModal()}>恢复并整理这批原话</button></p>}
     <button type="button" className="settings-link" onClick={onOpenSummary}>自动摘要管理</button>

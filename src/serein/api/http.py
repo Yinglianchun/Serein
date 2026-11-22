@@ -5,6 +5,7 @@ import asyncio
 import os
 import sqlite3
 import logging
+from threading import Lock
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -138,6 +139,18 @@ def create_app(settings, *, token: str, live: bool=False):
         return {'status':'ok', 'read_only':not live, 'schema':schema,
                 'release':os.environ.get('SEREIN_RELEASE',''),
                 'snapshot':os.environ.get('SEREIN_SNAPSHOT_ID','')}
+
+    startup_lock = Lock()
+    storage_checked = False
+
+    @app.get('/live')
+    def liveness():
+        nonlocal storage_checked
+        with startup_lock:
+            if not storage_checked:
+                health()
+                storage_checked = True
+        return {'status':'ok'}
 
     auth = [Depends(authorize)]
     from .appearance import routes as appearance_routes

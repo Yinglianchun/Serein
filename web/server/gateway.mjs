@@ -31,8 +31,8 @@ const server = http.createServer((req, res) => {
     res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
     res.end('Invalid request URL'); return;
   }
-  if (path === '/ready' && req.method === 'GET') {
-    Promise.all([fetch(new URL('/health', core), {signal:AbortSignal.timeout(3000)}),
+  if ((path === '/ready' || path === '/live') && req.method === 'GET') {
+    Promise.all([fetch(new URL(path === '/ready' ? '/health' : '/live', core), {signal:AbortSignal.timeout(3000)}),
       fetch(`http://127.0.0.1:${web.httpServer.address().port}/`, {signal:AbortSignal.timeout(3000)})])
       .then(results => { res.writeHead(results.every(r => r.ok) ? 200 : 503); res.end(); })
       .catch(() => { res.writeHead(503); res.end(); });

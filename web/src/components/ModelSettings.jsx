@@ -59,7 +59,7 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
     if(page !== 'configuration')return;
     let active=true, pending=false;
     const poll=async()=>{
-      if(pending)return;
+      if(document.hidden||pending)return;
       pending=true;
       try {
         const state=await readIndexStatus();

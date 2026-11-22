@@ -36,7 +36,7 @@ export function LegacyMigration(){
   }
   useEffect(()=>{
     let disposed=false,pending=false;
-    async function refresh(){if(pending)return;pending=true;try{const data=await call();if(!disposed)setItems(data.items);}catch(error){if(!disposed)setMessage(error.message);}finally{pending=false;}}
+    async function refresh(){if(document.hidden||pending)return;pending=true;try{const data=await call();if(!disposed)setItems(data.items);}catch(error){if(!disposed)setMessage(error.message);}finally{pending=false;}}
     refresh();const timer=setInterval(refresh,3000);return()=>{disposed=true;clearInterval(timer);};
   },[]);
   useEffect(()=>{fetch('/__serein/install-location').then(response=>response.ok?response.json():null)

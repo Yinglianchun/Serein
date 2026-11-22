@@ -18,8 +18,14 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
   function accept(result){setItems(result.pending_materials||[]);setObservedWork(result);onStatus?.(result);}
   useEffect(()=>{
     if(work!==undefined){setItems(work?.pending_materials||[]);setObservedWork(work);return;}
-    let alive=true;
-    const refresh=async()=>{try{const result=await call('status');if(alive)accept(result);}catch(e){if(alive)setError(e.message);}};
+    let alive=true,pending=false;
+    const refresh=async()=>{
+      if(document.hidden||pending)return;
+      pending=true;
+      try{const result=await call('status');if(alive)accept(result);}
+      catch(e){if(alive)setError(e.message);}
+      finally{pending=false;}
+    };
     refresh();const timer=setInterval(refresh,3000);return()=>{alive=false;clearInterval(timer);};
   },[work,onStatus]);
   useEffect(()=>()=>{readSequence.current++;},[]);

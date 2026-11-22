@@ -113,6 +113,8 @@ python -m serein.launch --config /config/config.toml http --live --host 0.0.0.0 
 
 配置 `/health` 为健康检查路径。memory 只供项目内访问，不需要绑定公网域名。启动后，从它的网络面板复制实际的 **Private hostname**；不要仅凭服务名称猜主机名。Zeabur 的[私有网络说明](https://zeabur.com/docs/en-US/deploy/networking/private-networking)介绍了查找方法。
 
+如果平台只需判断服务进程是否响应，可将定时探活路径设为 `/live`。memory 进程在这个入口首次成功响应前会验证数据库，后续探活无需打开数据库。需要检查当前存储状态时，访问 memory 的 `/health` 或 gateway 的 `/ready`。
+
 ## 4. 创建 gateway 服务
 
 仍使用仓库根目录作为构建根目录。环境变量如下：
