@@ -15,7 +15,7 @@ DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': 
 DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'narrative_nightly_organize':False, 'event_to_scene':False, 'current_time':False, 'image_transcription_async':False, 'image_eyes':False}
 DEFAULT_FEATURES.update(dream_read=False, dream_morning=False, memory_candidates=False, pipeline_agent=False)
 DEFAULT_CLOCK = {'timezone':'Asia/Shanghai'}
-DEFAULT_RESUME = {'mode':'command', 'command_enabled':True, 'mcp_enabled':False, 'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
+DEFAULT_RESUME = {'mode':'command', 'command_enabled':True, 'mcp_enabled':False, 'latest_shadow':True, 'recent_events':True, 'recent_scenes':False, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
                   'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
 DEFAULT_DOMAINS = [
     {'key':'relationship','label':'关系','description':'身份、称呼、承诺、边界与沟通方式','policy':'normal'},

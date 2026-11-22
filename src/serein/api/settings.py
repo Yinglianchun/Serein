@@ -171,6 +171,7 @@ class ResumePatch(BaseModel):
 
     latest_shadow: bool | None = None
     recent_events: bool | None = None
+    recent_scenes: bool | None = None
     favorite_scenes: bool | None = None
     selected_memories: bool | None = None
     recent_originals: bool | None = None

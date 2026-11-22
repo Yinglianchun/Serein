@@ -6,7 +6,7 @@ import {instanceSettings} from '../storage/instanceStore.js';
 import {appendResumePage,resumeMaterials,resumePagesText} from '../utils/resumePages.js';
 import './resume-page.css';
 
-const labels={latest_shadow:'窗影',favorite:'收藏 Scene',selected_memory:'自选记忆',recent_event:'最近事件',recent_original:'最近原话',pending_original:'待整理原话'};
+const labels={latest_shadow:'窗影',favorite:'收藏 Scene',selected_memory:'自选记忆',recent_event:'最近事件',recent_scene:'最近 Scene',recent_original:'最近原话',pending_original:'待整理原话'};
 
 export function ResumePage({onOpenSettings}) {
   const [config,setConfig]=useState(null),[selection,setSelection]=useState(null),[pages,setPages]=useState([]);

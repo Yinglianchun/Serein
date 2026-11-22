@@ -31,6 +31,30 @@ def test_resume_http_toggle_and_persistent_selection_without_mcp_tool(settings):
         assert client.post('/v1/extensions/resume',json={'window_id':'new'}).status_code==404
 
 
+def test_recent_scenes_without_events_preview_save_and_deduplicate(settings):
+    save_settings(settings.database, {'features': {'resume': True}})
+    with Store(settings.database) as store:
+        for i in range(12):
+            store.create(f'scene-{i:02}', 'scene', 'Scene', f'Body {i}', created_at='2026-01-01')
+        store.create('hidden', 'scene', 'Hidden', 'Hidden', lifecycle='archived', created_at='2026-02-01')
+    Personal(settings.database).save('favorite', 'scene-10', {'favorite': True}, document_id='scene-10')
+    draft = {'recent_scenes': True, 'selected_memories': True, 'selected_ids': ['scene-11']}
+    with TestClient(create_app(settings, token='test', live=True), headers={'Authorization':'Bearer test'}) as client:
+        def read(selection):
+            response = client.post('/v1/extensions/resume', json=selection)
+            assert response.status_code == 200, response.text
+            return response.json()
+        assert read({})['total_recent_scenes'] == 0
+        preview = read({'selection': draft})
+        assert preview['total_recent_scenes'] == 10
+        assert [item['id'] for item in preview['items']] == [
+            'scene-10', 'scene-11', *[f'scene-{i:02}' for i in range(2, 10)]]
+        assert [item['body_md'] for item in preview['items'] if item['section']=='recent_scene'] == [
+            f'Body {i}' for i in range(2, 10)]
+        assert client.patch('/v1/settings', json={'resume': draft}).status_code == 200
+        assert read({})['items'] == preview['items']
+
+
 def test_draft_resume_preview_pages_without_saving_or_changing_tool_selection(settings):
     save_settings(settings.database,{'features':{'resume':True},'resume':{'mode':'mcp',
         'latest_shadow':False,'recent_events':False,'favorite_scenes':False,'pending_originals':False}})
