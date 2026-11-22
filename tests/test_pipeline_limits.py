@@ -46,6 +46,27 @@ def pairs(number,known=False):
     return result
 
 
+def test_backlog_freezes_complete_envelopes_across_pages_without_reading_tail(settings, monkeypatch):
+    from serein.compat.raw_archive import raw_archive
+    roles = ['user'] * 48 + ['assistant'] + ['user', 'assistant'] * 60 + ['user']
+    raw_archive(settings).ingest([
+        {'source_event_id':str(i), 'session_id':'paged', 'role':role, 'text':str(i),
+         'created_at':'2025-01-01T01:00:00Z'} for i, role in enumerate(roles)
+    ], source='test')
+    p.initialize(settings.database)
+    projected = []
+    original = p.task_message
+    def observe(row):
+        projected.append(row['id'])
+        return original(row)
+    monkeypatch.setattr(p, 'task_message', observe)
+    data = json.loads(p.new_batch(settings.database, True)['input_json'])
+    # 49 messages in the first exchange, then 19 ordinary pairs.
+    assert [m['id'] for m in data['messages']] == list(range(1, 88))
+    assert data['routing_messages'] == data['messages']
+    assert max(projected) < len(roles)
+
+
 def test_time_blocks_and_unknown_time_twenty_rounds_preserve_ids():
     known=pairs(4,True)
     assert [len(b) for b in blocks(known)]==[2,2,2,2]

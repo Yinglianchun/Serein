@@ -1,6 +1,6 @@
 """Transport-sized chunks preserve complete reply envelopes and original IDs."""
 from datetime import datetime, timedelta, timezone
-from .pipeline_rules import dialogue_units
+from .pipeline_rules import iter_dialogue_units
 
 DEFAULTS={'max_input_chars':40000,'max_prompt_chars':200000,'timeout_seconds':600}
 
@@ -15,39 +15,30 @@ def settlement_window(unit):
 
 def routing_blocks(messages, max_chars=40000):
     """Freeze transport frames within settlement windows, never split a unit."""
-    result=[];segment=[];window=None
-    for unit in dialogue_units(messages):
-        current=settlement_window(unit)
-        if segment and current!=window:
-            result.extend(blocks(segment,max_chars));segment=[]
-        segment.extend(unit);window=current
-    if segment:result.extend(blocks(segment,max_chars))
-    return result
+    return [frame for frame, _ in frames_with_lookahead(messages, max_chars)]
 
 
 def blocks(messages, max_chars=40000):
-    result=[];current=[];chars=0;turns=0;previous=None
-    for unit in dialogue_units(messages):
+    return [frame for frame, _ in frames_with_lookahead(messages, max_chars, settlement=False)]
+
+
+def frames_with_lookahead(messages, max_chars, *, settlement=True):
+    """Yield a closed frame and the first whole envelope in the following frame."""
+    current=[];chars=0;turns=0;previous=None;window=None
+    for unit in iter_dialogue_units(messages):
+        unit_window = settlement_window(unit) if settlement else None
         known=all(m.get('metadata',{}).get('timestamp_source')!='import_time' for m in unit)
         start=datetime.fromisoformat(unit[0]['created_at'].replace('Z','+00:00')) if known else None
         size=sum(len(m.get('content',m.get('text',''))) for m in unit)
         silence=start is not None and previous is not None and (start-previous).total_seconds()>=1200
-        if size>max_chars:
-            # Reply envelopes are transport atoms. Never truncate one just to
-            # satisfy a soft input target; isolate it so later material can
-            # still be split normally and let the prompt budget be the final
-            # model-facing guard.
-            if current:
-                result.append(current);current=[];chars=0;turns=0
-            result.append(list(unit))
-            previous=datetime.fromisoformat(unit[-1]['created_at'].replace('Z','+00:00')) if known else None
-            continue
-        if current and (silence or turns>=20 or chars+size>max_chars):
-            result.append(current);current=[];chars=0;turns=0
+        if current and (unit_window!=window or silence or turns>=20 or chars+size>max_chars):
+            yield current, unit
+            current=[];chars=0;turns=0
         current.extend(unit);chars+=size;turns+=1
+        window=unit_window
         previous=datetime.fromisoformat(unit[-1]['created_at'].replace('Z','+00:00')) if known else None
-    if current:result.append(current)
-    return result
+    if current:
+        yield current, []
 
 
 def allowed_ids(request):

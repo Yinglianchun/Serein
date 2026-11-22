@@ -68,14 +68,16 @@ def enqueue_image(database, message_id):
         return value
 
 
+_RECOVERABLE_IMAGES = """FROM background_state WHERE name LIKE 'work:image:%' AND (
+    (json_extract(value_json,'$.status')='running' AND COALESCE(json_extract(value_json,'$.lease_until'),0)<?)
+    OR json_extract(value_json,'$.status')='interrupted'
+    OR (json_extract(value_json,'$.status')='failed' AND json_extract(value_json,'$.retryable')=1
+        AND json_extract(value_json,'$.attempts')<4))"""
+
+
 def recover_image_work(database):
     with Store(database) as store, store.transaction(immediate=True):
-        rows = store.conn.execute(
-            "SELECT value_json FROM background_state WHERE name LIKE 'work:image:%' "
-            "AND (json_extract(value_json,'$.status') IN ('running','interrupted') "
-            "OR (json_extract(value_json,'$.status')='failed' "
-            "AND json_extract(value_json,'$.retryable')=1 "
-            "AND json_extract(value_json,'$.attempts')<4))").fetchall()
+        rows = store.conn.execute('SELECT value_json ' + _RECOVERABLE_IMAGES, (time.time(),)).fetchall()
         for row in rows:
             value = _recover(json.loads(row[0]))
             if (value['status'] == 'interrupted'
@@ -258,13 +260,20 @@ async def work(settings,key,arguments):
         if status(settings.database,key).get('stop_requested'):return {**result,'status':'paused'}
 
 
+def poll_work(database):
+    with Store(database, read_only=True) as store:
+        needs_recovery = store.conn.execute('SELECT 1 ' + _RECOVERABLE_IMAGES + ' LIMIT 1', (time.time(),)).fetchone()
+        if needs_recovery:
+            # Recheck under the write lock: another worker may have renewed the lease.
+            recover_image_work(database)
+        return [json.loads(row[0]) for row in store.conn.execute(
+            "SELECT value_json FROM background_state WHERE name LIKE 'work:%' AND json_extract(value_json,'$.status')='queued'")]
+
+
 async def run(settings):
     """Queued work survives page navigation; stale running work is explicitly resumable."""
     while True:
-        recover_image_work(settings.database)
-        with Store(settings.database,read_only=True) as store:
-            queued=[json.loads(row[0]) for row in store.conn.execute(
-                "SELECT value_json FROM background_state WHERE name LIKE 'work:%' AND json_extract(value_json,'$.status')='queued'")]
+        queued = await asyncio.to_thread(poll_work, settings.database)
         for value in queued:
             if value.get('next_attempt_at', 0) > time.time():
                 continue

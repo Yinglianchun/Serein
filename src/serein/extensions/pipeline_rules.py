@@ -32,7 +32,10 @@ def flushable_dialogue_units(messages, *, now):
         ready.extend(unit for unit in units[:last + 1] if dialogue_unit_is_complete(unit))
     return sorted(ready, key=lambda unit: unit[0]['id'])
 def dialogue_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    units: list[list[dict[str, Any]]] = []
+    return list(iter_dialogue_units(messages))
+
+
+def iter_dialogue_units(messages):
     current: list[dict[str, Any]] = []
     current_has_assistant = False
     current_starts_proactive = False
@@ -48,7 +51,7 @@ def dialogue_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]
         # Multiple proactive messages remain one pending exchange until the
         # user's first reply, regardless of silence between them.
         if is_proactive and current and not (current_starts_proactive and not current_has_user):
-            units.append(current)
+            yield current
             current = []
             current_has_assistant = False
             current_starts_proactive = False
@@ -56,7 +59,7 @@ def dialogue_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]
         if role == "user" and current and current_has_assistant and not (
             current_starts_proactive and not current_has_user
         ):
-            units.append(current)
+            yield current
             current = []
             current_has_assistant = False
             current_starts_proactive = False
@@ -69,8 +72,7 @@ def dialogue_units(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]
         if role == "assistant":
             current_has_assistant = True
     if current:
-        units.append(current)
-    return units
+        yield current
 
 def dialogue_unit_is_complete(unit: list[dict[str, Any]]) -> bool:
     if not unit:

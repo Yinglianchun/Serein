@@ -6,10 +6,10 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from ..core.store import Store, Conflict, encode, digest, now
 from ..deployment import identity, task_model, read_settings
-from .pipeline_limits import blocks, routing_blocks, settlement_window, allowed_ids
+from .pipeline_limits import blocks, routing_blocks, frames_with_lookahead, settlement_window, allowed_ids
 from ..compat.events import Events, reference_blockers
 from ..compat.germany.fact_events import FactEventStore, FactEventSettlementBlockedError
-from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
+from .pipeline_rules import dialogue_units, iter_dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
 from . import pipeline_latest as latest
 from . import pipeline_materials
 from .pipeline_config import snapshot, execution
@@ -152,6 +152,23 @@ SCOPE_HEAD="""NOT EXISTS (SELECT 1 FROM pipeline_batches h WHERE h.scope=b.scope
 QUEUE_ORDER="COALESCE(json_extract(b.input_json,'$.queue_order'),b.rowid),COALESCE(json_extract(b.input_json,'$.recovery_path'),''),b.rowid"
 
 
+def pending_session_messages(conn, source, session, filters):
+    page_size = 48
+    query = ('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? '
+             'AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)' + filters)
+    after = None
+    while True:
+        clause = '' if after is None else ' AND r.id>?'
+        args = (source, session) if after is None else (source, session, after)
+        count = 0
+        for row in conn.execute(query + clause + ' ORDER BY r.id LIMIT ?', (*args, page_size)):
+            count += 1
+            after = row['id']
+            yield task_message(row)
+        if count < page_size:
+            return
+
+
 def new_batch(database,include_recent,clock=None,*,retry_repair=False):
     policy=read_settings(database)['pipeline']
     current=(clock or datetime.now(timezone.utc)).astimezone(TZ)
@@ -242,20 +259,20 @@ def new_batch(database,include_recent,clock=None,*,retry_repair=False):
             complete_upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=COALESCE(json_extract(payload_json,'$.total'),json_array_length(payload_json,'$.entries'))))"
         import_boundary=" AND NOT EXISTS (SELECT 1 FROM pipeline_import_boundaries b WHERE b.upload_id=json_extract(r.metadata_json,'$.import_upload_id') AND b.released=0)"
         import_boundary+=pending_materials.reservation_clause()
-        scopes=store.conn.execute('SELECT DISTINCT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id').fetchall()
+        scopes=store.conn.execute('SELECT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id')
+        visited = set()
         for source,session in scopes:
+            if (source, session) in visited:continue
+            visited.add((source, session))
             if digest(encode([source,session]))[:20] in held_scopes:continue
-            rows=[task_message(row) for row in store.conn.execute('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id',(source,session))]
-            # Evaluate the watermark against full envelopes before filtering rows.
-            eligible=[m for unit in dialogue_units(rows)
-                      if max(datetime.fromisoformat(m['created_at'].replace('Z','+00:00')) for m in unit)<=watermark
-                      for m in unit]
-            chunks=routing_blocks(eligible,policy['max_input_chars'])
-            for chunk_index,eligible in enumerate(chunks):
-                if chunk_index+1<len(chunks):
-                    following=dialogue_units(chunks[chunk_index+1])[0]
-                    if not dialogue_unit_is_complete(following):
-                        eligible=[*eligible,*following]  # A later correction must remain readable, never owned.
+            rows = pending_session_messages(store.conn, source, session, complete_upload + import_boundary)
+            # Test the watermark on whole envelopes, even across database pages.
+            eligible_rows = (m for unit in iter_dialogue_units(rows)
+                             if max(datetime.fromisoformat(m['created_at'].replace('Z','+00:00')) for m in unit)<=watermark
+                             for m in unit)
+            for eligible, following in frames_with_lookahead(eligible_rows, policy['max_input_chars']):
+                if following and not dialogue_unit_is_complete(following):
+                    eligible = [*eligible, *following]
                 stable=[];parked=[]
                 # Reply envelopes determine completion / parked tails, while the latest
                 # Router supplies individual messages as Curator ownership atoms.
