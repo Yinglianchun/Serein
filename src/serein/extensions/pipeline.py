@@ -1582,7 +1582,7 @@ def extend_context(database,component,context_request,*,curator=False):
         {**context_request,'track_id':base['primary_track_id']})
 
 
-def bounded_curator_context(component,candidates,before,query):
+def bounded_curator_context(component,candidates,before,query,*,reserved_source_ids=frozenset()):
     selected=[];omitted=[];chosen=0
     covered={s for unit in component['memberships'] for s in unit['source_message_ids']}
     sessions=sorted({m['session_id'] for m in candidates})
@@ -1592,6 +1592,8 @@ def bounded_curator_context(component,candidates,before,query):
     for unit in sorted(units,key=lambda unit:unit[0]['id'],reverse=True):
         if any(m['id']>=before for m in unit):continue
         unit_ids={m['id'] for m in unit}
+        if unit_ids & reserved_source_ids:
+            omitted.append(unit[0]['id']);continue
         if unit_ids & covered and not unit_ids.issubset(covered):
             omitted.append(unit[0]['id']);continue
         reading=sorted([*unit,*selected],key=lambda m:m['id'])
@@ -1615,13 +1617,18 @@ def extend_track_context(database,component,context_request,*,curator=False):
         rows=store.conn.execute('SELECT r.* FROM pipeline_routes p JOIN raw_events r ON r.id=p.raw_id WHERE r.id<? '
             'AND EXISTS (SELECT 1 FROM json_each(?) s WHERE r.source=json_extract(s.value,\'$[0]\') '
             'AND r.session_id=json_extract(s.value,\'$[1]\')) '
-            'AND (json_extract(p.route_json,\'$.primary_track_id\')=? OR EXISTS (SELECT 1 FROM json_each(p.route_json,\'$.context_track_ids\') WHERE value=?)) ORDER BY r.id DESC'+('' if curator else ' LIMIT 6'),
+            'AND (json_extract(p.route_json,\'$.primary_track_id\')=? OR EXISTS (SELECT 1 FROM json_each(p.route_json,\'$.context_track_ids\') WHERE value=?)) '
+            +('' if curator else pending_materials.reservation_clause('r'))+' ORDER BY r.id DESC'+('' if curator else ' LIMIT 6'),
             (context_request['before_message_id'],encode(scopes),context_request['track_id'],context_request['track_id'])).fetchall()
+        reserved={int(source_id) for (source_id,) in store.conn.execute(
+            "SELECT DISTINCT ps.value FROM pipeline_pending_materials pm, json_each(pm.source_ids_json) ps "
+            "WHERE pm.status IN ('open','running')")} if curator else set()
     existing={m['id']:m for m in component['context_messages']}
     projected=[task_message(r) for r in reversed(rows)]
     prior=[item for item in projected if item['session_id'] in component['context_session_ids']]
     if curator:
-        return bounded_curator_context(component,prior,context_request['before_message_id'],context_request)
+        return bounded_curator_context(component,prior,context_request['before_message_id'],context_request,
+            reserved_source_ids=reserved)
     units=[[item] for item in sorted(prior,key=lambda item:item['id'])[-6:]]
     selected=[m for unit in units for m in unit]
     existing.update({m['id']:m for m in selected})
