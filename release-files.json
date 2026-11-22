@@ -6,6 +6,7 @@
   "Dockerfile",
   "LICENSE",
   "README.md",
+  "docs/issue-history.md",
   "config.example.toml",
   "constraints-runtime.txt",
   "deploy/Gateway.Dockerfile",

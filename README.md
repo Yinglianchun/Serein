@@ -1,5 +1,7 @@
 # Serein
 
+**[更新与问题日志](docs/issue-history.md)** · [排错指南](docs/troubleshooting.md) · [反馈问题](https://github.com/Yinglianchun/Serein/issues)
+
 <a href="https://github.com/DasterProkio/awesome-ai-companion">
   <img src="https://raw.githubusercontent.com/DasterProkio/awesome-ai-companion/main/assets/featured-in-awesome-ai-companion.png" alt="Featured in Awesome AI Companion" height="24">
 </a>
