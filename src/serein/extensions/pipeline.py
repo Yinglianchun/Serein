@@ -627,7 +627,10 @@ def candidates(database,track_ids,*,overflow_out=None):
                 trusted=bool(family_ids) and all(str(origin or '').startswith('assistant_bridge:')
                     for origin, in store.conn.execute('SELECT origin_id FROM fact_events WHERE item_id IN ('+
                         ','.join('?' for _ in family_ids)+')',family_ids))
-                result.append({**dict(row),'event_id':row['item_id'],'primary_track_id':track,'track_id':track,'source_refs':refs,'originals':originals,
+                # Settlement checks predecessor identity by these three fields. The
+                # verified originals already carry the full text in the corridor.
+                source_refs=[{key:ref[key] for key in ('source_system','session_id','message_id')} for ref in refs]
+                result.append({**dict(row),'event_id':row['item_id'],'primary_track_id':track,'track_id':track,'source_refs':source_refs,'originals':originals,
                     'source_message_ids':[m['id'] for m in originals],'session_ids':list({m['session_id'] for m in originals}),
                     'source_activity_roles':details.get('source_activity_roles',{}),'blocked':bool(blockers),
                     'material_snapshot':details.get('material_snapshot') if consistent_sources else None,
@@ -1570,7 +1573,8 @@ def extend_context(database,component,context_request,*,curator=False):
         return pending_materials.read_material(database,component,context_request['pending_material_id'])
     if 'event_id' in context_request:
         base=next(b for b in component['base_event_candidates'] if b['event_id']==context_request['event_id'])
-        candidates=[m for m in component['context_messages'] if m['id'] in set(base['source_message_ids'])]
+        source_ids=set(base['source_message_ids'])
+        candidates=[m for m in component['context_messages'] if m['id'] in source_ids]
         before=context_request.get('before_message_id',max(base['source_message_ids'])+1)
     else:
         return extend_track_context(database,component,context_request,curator=curator)

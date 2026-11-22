@@ -95,6 +95,9 @@ def test_261_sources_use_four_indexed_reads_and_keep_every_original(catalog, mon
     for base in bases:
         assert base['originals'] == expected[base['event_id']]
         assert base['source_message_ids'] == [message['id'] for message in expected[base['event_id']]]
+        assert base['source_refs'] == [dict(row) for row in conn.execute(
+            'SELECT source_system,session_id,message_id FROM fact_event_sources WHERE item_id=? ORDER BY id',
+            (base['event_id'],))]
         assert base['material_snapshot'] == {'synthetic': base['event_id']}
     plan = list(conn.execute('EXPLAIN QUERY PLAN ' + reads[0]))
     assert any('SEARCH r USING INDEX idx_raw_events_source_event_id' in row[3] for row in plan)
@@ -122,9 +125,10 @@ def test_legacy_empty_id_keeps_the_original_first_row_lookup(catalog, monkeypatc
     _event(conn, 'event')
     old = _raw(conn, '', content='Earlier empty ID', stamp='2026-09-01T00:00:00Z')
     newest = _raw(conn, '', content='Later empty ID', stamp='2026-10-02T00:00:00Z')
-    _bind(conn, 'event', old)
+    _bind(conn, 'event', key='', content='Legacy binding differs from both archived rows')
     expected = _legacy_originals(conn, 'event')
-    assert expected[0]['id'] == newest
+    # The legacy lookup has no ORDER BY. Match its result on this SQLite build.
+    assert expected[0]['id'] in (old, newest)
     statements = []
     _trace_stores(monkeypatch, statements)
 
