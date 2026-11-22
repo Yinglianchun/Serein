@@ -246,7 +246,10 @@ def event_curator_model_input(component: dict[str, Any], snowflake_message_ids: 
             scope = 'context_only'
         covered_source_ids.update(source_set)
         unit_messages = sorted((context_by_id[source_id] for source_id in source_ids), key=lambda item: (parse_datetime(item.get('created_at')), int(item['id'])))
-        units.append({'root': root, 'scope': scope, 'primary_track': str(membership.get('track_id') or ''), 'context_tracks': edge_tracks.get(root, []), 'messages': event_track_message_payload(unit_messages, snowflake_message_ids)})
+        unit = {'root': root, 'scope': scope, 'primary_track': str(membership.get('track_id') or ''), 'context_tracks': edge_tracks.get(root, []), 'messages': event_track_message_payload(unit_messages, snowflake_message_ids)}
+        if membership.get('routing_role') == 'routine':
+            unit['routing_role_hint'] = 'routine'
+        units.append(unit)
     units.sort(key=lambda item: (parse_datetime(item['messages'][0].get('created_at')), int(item['messages'][0]['source_message_id'])))
     if not stable_ids.union(parked_ids).issubset(covered_source_ids):
         raise ValueError('Track Curator settlement sources lack an atomic unit')
@@ -363,7 +366,7 @@ def build_event_track_curator_prompt(date_view: str, component: dict[str, Any], 
             'boundaries 每项格式：'+json.dumps({'left_event_index':0,'right_event_index':1,'reason':'为何是两段独立活动','evidence':[{'source_message_id':1,'quote':'左侧逐字原文'},{'source_message_id':3,'quote':'右侧逐字原文'}]},ensure_ascii=False)+'；没有边界时返回 []。\n'
             'dispositions 每项格式：'+json.dumps({'disposition':'skip','unit_roots':[5],'reason':'处置依据','parked_source_message_ids':[]},ensure_ascii=False)+'；disposition 只能为 skip 或 defer；defer 必须引用真实 parked source ID；没有 skip/defer 时返回 []。\n'
             f'{json.dumps(format_hint, ensure_ascii=False)}\n\n'
-            '只选择 scope=stable 的完整 unit。每个 stable unit 必须恰好进入 Event、skip 或 defer；只有 Router 声明的 bridge 可共享。'
+            '只选择 scope=stable 的完整 unit。每个 stable unit 必须恰好进入 Event、skip 或 defer；只有 Router 声明的 bridge 可共享。routing_role_hint 只是 Router 的提示，须按完整原文判断：纯例行系统提示若没有独立活动，按实际关系 skip/defer；若其后的用户与助手原文确实展开活动，保留该完整 unit，不因 routine 提示排除。'
             'parked/context_only 只可阅读。extend/rewrite/merge 只填写 base_event_ids，host 保留原文并集。'
             'action 与 base_event_ids 数量必须匹配：create 为 0，extend/rewrite 恰好为 1，merge 至少为 2；base 只能从输入的 base_events 选择。'
             'extend 只接续输入 base_events 中某一条已保存 Event，base_event_ids 必须恰好填写该 Event 的 event_id；确认新原文接续该候选时，直接提出 extend，不另加交接标签或等待另一轮归线。同一 Track 的后续消息不等于 extend。目标不在本轮 base_events 时暂不交接，不猜 event_id，也不为查找候选发起 context_request；仍按现有入选、边界与暂缓规则处理本轮原文，不能仅因缺少旧 Event 就 skip 实质回应。base_events 为空时，拟议 Event 只能用 create，不能用 extend 加空 base。当前 events 数组内刚提出的 create 也不能作为 base；若后续 unit 仍属同一段活动，合入同一个 Event 的 owned_unit_roots，独立活动则分别 create。'
