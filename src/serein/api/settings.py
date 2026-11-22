@@ -531,10 +531,28 @@ def routes(settings, auth):
             template = yaml.safe_load(body.template)
             gateway = template.get('gateway', template) if isinstance(template,dict) else {}
             if not isinstance(gateway,dict) or 'upstreams' not in gateway:
-                raise ValueError('The template must contain gateway.upstreams')
+                raise HTTPException(400, '请提供包含 gateway.upstreams 列表的 YAML 或 JSON 模板。')
+            if not isinstance(gateway['upstreams'], list):
+                raise HTTPException(400, 'gateway.upstreams 需要填写上游列表。')
             patch = SettingsPatch(upstreams=gateway['upstreams'])
-        except (yaml.YAMLError, ValidationError, ValueError, TypeError):
-            raise HTTPException(400, 'Invalid upstream template; check names, model aliases and connection settings') from None
+        except yaml.YAMLError as error:
+            mark = getattr(error, 'problem_mark', None)
+            where = f'（第 {mark.line + 1} 行附近）' if mark else ''
+            raise HTTPException(400, f'模板语法有误{where}，请检查缩进，并只粘贴 YAML 或 JSON 内容。') from None
+        except ValidationError as error:
+            location = error.errors(include_input=False, include_context=False)[0]['loc']
+            where = f'第 {location[1] + 1} 个上游' if len(location) > 1 and isinstance(location[1], int) else '上游列表'
+            if location[-1] == 'base_url':
+                message = '请在 base_url 填写纯 HTTP(S) 地址，去掉链接标记、账号密码、查询参数和片段。'
+            elif location[-1] == 'name':
+                message = '请填写有效的上游名称。'
+            elif 'models' in location:
+                message = '请检查 models 列表，每项填写模型号，或包含 id 和 upstream_model 的对象。'
+            else:
+                message = '请对照模板检查必填项、字段名称和取值。'
+            raise HTTPException(400, f'{where}配置有误。{message}') from None
+        except (ValueError, TypeError):
+            raise HTTPException(400, '模板中存在无效的字段值，请对照示例检查。') from None
         return save(patch, response)
 
     return router

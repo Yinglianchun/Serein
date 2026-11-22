@@ -10,7 +10,11 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
     setBusy(true);setStatus("");
     try {
       const response=await fetch("/__serein/settings/upstreams-template",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({template})});
-      if(!response.ok)throw new Error("上游未导入，请检查模板、重复模型名，以及仍被功能使用的模型。");
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        const reason = typeof result?.detail === "string" ? result.detail : `请求失败（HTTP ${response.status}）。`;
+        throw new Error(`上游未导入。${reason}`);
+      }
       onImported(await response.json());setTemplate("");setStatus("上游模板已保存，聊天模型列表已更新。");
     } catch(error){setStatus(error.message);}
     finally{setBusy(false);}
@@ -68,7 +72,7 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
     </details>)}</div>
     <div className="settings-actions"><button type="button" onClick={()=>onChange([...upstreams,{id:createUuid(),name:"",base_url:"",protocol:"openai",models:[{id:"",upstream_model:""}]}])}>添加上游</button></div>
     <details className="upstream-template"><summary>从配置模板导入</summary>
-      <p className="model-connection-help">粘贴 gateway.upstreams 模板，导入会替换已保存的上游列表。可以用 api_key_env 指定服务端环境变量。</p>
+      <p className="model-connection-help">粘贴 gateway.upstreams 模板，导入会替换已保存的上游列表。只想新增上游时，请使用上方“添加上游”并保存。可以用 api_key_env 指定服务端环境变量。</p>
       <label className="settings-field"><span>上游 YAML / JSON 配置</span><textarea rows={12} value={template} onChange={event=>setTemplate(event.target.value)} spellCheck={false} /></label>
       <button type="button" disabled={busy || !template.trim()} onClick={importTemplate}>导入并保存上游</button>
     </details>

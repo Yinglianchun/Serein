@@ -68,7 +68,7 @@ export async function prepareMemoryIndex({fetchImpl = fetch, loadSettings}) {
   } catch {
     // A failed request has no reliable per-item failure count. Keep already
     // committed batches, but never describe the operation as fully prepared.
-    message = '索引准备失败或结果未能确认，不能确认本次计划、成功和失败条数。已完成的向量批次可能已保留；请检查 embedding 模型、接口、密钥和服务日志后重试。准备期间检索就绪标记可能已撤下，需重试完成。';
+    message = '索引准备失败或结果未能确认，不能确认本次计划、成功和失败条数。已完成的向量批次可能已保留；请查看“建立 / 补齐检索索引”下方的索引状态和处理提示。准备期间检索就绪标记可能已撤下，需重试完成。';
   }
   try {
     return {config: await loadSettings(), message};
@@ -79,6 +79,10 @@ export async function prepareMemoryIndex({fetchImpl = fetch, loadSettings}) {
 
 export function indexSafetySummary(state = {}) {
   const reasons = {
+    embedding_not_selected: '本次未发送 Embedding 请求。请在“设置 → 配置”选择并保存 Embedding 模型，然后恢复索引并重新建立。',
+    embedding_protocol_mismatch: '本次未发送 Embedding 请求。请选择使用 OpenAI 兼容 Embeddings 接口的模型，保存后恢复索引并重新建立。',
+    embedding_invalid_response: '已收到 Embedding 响应，但模型号或向量数据未通过校验。请核对模型号及接口返回格式，修正后恢复索引。',
+    embedding_dimension_mismatch: '已收到 Embedding 向量，但实际维度与模型设置不同。请核对维度，保存后恢复索引并重新建立。',
     interrupted_operation: '上次操作中断，请先核对提供方用量。',
     index_configuration_changed: '失败后配置或操作入口已变更，请明确恢复。',
     transient_provider_error: '提供方暂时不可用。',
@@ -87,7 +91,13 @@ export function indexSafetySummary(state = {}) {
   };
   if (!state.status || state.status === 'ready') return '后台索引可用。';
   const status = {paused:'已暂停', backoff:'等待退避', running:'处理中'}[state.status] || '状态待确认';
-  return `后台索引${status}；尝试 ${state.attempts ?? 0} / ${state.max_attempts ?? 3}，待处理 ${state.pending ?? 0}。${reasons[state.reason] || ''} 已有向量仍可使用。`;
+  let reason = reasons[state.reason] || '';
+  if (['transient_provider_error', 'index_configuration_or_contract_error'].includes(state.reason) && Number.isInteger(state.provider_http_status)) {
+    const code = state.provider_http_status;
+    const action = code === 401 || code === 403 ? '请核对上游密钥及模型访问权限。' : code === 404 ? '请核对 API Base URL 和模型号。' : '请核对上游服务状态和模型配置。';
+    reason = `Embedding 提供方返回 HTTP ${code}。${action}`;
+  }
+  return `后台索引${status}；索引任务尝试 ${state.attempts ?? 0} / ${state.max_attempts ?? 3}，待处理 ${state.pending ?? 0}。${reason} 已有向量仍可使用。`;
 }
 
 export async function resumeIndex(state, {fetchImpl = fetch} = {}) {

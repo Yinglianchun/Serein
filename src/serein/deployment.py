@@ -210,12 +210,19 @@ def save_settings(database, changes):
             raise ValueError('Unknown reasoning content compatibility policy')
         known = {item['id'] for item in catalog}
         if len(known) != len(catalog):
-            raise ValueError('Client model IDs must be unique; use aliases for models offered by multiple upstreams')
+            raise ValueError('模型内部 ID 重复。不同上游使用同一模型时，请分别设置不同的 id，upstream_model 保留提供方的模型号。')
         public_names = [client_model_id(model) for model in chat_models(current)]
         if len(set(public_names)) != len(public_names):
-            raise ValueError('Models in an upstream need distinct aliases; upstream names must distinguish their models')
-        if any(value and value not in known for value in current['assignments'].values()):
-            raise ValueError('A selected model is missing; clear its task assignment before removing it')
+            raise ValueError('模型显示名称重复。请区分上游名称，或给同一上游内的模型设置不同别名。')
+        missing_tasks = [task for task, value in current['assignments'].items() if value and value not in known]
+        if missing_tasks:
+            labels = {'chat': '聊天', 'writer': 'Narrative Writer', 'embedding': 'Embedding', 'reranker': 'Reranker',
+                      'relations': 'Scene 关系', 'dreams': '梦境', 'narrative_scout': '叙事卷找材料', 'persona': '心绪/防撤退',
+                      'event_pipeline': 'Event 整理', 'track_router': '原话 · 归线', 'event_curator': '原话 · 切分',
+                      'event_writer': '原话 · Event 写作', 'image_transcription': '图片转录 / 眼睛',
+                      'operit_tagging': '打标', 'arc_linker': 'Event · Arc 归档'}
+            names = '、'.join(labels.get(task, '其他功能') for task in missing_tasks)
+            raise ValueError('以下功能绑定的模型不在新的模型列表中：' + names + '。请保留对应模型的内部 ID，或先更改这些功能的模型选择并保存。')
         image_features = current['features']['image_transcription_async'], current['features']['image_eyes']
         if all(image_features):
             raise ValueError('“异步图片转录”和“眼睛”只能开启一个')

@@ -116,6 +116,7 @@ def guarded_index(function):
                         state.update(status='paused', reason='attempt_limit', retry_at=None)
                         _write(store, state)
                         raise IndexBlocked('Index attempt limit reached')
+                    state.pop('provider_http_status', None)
                     state.update(status='running', attempts=state['attempts'] + 1,
                                  operation=function.__module__ + '.' + function.__name__, target=target,
                                  recovery_token=uuid4().hex, retry_at=None)
@@ -124,7 +125,7 @@ def guarded_index(function):
                 try:
                     result = function(settings, *args, **kwargs)
                 except Exception as error:
-                    from ..adapters.embedding import EmbeddingTransientError
+                    from ..adapters.embedding import EmbeddingPermanentError, EmbeddingResponseError, EmbeddingSetupError, EmbeddingTransientError
                     transient = isinstance(error, EmbeddingTransientError)
                     try:
                         import httpx
@@ -133,9 +134,16 @@ def guarded_index(function):
                         pass
                     retry = transient and state['attempts'] < MAX_ATTEMPTS
                     delay = max(5 * 2 ** (state['attempts'] - 1), getattr(error, "retry_after", None) or 0) if transient else 0
+                    reason = 'transient_provider_error' if transient else 'index_configuration_or_contract_error'
+                    if isinstance(error, EmbeddingSetupError):
+                        reason = error.reason
+                    elif isinstance(error, EmbeddingResponseError):
+                        reason = 'embedding_invalid_response'
+                    elif isinstance(error, (EmbeddingPermanentError, EmbeddingTransientError)) and getattr(error, 'status_code', None):
+                        state['provider_http_status'] = error.status_code
                     state.update(status='backoff' if retry else 'paused',
                                  retry_at=time.time() + delay if retry else None,
-                                 reason='transient_provider_error' if transient else 'index_configuration_or_contract_error')
+                                 reason=reason)
                     with Store(database) as store:
                         _write(store, state)
                     # Never persist/log exception text, URLs, response bodies or inputs.

@@ -12,6 +12,12 @@ test('paused status explains attempts, pending work and recovery',()=>{
   assert.match(message,/已有向量/);
 });
 
+test('index feedback distinguishes a missing selection from an upstream denial',()=>{
+  const paused = {status:'paused',attempts:1};
+  assert.match(indexSafetySummary({...paused,reason:'embedding_not_selected'}), /未发送 Embedding 请求/);
+  assert.match(indexSafetySummary({...paused,reason:'index_configuration_or_contract_error',provider_http_status:403}), /HTTP 403.*权限/);
+});
+
 test('recovery posts explicit confirmation and observed state token',async()=>{
   let request;
   await resumeIndex({recovery_token:'observed-token'},{fetchImpl:async(path,options)=>{

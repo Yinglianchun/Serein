@@ -81,6 +81,48 @@ def test_template_import_and_shared_task_choices(deployment):
     assert isinstance(BackgroundJobs(settings,features={'dreams'}).dreams.client,TaskClient)
 
 
+@pytest.mark.parametrize('code,reason', [(403,'index_configuration_or_contract_error'), (200,'embedding_invalid_response')])
+def test_index_status_distinguishes_missing_selection_and_provider_response(deployment, monkeypatch, code, reason):
+    _, client = deployment
+    def status():
+        return client.get('/v1/settings/index-status').json()
+
+    calls = []
+    def respond(self, request):
+        calls.append(str(request.url))
+        return httpx.Response(code, text='synthetic-private-body')
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', respond)
+    assert client.post('/v1/settings/prepare-memory').status_code == 400
+    state = status()
+    assert state['reason'] == 'embedding_not_selected' and not calls
+    assert client.post('/v1/settings/resume-index', json={'confirm':'RESUME_INDEX_EMBEDDING',
+                       'recovery_token':state['recovery_token']}).status_code == 200
+    assert client.patch('/v1/settings', json={'upstreams':upstreams(), 'assignments':{'embedding':'a-smart'}}).status_code == 200
+    assert client.post('/v1/settings/prepare-memory').status_code == 400
+    state = status()
+    assert calls == ['https://a.example/v1/embeddings']
+    assert state['reason'] == reason and state['status'] == 'paused'
+    assert state.get('provider_http_status') == (403 if code == 403 else None)
+    assert 'synthetic-private-body' not in json.dumps(state)
+
+
+def test_template_explains_url_and_binding_errors_separately(deployment):
+    _, client = deployment
+    def submit(url, models):
+        template = {'gateway': {'upstreams': [{'name':'example', 'base_url':url, 'models':models}]}}
+        return client.post('/v1/settings/upstreams-template', json={'template':json.dumps(template)})
+
+    url = 'https://example.invalid/v1'
+    invalid = submit('image[' + url + ']', ['one'])
+    assert invalid.status_code == 400 and 'base_url' in invalid.json()['detail']
+    assert url not in invalid.text
+    assert submit(url, ['one']).status_code == 200
+    assert client.patch('/v1/settings', json={'assignments':{'writer':'one'}}).status_code == 200
+    missing = submit(url, ['two'])
+    assert missing.status_code == 400 and 'Narrative Writer' in missing.json()['detail']
+    assert client.get('/v1/settings').json()['assignments']['writer'] == 'one'
+
+
 def test_upstream_keys_survive_save_and_alias_conflicts_are_atomic(deployment):
     settings,client=deployment
     client.patch('/v1/settings',json={'upstreams':upstreams()})

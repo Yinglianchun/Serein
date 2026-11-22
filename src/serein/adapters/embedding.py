@@ -11,10 +11,20 @@ class EmbeddingPermanentError(ValueError):
     """Configuration, authentication or strict response contract failure."""
 
 
+class EmbeddingResponseError(EmbeddingPermanentError):
+    """A successful HTTP response contained unusable embedding data."""
+
+
 class EmbeddingTransientError(ValueError):
     def __init__(self, message, *, retry_after=None):
         super().__init__(message)
         self.retry_after = retry_after
+
+
+class EmbeddingSetupError(ValueError):
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
 
 
 def check_response(response):
@@ -36,8 +46,11 @@ def check_response(response):
                 pass
         if delay is not None and (not math.isfinite(delay) or delay < 0):
             delay = None
-        raise EmbeddingTransientError(f'Embedding provider returned HTTP {response.status_code}', retry_after=delay)
-    raise EmbeddingPermanentError(f'Embedding provider returned HTTP {response.status_code}; response body omitted')
+        error = EmbeddingTransientError(f'Embedding provider returned HTTP {response.status_code}', retry_after=delay)
+    else:
+        error = EmbeddingPermanentError(f'Embedding provider returned HTTP {response.status_code}; response body omitted')
+    error.status_code = response.status_code
+    raise error
 
 
 class EmbeddingClient:
@@ -92,12 +105,12 @@ class EmbeddingClient:
             check_response(response)
             result = response.json()
             if result.get("model") != self.profile["model"] or len(result.get("data", [])) != count:
-                raise EmbeddingPermanentError("Embedding provider returned a different model or unexpected number of vectors")
+                raise EmbeddingResponseError("Embedding provider returned a different model or unexpected number of vectors")
             vectors = {}
             for row in result["data"]:
                 position = row.get("index", 0 if count == 1 else None)
                 if type(position) is not int or not 0 <= position < count or position in vectors:
-                    raise EmbeddingPermanentError("Embedding provider returned invalid or duplicate input positions")
+                    raise EmbeddingResponseError("Embedding provider returned invalid or duplicate input positions")
                 vectors[position] = unit_vector(row["embedding"], self.dimension)
             return [vectors[position] for position in range(count)]
         except (httpx.TimeoutException, httpx.NetworkError):
@@ -107,7 +120,7 @@ class EmbeddingClient:
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as error:
             if isinstance(error, (EmbeddingPermanentError, EmbeddingTransientError)):
                 raise
-            raise EmbeddingPermanentError("Embedding provider returned an invalid vector response") from None
+            raise EmbeddingResponseError("Embedding provider returned an invalid vector response") from None
         finally:
             if owned:
                 client.close()
