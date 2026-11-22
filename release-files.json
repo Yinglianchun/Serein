@@ -612,7 +612,7 @@
   "tests/test_pipeline_progress.py",
   "web/src/components/DarkroomTitle.jsx",
   "web/src/components/WhisperTitle.jsx",
-  "web/src/components/darkroomGlyphs.js",
+  "web/src/components/darkroom-title.css",
   "web/src/components/darkroomInk.js",
   "web/tests/darkroom-ink.test.mjs",
   "src/serein/extensions/pipeline_pending.py",

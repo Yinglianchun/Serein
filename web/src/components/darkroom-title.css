@@ -1,0 +1,350 @@
+@import "@fontsource/pinyon-script/latin-400.css";
+
+.darkroom-title-art {
+  width: 100%;
+  container-type: inline-size;
+}
+.darkroom-title-art__poster {
+  --gold: 240, 214, 156;
+  --script: "Pinyon Script", "Snell Roundhand", "Apple Chancery", cursive;
+  position: relative;
+  aspect-ratio: 100 / 92;
+  color: #fff;
+  font-family: var(--font-editorial-cjk);
+}
+
+/* ---------- 单字 ---------- */
+.darkroom-title-art .pos {
+  position: absolute;
+  z-index: 2;
+  font-size: calc(var(--S) * 1cqw);
+  width: 1em;
+  height: 1em;
+  left: calc(var(--x) * 1cqw - 0.5em);
+  top: calc(var(--y) * 1cqw - 0.5em);
+}
+.darkroom-title-art .pos > span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  line-height: 1;
+}
+.darkroom-title-art .c {
+  font-weight: 700;
+  opacity: 0;
+  animation: darkroom-title-rise 1.7s cubic-bezier(0.2, 0.7, 0.2, 1) var(--d) both;
+}
+.darkroom-title-art .c.h {
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(255, 255, 255, 0.92);
+  font-weight: 400;
+} /* 镂空 */
+.darkroom-title-art .c.g {
+  color: transparent;
+  font-weight: 600;
+  background: linear-gradient(175deg, #fff 18%, rgba(255, 255, 255, 0.36) 96%);
+  -webkit-background-clip: text;
+  background-clip: text;
+} /* 渐变 */
+.darkroom-title-art .c.f {
+  -webkit-mask-image: linear-gradient(180deg, #000 52%, rgba(0, 0, 0, 0.14));
+  mask-image: linear-gradient(180deg, #000 52%, rgba(0, 0, 0, 0.14));
+} /* 下部羽化 */
+.darkroom-title-art .c.g2 {
+  color: transparent;
+  font-weight: 600;
+  background: linear-gradient(175deg, #fff 25%, rgba(255, 255, 255, 0.66) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+} /* 递：更柔的渐变 */
+.darkroom-title-art .c.f2 {
+  -webkit-mask-image: linear-gradient(180deg, #000 58%, rgba(0, 0, 0, 0.42));
+  mask-image: linear-gradient(180deg, #000 58%, rgba(0, 0, 0, 0.42));
+} /* 递：轻一点的下部羽化，捺不会被吃掉 */
+.darkroom-title-art .c.up {
+  clip-path: inset(0 0 47% 0);
+} /* 时：被时间切开 */
+.darkroom-title-art .c.lo {
+  clip-path: inset(53% 0 0 0);
+  translate: 0.055em 0;
+}
+.darkroom-title-art .gh {
+  color: transparent;
+  -webkit-text-stroke: 0.6px rgba(255, 255, 255, 0.42);
+  font-weight: 400;
+  opacity: 0;
+  transform: translate(var(--gx, -0.05em), var(--gy, 0.045em));
+} /* 偏移的描边重影 */
+.darkroom-title-art .gh.e {
+  color: rgba(255, 255, 255, 0.16);
+  -webkit-text-stroke: 0;
+  font-weight: 700;
+  filter: blur(1.3px);
+} /* 慢：向右拖出的回声 */
+.darkroom-title-art .gh {
+  animation: darkroom-title-fade 1.8s calc(var(--d) + 0.8s) both;
+  --o: var(--go, 0.5);
+}
+@keyframes darkroom-title-rise {
+  from {
+    opacity: 0;
+    filter: blur(12px);
+    transform: translateY(0.32em);
+  }
+  to {
+    opacity: 1;
+    filter: blur(var(--b, 0px));
+    transform: none;
+  }
+}
+@keyframes darkroom-title-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: var(--o, 1);
+  }
+}
+
+/* ---------- SVG 装饰层 ---------- */
+.darkroom-title-art .L {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.darkroom-title-art .back {
+  z-index: 1;
+}
+.darkroom-title-art .front {
+  z-index: 3;
+}
+.darkroom-title-art .L {
+  fill: none;
+  stroke: #fff;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 0.22;
+}
+.darkroom-title-art .tx {
+  fill: #fff;
+  stroke: none;
+  font-family: var(--font-editorial-cjk);
+}
+.darkroom-title-art .fd {
+  opacity: 0;
+  animation: darkroom-title-fade 1.8s var(--dl, 0s) both;
+}
+.darkroom-title-art .dr {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: darkroom-title-draw var(--dur, 2s) var(--dl, 0s) cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+@keyframes darkroom-title-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.darkroom-title-art .tw,
+.darkroom-title-art .halo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: darkroom-title-tw 5.4s ease-in-out infinite;
+  animation-delay: var(--dl, 0s);
+}
+.darkroom-title-art .halo {
+  opacity: 0;
+  animation-name: darkroom-title-halo;
+}
+@keyframes darkroom-title-tw {
+  0%,
+  100% {
+    transform: scale(0.5);
+    opacity: 0.35;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 1;
+  }
+}
+@keyframes darkroom-title-halo {
+  0%,
+  100% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+}
+.darkroom-title-art .spin {
+  animation: darkroom-title-spinr 240s linear infinite;
+}
+.darkroom-title-art .hand {
+  animation: darkroom-title-spinr 3600s linear infinite;
+} /* 逆时针：时间在倒流 */
+.darkroom-title-art .stamp {
+  animation: darkroom-title-spin 150s linear infinite;
+}
+@keyframes darkroom-title-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes darkroom-title-spinr {
+  to {
+    transform: rotate(-360deg);
+  }
+}
+.darkroom-title-art .crawl {
+  animation: darkroom-title-crawl 900s linear 6s both;
+}
+@keyframes darkroom-title-crawl {
+  to {
+    transform: translate(32px, 0);
+  }
+}
+
+/* 时：「日」被捏成沙漏，倒转一次、沙往下漏，循环 12 秒（转 180° 恰好等于初始状态，所以首尾无缝） */
+.darkroom-title-art .hg {
+  position: absolute;
+  left: 0.06em;
+  top: 0.09em;
+  width: 0.37em;
+  height: 0.79em;
+  opacity: 0;
+  overflow: visible;
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.95);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  animation: darkroom-title-rise 1.7s cubic-bezier(0.2, 0.7, 0.2, 1) 0.3s both;
+}
+.darkroom-title-art .hgf {
+  transform-origin: 5px 11px;
+  animation: darkroom-title-hflip 12s linear 3.6s infinite;
+}
+@keyframes darkroom-title-hflip {
+  0%,
+  88% {
+    transform: rotate(0);
+    animation-timing-function: cubic-bezier(0.6, 0, 0.2, 1);
+  }
+  100% {
+    transform: rotate(180deg);
+  }
+}
+.darkroom-title-art .sT {
+  animation: darkroom-title-sUp 12s linear 3.6s infinite both;
+}
+.darkroom-title-art .sB {
+  animation: darkroom-title-sDown 12s linear 3.6s infinite both;
+}
+@keyframes darkroom-title-sUp {
+  0% {
+    transform: translateY(0);
+  }
+  82%,
+  100% {
+    transform: translateY(10.6px);
+  }
+} /* 上半：沙面下降，最后漏空 */
+@keyframes darkroom-title-sDown {
+  0% {
+    transform: translateY(10.6px);
+  }
+  82%,
+  100% {
+    transform: translateY(0);
+  }
+} /* 下半：沙面上升，最后堆满 */
+.darkroom-title-art .hg .sT,
+.darkroom-title-art .hg .sB,
+.darkroom-title-art .hg .gr {
+  fill: rgb(var(--gold));
+} /* 沙：浅金 */
+.darkroom-title-art .gr {
+  opacity: 0;
+  animation: darkroom-title-grUp 1.7s ease-out infinite;
+  animation-delay: calc(3.6s + var(--g));
+}
+@keyframes darkroom-title-grUp {
+  0% {
+    transform: translateY(0);
+    opacity: 0;
+  }
+  25% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(7px);
+    opacity: 0;
+  }
+}
+.darkroom-title-art .strm {
+  animation: darkroom-title-strm 12s linear 3.6s infinite both;
+}
+@keyframes darkroom-title-strm {
+  0% {
+    opacity: 0;
+  }
+  3% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  84%,
+  100% {
+    opacity: 0;
+  }
+}
+.darkroom-title-art .k {
+  translate: 0.085em 0.01em;
+  scale: 0.66 1;
+} /* 寸：压窄后放在右边 */
+
+@media (prefers-reduced-motion: reduce) {
+  .darkroom-title-art .hgf,
+  .darkroom-title-art .sT,
+  .darkroom-title-art .sB,
+  .darkroom-title-art .gr {
+    animation: none;
+  }
+  .darkroom-title-art .sT {
+    transform: translateY(5px);
+  }
+  .darkroom-title-art .sB {
+    transform: translateY(5px);
+  }
+  .darkroom-title-art .c,
+  .darkroom-title-art .gh,
+  .darkroom-title-art .fd,
+  .darkroom-title-art .dr {
+    animation-duration: 0.01s;
+    animation-delay: 0s;
+  }
+  .darkroom-title-art .tw,
+  .darkroom-title-art .halo,
+  .darkroom-title-art .spin,
+  .darkroom-title-art .hand,
+  .darkroom-title-art .stamp,
+  .darkroom-title-art .crawl,
+  .darkroom-title-art .strm {
+    animation: none;
+  }
+  .darkroom-title-art .halo {
+    opacity: 0.3;
+  }
+  .darkroom-title-art .orbit-dot {
+    display: none;
+  }
+  .darkroom-title-art .hg {
+    animation-duration: 0.01s;
+    animation-delay: 0s;
+  }
+}

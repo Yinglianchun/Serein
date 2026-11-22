@@ -789,7 +789,7 @@ export function DiaryPage() {
                     </div>
                   ) : (
                     <div className="darkroom-open-room__empty">
-                      <BookOpenText size={25} weight="light" aria-hidden="true" />
+                      <DarkroomTitle />
                       <h3>这里还没有信。</h3>
                       <p>留给以后的话，会在这里等着。</p>
                     </div>

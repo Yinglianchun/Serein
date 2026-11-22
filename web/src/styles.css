@@ -1,3 +1,5 @@
+@import "./components/darkroom-title.css";
+
 :root {
   color: #24302d;
   background: #f8faf9;
@@ -5029,9 +5031,7 @@ label:has(input:focus-visible) {
   font-family: var(--font-editorial-cjk);
 }
 .darkroom-letter-table > header { position: sticky; top: 24px; padding-bottom: 32px; }
-.darkroom-title-art { display: block; width: 100%; height: auto; color: #edeae3; overflow: visible; }
-.darkroom-title-art__grid { color: #c7c3b9; opacity: .42; }
-.darkroom-title-art__stroke { opacity: .86; }
+.darkroom-open-room__empty > .darkroom-title-art { width: min(260px, 70vw); }
 .darkroom-letter-table > header h3 {
   margin: 36px 0 0;
   color: #e5e0d6;

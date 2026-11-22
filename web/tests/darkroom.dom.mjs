@@ -40,7 +40,11 @@ try {
  await click(button('未寄出的'));
  const room=()=>document.querySelector('.darkroom-open-room');
  assert(room(),'Room opens despite a two-year capsule');
- assert.equal(document.getElementById('darkroom-open-title').textContent,'未寄出的信');
+ assert.equal(document.getElementById('darkroom-open-title').textContent,'时空慢递');
+ const titleArt=room().querySelector('.darkroom-title-art');
+ assert(titleArt,'The directory includes the new title art');
+ assert.equal([...titleArt.querySelectorAll('.pos')].map(glyph=>glyph.lastElementChild.textContent).join(''),'寸空慢递');
+ assert.equal(titleArt.querySelectorAll('svg.back path[pathLength], svg.front path[pathLength]').length,4,'Only the corner and caption paths remain');
  assert.doesNotMatch(room().textContent,/Readable letter body/,'Entry shows the directory, never opens a letter automatically');
  assert.equal(room().querySelectorAll('.darkroom-letter').length,3);
  assert(!room().querySelector('.darkroom-letter .darkroom-letter__sender, .darkroom-letter .darkroom-letter__footer, .darkroom-letter .darkroom-letter__status'),'Collapsed titles have no metadata or chevrons');
@@ -96,6 +100,7 @@ try {
  assert.doesNotMatch(room().textContent,/Readable letter body|SECRET/);
  empty=true;await act(async()=>{window.dispatchEvent(new Event('focus'));await flush();});
  assert.match(room().textContent,/这里还没有信/);assert.equal(room().querySelectorAll('.darkroom-letter').length,0);
+ assert(room().querySelector('.darkroom-open-room__empty .darkroom-title-art'),'The empty room includes the title art');
  await click(button('回到日记',room()));empty=false;await click(button('未寄出的'));
  assert.equal(room().querySelectorAll('.darkroom-letter').length,3,'Reentry restores the directory, not an old reader');
  assert(!room().querySelector('.darkroom-open-room__content'));
