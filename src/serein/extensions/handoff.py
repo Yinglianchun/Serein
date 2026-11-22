@@ -70,7 +70,7 @@ def factory(services, options):
             return {'key':key,'revision':revision,'status':'saved'}
 
     def resume(window_id: str = 'main', cursor: str = '', handoff_key: str = '', source_session_id: str = '', selection: dict | None = None):
-        """Read selected continuity sections: latest shadow, ten recent Events, ten recent Scenes, favorite Scenes, selected memories, recent originals and pending originals. Call with no arguments to start; window_id is optional and defaults to main. Pass next_cursor as cursor until all pages are read; do not rewrite a portrait."""
+        """Read selected continuity sections: latest shadow, recent Events and Scenes, favorite Scenes, selected memories, recent originals and pending originals. Call with no arguments to start; window_id is optional and defaults to main. Pass next_cursor as cursor until all pages are read; do not rewrite a portrait."""
         from ..deployment import read_settings
         from ..compat.window_shadows import continuity_shadow, latest_shadow
         state = read_settings(database)
@@ -117,7 +117,7 @@ def factory(services, options):
                         documents.append({'id':key,'kind':doc['kind'],'section':'selected_memory','title':doc['title'],
                             'revision':doc['revision'],'body_md':doc['body_md'],'created_at':doc['created_at']})
                         existing_ids.add(key)
-            def recent_documents(kind):
+            def recent_documents(kind, limit):
                 rows = reader.store.conn.execute(
                     "SELECT id FROM documents WHERE kind=? AND lifecycle='active' ORDER BY created_at DESC,id DESC",
                     (kind,))
@@ -128,12 +128,12 @@ def factory(services, options):
                         doc = obj['document']
                         recent.append({'id':row['id'], 'kind':kind, 'section':'recent_'+kind, 'title':doc['title'],
                                        'revision':doc['revision'], 'body_md':doc['body_md'], 'created_at':doc['created_at']})
-                        if len(recent) == 10:
+                        if len(recent) == limit:
                             break
                 return recent
 
-            recent_events = recent_documents('event') if selection['recent_events'] else []
-            recent_scenes = recent_documents('scene') if selection['recent_scenes'] else []
+            recent_events = recent_documents('event', selection['recent_event_limit']) if selection['recent_events'] else []
+            recent_scenes = recent_documents('scene', selection['recent_scene_limit']) if selection['recent_scenes'] else []
             for recent in (recent_events, recent_scenes):
                 documents.extend(item for item in reversed(recent) if item['id'] not in existing_ids)
             raw_ids=set()

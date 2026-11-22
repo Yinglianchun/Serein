@@ -55,6 +55,26 @@ def test_recent_scenes_without_events_preview_save_and_deduplicate(settings):
         assert read({})['items'] == preview['items']
 
 
+def test_recent_event_and_scene_limits_are_independent_in_preview_and_saved_resume(settings):
+    save_settings(settings.database, {'features': {'resume': True}, 'resume': {'recent_scenes': True}})
+    with Store(settings.database) as store:
+        for kind in ('scene', 'event'):
+            for i in range(12):
+                store.create(f'{kind}-{i:02}', kind, kind, str(i), created_at='2026-01-01')
+    with TestClient(create_app(settings, token='test', live=True), headers={'Authorization':'Bearer test'}) as client:
+        def counts(body):
+            result = client.post('/v1/extensions/resume', json=body).json()
+            return result['total_recent_events'], result['total_recent_scenes']
+        draft = {'recent_event_limit': 2, 'recent_scene_limit': 11}
+        assert counts({'selection': draft}) == (2, 11)
+        assert counts({}) == (10, 10)
+        assert client.patch('/v1/settings', json={'resume': draft}).status_code == 200
+        assert counts({}) == (2, 11)
+        for key in draft:
+            for invalid in (0, 51, 1.5, True):
+                assert client.patch('/v1/settings', json={'resume': {key: invalid}}).status_code == 422
+
+
 def test_draft_resume_preview_pages_without_saving_or_changing_tool_selection(settings):
     save_settings(settings.database,{'features':{'resume':True},'resume':{'mode':'mcp',
         'latest_shadow':False,'recent_events':False,'favorite_scenes':False,'pending_originals':False}})
