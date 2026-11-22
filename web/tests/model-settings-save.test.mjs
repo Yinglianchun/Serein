@@ -24,11 +24,19 @@ test('catalog saves tolerate incompatible pipeline fields and preserve pending c
       event_writer_concurrency:1,track_lookback_days:3,joint_review_enabled:false,material_review_enabled:false,
       round_gate_enabled:false,append_protected_enabled:false,future_read_only_field:'unknown'},
     dream:{daily_probability:.4,main_prompt:''},index_status:{status:'ready'},memory_ready:false};
+  const clipboard = [], keyActions = [];
+  Object.defineProperty(navigator, 'clipboard', {value:{writeText:async value=>clipboard.push(value)}});
+  window.confirm = ()=>true;
   const saves=[];
   let rejectNext=false;
   globalThis.fetch=async(url,options={})=>{
     if(url==='/__serein/pipeline/status')return {ok:true,json:async()=>({pending_materials:[]})};
     if(url==='/__serein/settings/index-status')return {ok:true,json:async()=>structuredClone(state.index_status)};
+    if (url.startsWith('/__serein/gateway-key/')) {
+      assert.equal(options.method,'POST');
+      keyActions.push(url.split('/').at(-1));
+      return {ok:true,json:async()=>url.endsWith('/copy')?{key:'synthetic-clipboard-key'}:{status:'rotated'}};
+    }
     assert.equal(url,'/__serein/settings');
     if(options.method==='PATCH'){
       const body=JSON.parse(options.body);saves.push(body);
@@ -69,6 +77,13 @@ test('catalog saves tolerate incompatible pipeline fields and preserve pending c
     });
     const click=async(text)=>app.act(async()=>{button(text).click();});
 
+    assert.deepEqual(keyActions,[]);
+    await click('复制 Base URL');
+    await click('复制 Gateway Key');
+    await click('更换 Gateway Key');
+    assert.deepEqual(clipboard,['https://synthetic.invalid/v1','synthetic-clipboard-key']);
+    assert.deepEqual(keyActions,['copy','rotate']);
+    assert.doesNotMatch(document.body.textContent,/synthetic-clipboard-key/);
     await click('添加上游');
     await type('上游名称','Synthetic');await type('API Base URL','https://synthetic.invalid/v1');
     await type('上游模型号','synthetic-model');await type('API Key','synthetic-key');

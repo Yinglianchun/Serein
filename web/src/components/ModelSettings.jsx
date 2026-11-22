@@ -24,11 +24,96 @@ const taskLinks = {
   reranker:{href:"https://cloud.siliconflow.cn/i/NCXr2PLP",label:"硅基流动（邀请链接）"},
 };
 
+function GatewayConnection() {
+  const baseUrl = `${window.location.origin}/v1`;
+  const [status, setStatus] = useState("");
+  const [working, setWorking] = useState(false);
+
+  async function requestKey(action) {
+    const response = await fetch(`/__serein/gateway-key/${action}`, {
+      method:"POST", headers:{"Content-Type":"application/json"}, body:"{}", cache:"no-store",
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || "网关暂无法处理这个操作。");
+    return payload;
+  }
+
+  async function copyText(getText) {
+    if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
+      const content = getText().then(value => new Blob([value], {type:"text/plain"}));
+      await Promise.all([content, navigator.clipboard.write([new ClipboardItem({"text/plain":content})])]);
+      return;
+    }
+    const value = await getText();
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+    const onCopy = event => {
+      event.clipboardData.setData("text/plain", value);
+      event.preventDefault();
+    };
+    document.addEventListener("copy", onCopy);
+    try {
+      if (!document.execCommand("copy")) throw new Error("浏览器未允许复制，请用 HTTPS 或本机地址打开设置页。");
+    } finally {
+      document.removeEventListener("copy", onCopy);
+    }
+  }
+
+  async function copy(label, getText) {
+    setWorking(true);
+    try {
+      await copyText(getText);
+      setStatus(`${label}已复制。`);
+    } catch (error) {
+      setStatus(error.message || "复制失败，请检查浏览器剪贴板权限。");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function rotate() {
+    if (!window.confirm("更换 Gateway Key 后，旧 Key 和已发放的 MCP OAuth 凭据会失效。聊天客户端需要更新 Key，OAuth 客户端需要重新授权。现在更换吗？")) return;
+    setWorking(true);
+    try {
+      await requestKey("rotate");
+      setStatus("Gateway Key 已更换。请复制新 Key 并更新客户端。");
+    } catch (error) {
+      setStatus(error.message || "无法确认更换结果，请重新复制当前 Key。");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return <section className="settings-group" aria-label="聊天客户端接入">
+    <div className="settings-group__heading"><h3>聊天客户端接入</h3></div>
+    <div className="settings-field"><span>Base URL</span><code>{baseUrl}</code>
+      <button type="button" disabled={working} onClick={()=>copy("Base URL", async()=>baseUrl)}>复制 Base URL</button>
+    </div>
+    <div className="settings-field"><span>Gateway Key</span><span aria-label="密钥已隐藏">••••••••••••</span>
+      <div className="settings-actions">
+        <button type="button" disabled={working} onClick={()=>copy("Gateway Key", async()=>{
+          const {key} = await requestKey("copy");
+          if (typeof key !== "string" || !key) throw new Error("未取得 Gateway Key。");
+          return key;
+        })}>复制 Gateway Key</button>
+        <button type="button" disabled={working} onClick={rotate}>更换 Gateway Key</button>
+      </div>
+    </div>
+    {status && <p role="status">{status}</p>}
+  </section>;
+}
+
 export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalog,onOpenAssignments,
   recallThreshold,setRecallThreshold,candidateThresholdDraft,setCandidateThresholdDraft,
   passageDraft,setPassageDraft}) {
   const [config,setConfig]=useState(null);
   const [indexDraft,setIndexDraft]=useState({});
+  const [cooldownDraft,setCooldownDraft]=useState({});
+  const cooldownMode=cooldownDraft.cooldown_mode ?? config?.recall?.cooldown_mode ?? 'rounds';
+  const cooldownField=cooldownMode === 'rounds' ? 'cooldown_rounds' : 'cooldown_hours';
+  const cooldownDuration=cooldownDraft[cooldownField] ?? config?.recall?.[cooldownField] ?? (cooldownMode === 'rounds' ? 5 : 24);
   const [pipelineDraft,setPipelineDraft]=useState({});
   const embeddingBatchSize=indexDraft.embedding_batch_size ?? config?.recall?.embedding_batch_size ?? 16;
   const embeddingConcurrency=indexDraft.embedding_concurrency ?? config?.recall?.embedding_concurrency ?? 1;
@@ -111,12 +196,16 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
         throw new Error('长文起切字数需填写 1 到 100000 之间的整数。');
       for(const [value,max,label] of [[embeddingBatchSize,64,'向量每批条数'],[embeddingConcurrency,4,'向量请求并发数']])
         if(value===''||!Number.isInteger(Number(value))||Number(value)<1||Number(value)>max)throw new Error(`${label}需填写 1 到 ${max} 之间的整数。`);
+      for (const key of ['cooldown_rounds','cooldown_hours']) {
+        if (key in cooldownDraft && (!Number.isInteger(Number(cooldownDraft[key])) || Number(cooldownDraft[key]) < 1 || Number(cooldownDraft[key]) > 10000))
+          throw new Error('冷却轮数与小时数需填写 1 到 10000 之间的整数。');
+      }
       const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:Object.fromEntries(Object.entries(config.assignments).filter(([key])=>!taskGroups.find(group=>group.key==="events").tasks.includes(key))),dream:config.dream,
-        recall:{...passageDraft,...Object.fromEntries(Object.entries(indexDraft).map(([key,value])=>[key,key==='index_catch_up'?value:Number(value)])),...('passage_min_chars' in passageDraft?{passage_min_chars:Number(passageMinChars)}:{}),
+        recall:{...passageDraft,...Object.fromEntries(Object.entries(cooldownDraft).map(([key,value])=>[key,key==='cooldown_mode'?value:Number(value)])),...Object.fromEntries(Object.entries(indexDraft).map(([key,value])=>[key,key==='index_catch_up'?value:Number(value)])),...('passage_min_chars' in passageDraft?{passage_min_chars:Number(passageMinChars)}:{}),
           ...(recallThreshold!==null?{direct_threshold:Number(threshold)}:{}),
           ...Object.fromEntries(Object.entries(candidateThresholdDraft).map(([key,value])=>[key,Number(value)]))},upstream:{
         writer_enabled:config.upstream.writer_enabled,memory_enabled:config.upstream.memory_enabled,operit_enabled:config.upstream.operit_enabled}});
-      setConfig(current=>({...result,pipeline:current.pipeline,assignments:{...result.assignments,...eventAssignments}}));setIndexDraft({});setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
+      setConfig(current=>({...result,pipeline:current.pipeline,assignments:{...result.assignments,...eventAssignments}}));setIndexDraft({});setCooldownDraft({});setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
     } catch(error){setStatus(error.message);}
     finally{setBusy(false);}
   }
@@ -157,6 +246,7 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
   }
   return <>
     <div role="tabpanel" id="settings-content-models" aria-labelledby="settings-tab-models" aria-hidden={page!=="models"} inert={page!=="models"}>
+      {page==="models" && <GatewayConnection />}
       <section className="settings-group" aria-label="上游与模型">
         {config&&<form ref={upstreamForm} onSubmit={event=>save(event,true)}>
       <div className="settings-group__heading"><h3>上游与模型</h3></div>
@@ -218,6 +308,17 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
         <input type="number" min="1" max="100000" step="1" disabled={busy} value={passageMinChars}
           onChange={event=>setPassageDraft(current=>({...current,passage_min_chars:event.target.value}))}/></label>
       <small>有效正文超过此字数才分段，汉字、字母和标点均按字符计。保存后应用于新写入或正文修改的记忆；已有分段保留，不自动全库重切。开启后可点“建立 / 补齐检索索引”一次性补齐旧记忆缺失的分段。</small>
+      </details>
+      <details className="settings-menu"><summary>自动召回冷却</summary>
+        <label className="settings-field">冷却方式<select value={cooldownMode}
+          onChange={event=>setCooldownDraft(current=>({...current,cooldown_mode:event.target.value}))}>
+          <option value="rounds">按成功对话轮次</option><option value="hours">按小时</option>
+        </select></label>
+        <label className="settings-field">{cooldownMode==='rounds'?'冷却轮数':'冷却小时数'}
+          <input type="number" required min="1" max="10000" step="1" value={cooldownDuration}
+            onChange={event=>setCooldownDraft(current=>({...current,[cooldownField]:event.target.value}))}/>
+        </label>
+        <p className="model-connection-help">网关聊天共用冷却，最多保留最近 200 条记忆交付记录。</p>
       </details>
       <details className="settings-menu"><summary><span>索引处理速度<small>每批 {embeddingBatchSize} 条 · 并发 {embeddingConcurrency}</small></span></summary>
         <p>默认每批最多 16 条、同时 1 个向量请求。按提供方的批量与限流要求调整，正文和长文分段共用这些设置；保存后生效。</p>

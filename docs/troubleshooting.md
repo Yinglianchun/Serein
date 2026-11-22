@@ -214,7 +214,7 @@ with urlopen(request, timeout=15) as response:
 
 在网页召回观察中区分候选、准入、冷却和实际交付。没有匹配内容可以不召回；重排失败也不会把未经评分的候选直接注入。看到向量候选不代表模型已收到记忆。
 
-同一窗口固定 `X-Serein-Window-ID`，新窗口换值。所有客户端都不填时会共用 `main` 的冷却与提醒轮次。编辑正文、换 Embedding 后按页面提示补齐索引；不要像旧 Markdown 桶那样在 Obsidian 或同步软件中直接改 Serein 主库。
+同一窗口固定 `X-Serein-Window-ID`，新窗口换值。所有客户端都不填时会共用 `main` 的提醒轮次与续接会话。网关自动召回冷却和心绪由实例共用。编辑正文、换 Embedding 后按页面提示补齐索引；不要像旧 Markdown 桶那样在 Obsidian 或同步软件中直接改 Serein 主库。
 
 ## 更新被拒绝或没有出现菜单 12
 

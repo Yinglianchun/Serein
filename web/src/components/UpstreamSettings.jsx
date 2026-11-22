@@ -2,6 +2,8 @@ import {ModelDiscovery} from "./ModelDiscovery.jsx";
 import {useState} from "react";
 import {createUuid} from "../utils/createUuid.js";
 
+const goBaseUrl = "https://opencode.ai/inference/go/openai/v1";
+
 export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,onImported,busy,setBusy,setStatus}) {
   const [template,setTemplate]=useState("");
   const edit=(id,patch)=>onChange(upstreams.map(item=>item.id===id?{...item,...patch}:item));
@@ -25,14 +27,20 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
     <div className="configured-models">{upstreams.map(upstream=><details className="configured-model" key={upstream.id}>
       <summary>{upstream.name || "新上游"}<small>{upstream.models.length} 个模型</small></summary>
       <label className="settings-field"><span>上游名称</span><input required value={upstream.name} onChange={event=>edit(upstream.id,{name:event.target.value})} /></label>
-      <label className="settings-field"><span>API Base URL</span><input required type="url" placeholder="https://api.example.com/v1" value={upstream.base_url} onChange={event=>edit(upstream.id,{base_url:event.target.value})} /></label>
+      <label className="settings-field"><span>API Base URL</span><input required type="url" placeholder="https://api.example.com/v1" value={upstream.base_url} onChange={event=>edit(upstream.id,{base_url:event.target.value, ...(event.target.value.trim().replace(/\/$/, '') === goBaseUrl ? {} : {opencode_go_session:false})})} /></label>
       <label className="settings-field"><span>API Key</span><input type="password" autoComplete="new-password" value={upstream.api_key || ""}
         data-upstream-api-key data-upstream-id={upstream.id}
         placeholder={upstream.api_key_configured?"已配置；留空保留":"本地无认证上游可留空"}
         onChange={event=>edit(upstream.id,{api_key:event.target.value,...(event.target.value?{clear_key:false}:{})})} /></label>
       {upstream.api_key_configured && <label className="settings-toggle"><span>删除已保存的密钥</span><input type="checkbox" role="switch" checked={upstream.clear_key || false} onChange={event=>edit(upstream.id,{clear_key:event.target.checked})} /></label>}
-      <label className="settings-field"><span>接口格式</span><select value={upstream.protocol} onChange={event=>edit(upstream.id,{protocol:event.target.value,prompt_cache:"",prompt_cache_retention:""})}>
+      <label className="settings-field"><span>接口格式</span><select value={upstream.protocol} onChange={event=>edit(upstream.id,{protocol:event.target.value,opencode_go_session:false,prompt_cache:"",prompt_cache_retention:""})}>
         <option value="openai">Chat Completions / Embeddings / Rerank</option><option value="anthropic">Anthropic Messages</option></select></label>
+      {upstream.protocol === "openai" && upstream.base_url?.trim().replace(/\/$/, '') === goBaseUrl &&
+        <label className="settings-toggle"><span>发送 OpenCode Go 会话标识
+          <small>使用客户端提供的稳定会话 ID。客户端未提供时，Serein 无法替 Go 区分会话。</small></span>
+          <input type="checkbox" role="switch" checked={upstream.opencode_go_session || false}
+            onChange={event=>edit(upstream.id,{opencode_go_session:event.target.checked})} />
+        </label>}
       <details><summary>缓存与连接选项</summary>
         <label className="settings-field"><span>密钥环境变量（可选）</span><input value={upstream.api_key_env || ""} onChange={event=>edit(upstream.id,{api_key_env:event.target.value})} /></label>
         <label className="settings-field"><span>提示缓存</span><select value={upstream.prompt_cache || ""} onChange={event=>edit(upstream.id,{prompt_cache:event.target.value,prompt_cache_retention:""})}>

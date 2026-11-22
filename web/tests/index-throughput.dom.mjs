@@ -45,7 +45,13 @@ try{
   assert.deepEqual(saves[0].recall,{embedding_batch_size:32,embedding_concurrency:2,index_catch_up:true});
   assert.equal(saves[0].upstream.memory_enabled,false);assert.equal(state.recall.passages_enabled,false);
   assert(!('pipeline' in saves[0]));assert.equal(state.pipeline.auto_enabled,false);
+  const mode=[...document.querySelectorAll('label')].find(node=>node.textContent.startsWith('冷却方式')).querySelector('select');
+  await act(async()=>{mode.value='hours';mode.dispatchEvent(new Event('change',{bubbles:true}));});
+  await number('冷却小时数','6');
+  await act(async()=>{[...document.querySelectorAll('button')].find(node=>node.textContent==='保存配置').click();await wait();});
+  assert.deepEqual(saves.at(-1).recall,{cooldown_mode:'hours',cooldown_hours:6});
   await act(async()=>{root.unmount();root=mount();await wait();});
+  assert.equal(input('冷却小时数').value,'6');
   assert.equal(input('向量每批条数').value,'32');assert.equal(input('向量请求并发数').value,'2');
   assert.equal(input('加快后台索引追赶').checked,true);
   await act(async()=>root.unmount());root=null;

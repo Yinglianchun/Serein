@@ -113,7 +113,8 @@ def configured_models(state):
             entries.append({'id':default,'upstream_model':default})
         for entry in entries:
             result.append({**connection, **entry, 'model':entry['upstream_model'],
-                           'label':entry.get('label') or entry['upstream_model'], 'upstream_name':upstream['name']})
+                           'label':entry.get('label') or entry['upstream_model'], 'upstream_name':upstream['name'],
+                           **({'upstream_id':upstream.get('id')} if upstream.get('opencode_go_session') else {})})
     return result
 
 

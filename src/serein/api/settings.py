@@ -112,6 +112,7 @@ class UpstreamEntry(ModelConnection):
     default_model: str = Field(default='', max_length=200)
     anthropic_version: str = Field(default='2023-06-01', max_length=100, pattern=r'^[^\r\n]+$')
     anthropic_beta: str = Field(default='', max_length=500, pattern=r'^[^\r\n]*$')
+    opencode_go_session: bool = Field(default=False, strict=True)
     models: list[ModelRoute] = Field(default_factory=list, max_length=500)
 
     @field_validator('models', mode='before')
@@ -123,6 +124,9 @@ class UpstreamEntry(ModelConnection):
 
     @model_validator(mode='after')
     def model_list(self):
+        if self.opencode_go_session and (self.protocol != 'openai'
+                or self.base_url != 'https://opencode.ai/inference/go/openai/v1'):
+            raise ValueError('OpenCode Go session requires the official Go Chat Completions base URL')
         if not self.models and not self.default_model:
             raise ValueError('Each upstream needs a model list or default_model')
         return self
@@ -242,10 +246,14 @@ class RecallPatch(BaseModel):
     embedding_batch_size: int | None = Field(default=None, ge=1, le=64, strict=True)
     embedding_concurrency: int | None = Field(default=None, ge=1, le=4, strict=True)
     index_catch_up: bool | None = Field(default=None, strict=True)
+    cooldown_mode: Literal['rounds', 'hours'] | None = None
+    cooldown_rounds: int | None = Field(default=None, ge=1, le=10000, strict=True)
+    cooldown_hours: int | None = Field(default=None, ge=1, le=10000, strict=True)
 
     @field_validator('direct_threshold', 'body_candidate_threshold', 'cue_candidate_threshold',
                      'direct_pool_limit', 'passages_enabled', 'passage_min_chars',
-                     'embedding_batch_size', 'embedding_concurrency', 'index_catch_up', mode='before')
+                     'embedding_batch_size', 'embedding_concurrency', 'index_catch_up',
+                     'cooldown_mode', 'cooldown_rounds', 'cooldown_hours', mode='before')
     @classmethod
     def reject_null(cls, value):
         if value is None: raise ValueError('Recall settings cannot be null')
@@ -439,7 +447,8 @@ def routes(settings, auth):
         return {**read_settings(settings.database, public=True), 'recall':{key:getattr(policy,key) for key in
                 ('direct_threshold','body_candidate_threshold','cue_candidate_threshold',
                  'direct_pool_limit','passages_enabled','passage_min_chars',
-                 'embedding_batch_size','embedding_concurrency','index_catch_up')},
+                 'embedding_batch_size','embedding_concurrency','index_catch_up',
+                 'cooldown_mode','cooldown_rounds','cooldown_hours')},
                 'memory_ready': status['ready'], 'memory_status':status,
                 'index_status':index_status(settings.database)}
 

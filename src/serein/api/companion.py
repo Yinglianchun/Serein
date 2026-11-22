@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..compat.memo_store import ReminderStore
-from ..compat.persona_engine import PersonaStateEngine
+from ..compat.persona_engine import GATEWAY_PERSONA_SESSION, PersonaStateEngine
 from ..deployment import read_settings, task_model
 
 class MemoEdit(BaseModel):
@@ -71,11 +71,16 @@ def routes(settings, auth):
     def read_persona(session_id: str=''):
         state,engine=persona()
         sessions=engine._list_sessions(100)
-        selected=session_id or (sessions[0]['session_id'] if sessions else '')
+        session_ids = {session['session_id'] for session in sessions}
+        shared = GATEWAY_PERSONA_SESSION if GATEWAY_PERSONA_SESSION in session_ids else ''
+        selected = session_id or shared or (sessions[0]['session_id'] if sessions else '')
         with closing(engine._connect()) as conn:
             snapshot=persona_state(engine,conn,selected)
+            if not snapshot['session'] and shared:
+                selected = shared
+                snapshot = persona_state(engine,conn,selected)
         return {**snapshot,'session_id':selected,'sessions':sessions,
-                'events':engine._list_events(20,selected or None),
+                'events':engine._list_events(20, (selected or None) if session_id else None),
                 'ai_name':state['identity']['ai_name'],
                 'enabled':state['features']['persona'],'model_configured':bool(task_model(settings.database,'persona'))}
 

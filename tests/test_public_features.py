@@ -214,3 +214,31 @@ def test_persona_and_anti_retreat_independent_and_memo_ack(settings,monkeypatch)
     assert application.contributions.tools['memo_list']()['items'][0]['reminder_count']==0
     delivered(settings.database,'window',receipt)
     assert application.contributions.tools['memo_list']()['items']==[]
+
+
+
+def test_gateway_persona_shares_evaluation_round_and_seeds_latest_mood(settings, monkeypatch):
+    from contextlib import closing
+    from serein.chat_features import delivered, after_reply, persona_engine
+    from serein.deployment import read_settings
+
+    save_settings(settings.database, {'models':[{'id':'local','model':'synthetic',
+        'base_url':'http://127.0.0.1:9/v1'}], 'assignments':{'persona':'local'}, 'features':{'persona':True}})
+    engine = persona_engine(settings.database, 'persona', read_settings(settings.database))
+    engine.get_current_state('legacy')
+    with closing(engine._connect()) as conn, conn:
+        conn.execute("UPDATE persona_session_state SET valence=.42 WHERE session_id='legacy'")
+    calls = []
+
+    async def evaluate(self, session_id, *args, **kwargs):
+        calls.append(session_id)
+
+    monkeypatch.setattr(type(engine), 'update_from_exchange', evaluate)
+    for window in ('a','b','c'):
+        receipt = {'round':1}
+        delivered(settings.database, window, receipt)
+        asyncio.run(after_reply(settings.database, window, 'hello', 'answer', [], persona_round=receipt['persona_round']))
+    assert calls == ['gateway-shared']
+    with closing(engine._connect()) as conn:
+        rows = conn.execute('SELECT session_id,valence FROM persona_session_state ORDER BY session_id').fetchall()
+        assert [tuple(row) for row in rows] == [('gateway-shared',.42), ('legacy',.42)]

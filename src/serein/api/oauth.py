@@ -308,10 +308,11 @@ async def _form(request: Request) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items()}
 
 
-def routes(database: Path, gateway_key: str) -> tuple[APIRouter, OAuthStore]:
+def routes(database: Path, gateway_key: str, *, current_gateway_key=None) -> tuple[APIRouter, OAuthStore]:
     router = APIRouter()
     store = OAuthStore(database)
     store.bind_gateway_key(gateway_key)
+    read_key = current_gateway_key or (lambda: gateway_key)
 
     def metadata(request: Request, resource_path: str = "/serein/mcp"):
         try:
@@ -425,7 +426,7 @@ def routes(database: Path, gateway_key: str) -> tuple[APIRouter, OAuthStore]:
             values = await _form(request)
             supplied_key = values.pop("gateway_key", "")
             params = _authorization_params(values, store, origin)
-            if not hmac.compare_digest(supplied_key.encode(), gateway_key.encode()):
+            if not hmac.compare_digest(supplied_key.encode(), read_key().encode()):
                 return HTMLResponse("Gateway Key 不正确。", status_code=401,
                                     headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
             code = store.create_code(client_id=params["client_id"], redirect_uri=params["redirect_uri"],
@@ -448,6 +449,7 @@ def routes(database: Path, gateway_key: str) -> tuple[APIRouter, OAuthStore]:
             resource = _normalize_resource(resource_value, origin) if resource_value else None
             if not store.client(client_id):
                 return _oauth_error("invalid_client", "Unknown OAuth client", 401)
+            read_key()  # Revoke old grants before exchanging or refreshing tokens.
             grant_type = values.get("grant_type")
             if grant_type == "authorization_code":
                 redirect_uri = _redirect_uri(values.get("redirect_uri", ""))

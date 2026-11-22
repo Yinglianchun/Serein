@@ -1,4 +1,5 @@
 import { Readable } from 'node:stream';
+import { memoryToken } from './sereinBackend.mjs';
 import { pipeline } from 'node:stream/promises';
 
 export async function backupDownload(request, response) {
@@ -12,7 +13,7 @@ export async function backupDownload(request, response) {
   response.on('close', disconnect);
   try {
     const base = process.env.SEREIN_MEMORY_URL;
-    const token = process.env.SEREIN_MEMORY_TOKEN;
+    const token = memoryToken();
     if (!base || !token) throw new Error('backend_not_configured');
     const result = await fetch(base.replace(/\/$/, '') + '/v1/export/backup', {
       headers: { Authorization: `Bearer ${token}` }, signal: controller.signal,

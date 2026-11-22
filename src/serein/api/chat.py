@@ -177,9 +177,10 @@ def routes(settings, services, auth):
         use_memory = options.get('memory', state['upstream']['memory_enabled'])
         if type(use_memory) is not bool:
             raise HTTPException(400, 'memory must be boolean')
-        window_id = next((str(value).strip() for value in
+        explicit_window = next((str(value).strip() for value in
             (options.get('window_id'), x_serein_window_id, x_ombre_session_id)
-            if value is not None and str(value).strip()), 'main')
+            if value is not None and str(value).strip()), '')
+        window_id = explicit_window or 'main'
         if len(window_id)>200:
             raise HTTPException(400, 'Window ID must be at most 200 characters')
         context.operit_context_rewrite_enabled = state['upstream']['operit_enabled']
@@ -215,6 +216,7 @@ def routes(settings, services, auth):
         model = task_model(settings.database, 'chat', requested=str(body.get('model') or ''))
         if not model:
             raise HTTPException(503, 'Configure upstreams and models in Settings')
+        upstream_session = {'go_session_id': explicit_window} if model.get('opencode_go_session') else {}
         cache_contract={'model':{k:v for k,v in model.items() if k!='api_key'}, 'memory':use_memory,
                         'operit':state['upstream']['operit_enabled'], 'identity':state['identity'],
                         'features':state['features'],'assignments':state['assignments'], 'resume':state['resume'],
@@ -277,7 +279,11 @@ def routes(settings, services, auth):
                 if not memory_ready(settings):
                     raise HTTPException(409, 'Prepare the selected embedding model, reranker and routes in Settings')
                 from ..chat_state import recent_deliveries
-                cooldown = list(dict.fromkeys([*recent_deliveries(settings.database,window_id), *delivered_ids]))
+                from ..recall.policy import RecallPolicy
+                policy = RecallPolicy.from_config({**settings.recall, **state['recall']})
+                recent = recent_deliveries(settings.database, mode=policy.cooldown_mode,
+                                           rounds=policy.cooldown_rounds, hours=policy.cooldown_hours)
+                cooldown = list(dict.fromkeys([*recent, *delivered_ids]))
                 result = await asyncio.to_thread(services.recall, query, method='semantic', mode='surface',
                     min_cosine=-1, limit=2, user_utterance=True,
                     delivered_ids=cooldown, deadline_at=time.monotonic()+30)
@@ -324,12 +330,14 @@ def routes(settings, services, auth):
                 context._update_reasoning_cache(cache_window,message)
                 context._update_turn_injection_snapshot_after_assistant(cache_window,
                     {'turn_injection_snapshot':{'snapshot_key':snapshot_key}},message)
-            if use_memory and query:
+            final_reply = not message.get('tool_calls') and bool(message.get('content'))
+            if query and (use_memory or final_reply):
                 from ..chat_state import record_delivery
                 record_delivery(settings.database,window_id,receipt_id,selected,
                                 query=observation.payload['query'], observation_id=observation.id,
-                                memory_items=summary.get('prepared_items', []))
-            if not message.get('tool_calls') and message.get('content'):
+                                memory_items=summary.get('prepared_items', []),
+                                count_round=final_reply, audit=use_memory)
+            if final_reply:
                 from ..chat_features import delivered, after_reply
                 first_delivery = feature_receipt and not feature_receipt.get('delivered')
                 if first_delivery:
@@ -338,7 +346,8 @@ def routes(settings, services, auth):
                 if first_delivery and (state['features']['persona'] or state['features']['anti_retreat']):
                     background_tasks.add_task(after_reply,settings.database,window_id,feature_receipt.get('user_query',query),
                         context._coerce_message_text(message['content']),incoming,
-                        round_id=feature_receipt.get('round'),recalled_ids=selected)
+                        round_id=feature_receipt.get('round'),recalled_ids=selected,
+                        persona_round=feature_receipt.get('persona_round'))
         headers_out = {'X-Serein-Memory':'enabled' if use_memory else 'disabled',
             'X-Serein-Selected-Ids':json.dumps(selected,ensure_ascii=True),
             'X-Serein-Receipt-Id':receipt_id if use_memory else '',
@@ -348,7 +357,7 @@ def routes(settings, services, auth):
         headers_out['X-Serein-Resume-Items'] = str(resume_items)
         if not body.get('stream'):
             try:
-                result = await complete(model,body,window_id=window_id)
+                result = await complete(model,body,window_id=window_id,**upstream_session)
                 message = result['choices'][0]['message']
             except (UpstreamError, httpx.HTTPStatusError) as exc:
                 if headers_out['X-Serein-Resume']=='loaded' and chat_resume.context_limit(exc.response):
@@ -359,7 +368,7 @@ def routes(settings, services, auth):
                 raise HTTPException(502,'Upstream request failed or returned an invalid response') from None
             completed(message)
             return JSONResponse(result,headers=headers_out,background=background_tasks)
-        url,headers,payload = request_for(model,body,window_id=window_id)
+        url,headers,payload = request_for(model,body,window_id=window_id,**upstream_session)
         client = httpx.AsyncClient(timeout=120,follow_redirects=False)
         try:
             response = await client.send(client.build_request('POST',url,headers=headers,json=payload),stream=True)

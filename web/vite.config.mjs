@@ -147,7 +147,7 @@ function parseMcpEvent(text) {
   return JSON.parse(data);
 }
 
-import { sereinConfigured, sereinBackendTimedOut, callSereinBackend, callSereinTool } from './server/sereinBackend.mjs';
+import { sereinConfigured, sereinBackendTimedOut, callSereinBackend, callSereinTool, memoryToken } from './server/sereinBackend.mjs';
 
 async function callSereinDashboard(path, options = {}) { return callSereinBackend(path, options); }
 
@@ -491,7 +491,7 @@ function sereinGatewayBridge() {
           return;
         }
 
-        const gatewayToken = String(process.env.SEREIN_MEMORY_TOKEN || "").trim();
+        const gatewayToken = memoryToken();
         const gatewayBase = String(process.env.SEREIN_MEMORY_URL || "").replace(/\/$/, "");
         if (!gatewayToken) {
           response.statusCode = 503;
@@ -599,7 +599,7 @@ function sereinGatewayBridge() {
           return;
         }
 
-        const gatewayToken = String(process.env.SEREIN_MEMORY_TOKEN || "").trim();
+        const gatewayToken = memoryToken();
         const gatewayBase = String(process.env.SEREIN_MEMORY_URL || "").replace(/\/$/, "");
         if (!gatewayToken) {
           response.statusCode = 503;
@@ -647,7 +647,7 @@ function sereinGatewayBridge() {
           return;
         }
 
-        const gatewayToken = String(process.env.SEREIN_MEMORY_TOKEN || "").trim();
+        const gatewayToken = memoryToken();
         const gatewayBase = String(process.env.SEREIN_MEMORY_URL || "").replace(/\/$/, "");
         if (!gatewayToken) {
           response.statusCode = 503;
@@ -702,7 +702,7 @@ function sereinMemoryBridge() {
         if(request.method!=="GET"){response.statusCode=405;response.end();return;}
         try {
           const base=process.env.SEREIN_MEMORY_URL;
-          const token=process.env.SEREIN_MEMORY_TOKEN;
+          const token=memoryToken();
           if(!base || !token)throw new Error("backend_not_configured");
           const result=await fetch(base.replace(/\/$/,"")+"/v1/export/markdown",{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(60_000)});
           response.statusCode=result.status;
@@ -718,7 +718,7 @@ function sereinMemoryBridge() {
         const path=new URL(request.url,"http://localhost").pathname;
         if(request.method==="GET" && /^\/[0-9a-f]{64}\/export$/.test(path)){
           try {
-            const base=process.env.SEREIN_MEMORY_URL,token=process.env.SEREIN_MEMORY_TOKEN;
+            const base=process.env.SEREIN_MEMORY_URL,token=memoryToken();
             if(!base||!token)throw new Error("backend_not_configured");
             const result=await fetch(base.replace(/\/$/,"")+"/v1/migration"+path,
               {headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(1_200_000)});

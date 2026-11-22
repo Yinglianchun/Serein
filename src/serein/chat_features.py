@@ -129,16 +129,25 @@ def delivered(database, window_id, receipt):
             elif pending.get('round',0)<=receipt['round']:
                 saved['pending']={}
             store.conn.execute('UPDATE background_state SET value_json=? WHERE name=?',(encode(saved),'anti_retreat:'+window_id))
+        if feature_enabled(database, 'persona'):
+            row = store.conn.execute("SELECT value_json FROM background_state WHERE name='persona_gateway_round'").fetchone()
+            baseline = json.loads(row[0]) if row else store.conn.execute(
+                "SELECT COALESCE(MAX(CAST(value_json AS INTEGER)), 0) FROM background_state "
+                "WHERE name GLOB 'feature_round:*' OR name GLOB 'memo_round:*'").fetchone()[0]
+            receipt['persona_round'] = baseline + 1
+            store.conn.execute('INSERT OR REPLACE INTO background_state VALUES (?,?)',
+                               ('persona_gateway_round', encode(receipt['persona_round'])))
         store.conn.execute('INSERT INTO background_state VALUES (?,?) ON CONFLICT(name) DO UPDATE SET value_json=excluded.value_json',
             ('feature_round:'+window_id,encode(receipt.get('round',0))))
 
 
-async def after_reply(database, window_id, query, message, messages, round_id=None, recalled_ids=None):
+async def after_reply(database, window_id, query, message, messages, round_id=None, recalled_ids=None, *, persona_round=None):
     state = read_settings(database)
     async def evaluate_persona():
         engine=persona_engine(database,'persona',state)
-        if round_id is None or round_id % engine.evaluation_interval_rounds == 0:
-            await engine.update_from_exchange(window_id,query,message,
+        if persona_round is None or persona_round % engine.evaluation_interval_rounds == 0:
+            session = engine.shared_gateway_session()
+            await engine.update_from_exchange(session,query,message,
                 recalled_memory_ids=recalled_ids or [],recent_conversation_turns=conversation_turns(messages))
     tasks=[]
     if task_model(database,'persona'):

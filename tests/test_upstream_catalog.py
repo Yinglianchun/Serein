@@ -207,3 +207,37 @@ def test_duplicate_display_names_are_rejected_and_distinct_secrets_not_merged(de
     assert len(page['upstreams'])==2
     assert task_model(settings.database,'chat',requested='one')['api_key']=='secret-one'
     assert task_model(settings.database,'chat',requested='two')['api_key']=='secret-two'
+
+
+
+def test_opencode_go_session_is_optional_and_scoped_to_stable_chat_windows(deployment, monkeypatch):
+    _, client = deployment
+    go = {'id':'go','name':'Go','base_url':'https://opencode.ai/inference/go/openai/v1',
+          'opencode_go_session':True,'models':['go-model']}
+    ordinary = {'name':'Other','base_url':'https://ordinary.invalid/v1','models':['ordinary-model']}
+    client.patch('/v1/settings', json={'upstreams':[go,ordinary]}).raise_for_status()
+    bad = client.patch('/v1/settings',json={'upstreams':[{**go,'base_url':'https://ordinary.invalid/v1'}]})
+    assert bad.status_code == 422
+    headers = []
+    original = httpx.AsyncClient
+
+    def upstream(request):
+        headers.append(request.headers.get('x-opencode-session'))
+        if json.loads(request.content).get('stream'):
+            return httpx.Response(200, text='data: {"choices":[{"index":0,"delta":{"content":"reply"}}]}\n\ndata: [DONE]\n\n')
+        return httpx.Response(200, json={'choices':[{'message':{'role':'assistant','content':'reply'}}]})
+
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs: original(transport=httpx.MockTransport(upstream),**kwargs))
+
+    def chat(model, window='', stream=False):
+        return client.post('/v1/chat/completions', headers={'X-Serein-Window-ID':window} if window else {},
+                           json={'model':model,'messages':[{'role':'user','content':'hello'}],'stream':stream})
+
+    chat('Go/go-model','first').raise_for_status()
+    chat('Go/go-model','first',stream=True).raise_for_status()
+    chat('Go/go-model','second').raise_for_status()
+    chat('Go/go-model').raise_for_status()
+    chat('Other/ordinary-model','first').raise_for_status()
+    assert headers[0].startswith('ses_') and 'first' not in headers[0]
+    assert headers[0] == headers[1] and headers[0] != headers[2]
+    assert headers[3:] == [None,None]

@@ -298,7 +298,7 @@ bash scripts/one_click.sh
 
 OAuth 按规范只在 HTTPS 域名（或本机 localhost）上授权；直接使用公网 IP 的 HTTP 入口时，使用支持自定义请求头的静态 Key 方式。MCP OAuth 会自动发现授权端点，使用 PKCE；Gateway Key 只输入 Serein 自己的授权页，不放进服务器 URL、回调 URL或客户端名称。静态 MCP 与聊天 API 继续共用 Gateway Key，可从安装输出、`deploy/connection-guide.txt` 或 `deploy/secrets/api-token` 读取。主菜单 6 更换 Key 后，旧静态 Key 和已发放的 OAuth code/token 都会失效。模型厂商的 API Key 仅填在 **设置 → 模型**。
 
-新窗口需要独立的 `X-Serein-Window-ID`；未填写时使用默认会话，共用召回冷却。开启开窗续接后，可自选带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”互斥，打开一个会关闭另一个。命令方式在经过网关的聊天中发送 `/resume`，也可以在指令后接上想聊的话；MCP 方式调用 `resume` 并读完全部分页。两个入口可独立开启或同时开启，侧栏“换窗”可预览资料。[模型与客户端配置](docs/model-settings.md)
+聊天接入只需 Base URL 和 Gateway Key。有能力自动传窗口 ID 的客户端可用 `X-Serein-Window-ID` 区分续接会话。网关自动召回冷却和心绪由实例共用。开启开窗续接后，可自选带入最近 1–50 条原话；“最近原话”和“尚未整理的原话”互斥，打开一个会关闭另一个。命令方式在经过网关的聊天中发送 `/resume`，也可以在指令后接上想聊的话；MCP 方式调用 `resume` 并读完全部分页。两个入口可独立开启或同时开启，侧栏“换窗”可预览资料。[模型与客户端配置](docs/model-settings.md)
 
 ### 导入、备份与升级
 

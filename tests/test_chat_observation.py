@@ -180,3 +180,78 @@ def test_recall_failure_diagnostics_survive_successful_chat(deployment,monkeypat
     p=history(client)[0]['payload']
     assert p['recall_diagnostics']==diagnostic and p['candidate_count']==6
     assert p['request_status']=='completed' and p['injected_bucket_ids']==[]
+
+
+
+def test_gateway_cooldown_shares_windows_and_expires_on_successful_rounds(tmp_path):
+    from serein.api.host import routes
+    from serein.chat_state import record_delivery
+    from serein.config import Settings
+
+    database = tmp_path/'cooldown.db'
+    routes(Settings(database), [])
+    record_delivery(database, 'old-window', 'first', ['scene:one'])
+    assert recent_deliveries(database, 'new-window', rounds=2) == ['scene:one']
+    record_delivery(database, 'new-window', 'tools', [], count_round=False)
+    record_delivery(database, 'new-window', 'empty', [], audit=False)
+    assert recent_deliveries(database, rounds=2) == ['scene:one']
+    record_delivery(database, 'new-window', 'next', [])
+    assert recent_deliveries(database, rounds=2) == []
+    assert recent_deliveries(database, mode='hours', hours=1) == ['scene:one']
+
+
+def test_gateway_cooldown_restores_legacy_deliveries_and_evicts_only_cooldown_rows(tmp_path):
+    from serein.api.host import routes
+    from serein.chat_state import COOLDOWN_STATE, record_delivery
+    from serein.config import Settings
+    from serein.core.store import Store, encode
+    from datetime import datetime, timedelta, timezone
+
+    database = tmp_path/'cooldown.db'
+    routes(Settings(database), [])
+    stamp = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    payload = {'reported_by':'serein_chat_proxy','window_id':'old','delivered_ids':['scene:old'],'created_at':stamp}
+    with Store(database) as store:
+        store.conn.execute('INSERT INTO host_deliveries(receipt_id,payload) VALUES (?,?)', ('old', encode(payload)))
+    assert recent_deliveries(database, 'new') == ['scene:old']
+    assert recent_deliveries(database, mode='hours', hours=1) == []
+    assert recent_deliveries(database, mode='hours', hours=3) == ['scene:old']
+    record_delivery(database, 'new', 'many', [f'scene:{i}' for i in range(200)])
+    recent = recent_deliveries(database)
+    assert len(recent) == 200 and 'scene:old' not in recent
+    with Store(database, read_only=True) as store:
+        assert store.conn.execute('SELECT count(*) FROM host_deliveries').fetchone()[0] == 2
+        state = store.conn.execute('SELECT value_json FROM background_state WHERE name=?', (COOLDOWN_STATE,)).fetchone()
+        assert len(json.loads(state[0])['records']) == 200
+
+
+
+def test_gateway_uses_saved_cooldown_mode_across_windows(deployment, monkeypatch):
+    settings, client = deployment
+    configure(client)
+    monkeypatch.setattr('serein.configured_models.memory_ready', lambda settings: True)
+    delivered = []
+
+    def recall(*args, **kwargs):
+        delivered.append(kwargs['delivered_ids'])
+        return {'context':'Synthetic memory','selected_refs':['scene:one']} if len(delivered) == 1 else {}
+
+    async def complete(*args, **kwargs):
+        return {'choices':[{'message':{'role':'assistant','content':'Synthetic answer'}}]}
+
+    monkeypatch.setattr('serein.application.Services.recall', recall)
+    monkeypatch.setattr('serein.api.chat.complete', complete)
+    config = client.patch('/v1/settings', json={'recall':{'cooldown_mode':'rounds','cooldown_rounds':1}})
+    assert config.is_success and config.json()['recall']['cooldown_rounds'] == 1
+
+    def chat(number):
+        body = {'messages':[{'role':'user','content':f'Question {number}'}], 'serein':{'memory':True}}
+        client.post('/v1/chat/completions', json=body, headers={'X-Serein-Window-ID':str(number)}).raise_for_status()
+
+    for number in range(3):
+        chat(number)
+    assert delivered == [[], ['scene:one'], []]
+    config = client.patch('/v1/settings', json={'recall':{'cooldown_mode':'hours','cooldown_hours':1}})
+    assert config.is_success and config.json()['recall']['cooldown_hours'] == 1
+    chat(3)
+    assert delivered[-1] == ['scene:one']

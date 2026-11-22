@@ -175,7 +175,9 @@ def main():
             import os
             import uvicorn
             from serein.api.http import create_app
-            uvicorn.run(create_app(settings, token=os.environ.get(args.token_env, ''), live=args.live),
+            token_file = os.environ.get('SEREIN_HTTP_TOKEN_FILE') if args.token_env == 'SEREIN_HTTP_TOKEN' else None
+            uvicorn.run(create_app(settings, token=os.environ.get(args.token_env, ''), live=args.live,
+                                   token_file=Path(token_file) if token_file else None),
                         host=args.host, port=args.port, access_log=False)
             return
         if args.command in ("mcp", "mcp-live"):

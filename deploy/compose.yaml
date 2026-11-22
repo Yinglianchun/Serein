@@ -41,7 +41,7 @@ services:
     ports:
       - "${SEREIN_BIND:-127.0.0.1}:${SEREIN_PORT:-18217}:8080"
     volumes:
-      - ./secrets:/secrets:ro
+      - ./secrets:/secrets
     networks: [serein]
     healthcheck:
       test: ["CMD", "node", "--input-type=module", "-e", "const r = await fetch('http://127.0.0.1:8080/live'); if (!r.ok) process.exit(1)"]

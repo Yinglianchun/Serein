@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scryptSync } from 'node:crypto';
@@ -27,7 +27,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     if(req.url.startsWith('/.well-known/oauth-') || ['/authorize','/token','/register'].includes(req.url)){
       res.writeHead(req.url==='/register'?201:200,{'Content-Type':'application/json'});res.end('{"oauth":true}');return;
     }
-    if(req.headers.authorization!=='Bearer synthetic-api-key'){res.writeHead(401);res.end('{}');return;}
+    if(req.headers.authorization!=='Bearer '+readFileSync(join(dir,'token'),'utf8').trim()){res.writeHead(401);res.end('{}');return;}
     if(req.url==='/v1/extensions/resume'){
       let raw='';req.on('data',chunk=>raw+=chunk);req.on('end',()=>{
         requests.push({path:req.url,body:JSON.parse(raw)});
@@ -320,6 +320,22 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     const reader=stream.body.getReader();const first=new TextDecoder().decode((await reader.read()).value);
     assert.ok(first.includes('part')&&!first.includes('[DONE]'));
     const second=new TextDecoder().decode((await reader.read()).value);assert.ok(second.includes('[DONE]'));
+    const keyAction = (action, headers=postHeaders) => fetch(base+'/__serein/gateway-key/'+action,
+      {method:'POST', headers, body:'{}'});
+    assert.equal((await keyAction('copy', {'Content-Type':'application/json', Origin:base})).status,401);
+    assert.equal((await keyAction('rotate', {...postHeaders,Origin:'https://unrelated.example'})).status,403);
+    const copy = await keyAction('copy');
+    assert.equal(copy.headers.get('cache-control'),'no-store');
+    assert.deepEqual(await copy.json(),{key:'synthetic-api-key'});
+    const rotation = await keyAction('rotate');
+    assert.equal(rotation.status,200);
+    assert.deepEqual(await rotation.json(),{status:'rotated'});
+    const replacement = (await (await keyAction('copy')).json()).key;
+    assert.match(replacement,/^[A-Za-z0-9_-]{48}$/);
+    assert.equal((await fetch(base+'/v1/models',{headers:{Authorization:'Bearer synthetic-api-key'}})).status,401);
+    assert.equal((await fetch(base+'/v1/models',{headers:{Authorization:'Bearer '+replacement}})).status,200);
+    assert.equal((await fetch(base+'/__serein/settings',{headers:auth})).status,200);
+    assert.ok(!(await (await fetch(base,{headers:auth})).text()).includes(replacement));
     writeFileSync(join(dir,'auth.json'),record('password-two'));
     assert.equal((await fetch(base,{headers:auth})).status,401);
     assert.equal((await fetch(base,{headers:{Authorization:basic('password-two')}})).status,200);
