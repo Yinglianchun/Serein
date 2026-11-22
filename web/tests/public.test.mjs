@@ -6,7 +6,7 @@ import {buildNarrativeTaskPrompt,normalizeNarrativeWriterResult,runNarrativeCode
 import {buildSceneEvidenceRefs} from '../server/sceneEvidenceBridge.mjs';
 import {resolveGatewayObservationOutcome,gatewayRequestLabel,resolveBridgeObservationOutcome} from '../src/recallObservationOutcome.js';
 import {readFileSync} from 'node:fs';
-import {loadWindowShadows,windowShadowViews} from '../src/storage/windowShadowStore.js';
+import {loadWindowShadows,windowShadowViews,windowShadowPortraits} from '../src/storage/windowShadowStore.js';
 import {readLiveWindowShadows} from '../vite.config.mjs';
 
 test('imported and revised shadow sections reach portraits without syncing instance introductions',async(t)=>{
@@ -18,7 +18,7 @@ test('imported and revised shadow sections reach portraits without syncing insta
     t.mock.method(globalThis,'fetch',async(url,options)=>{
       assert.equal(url,'http://synthetic.invalid/api/window-shadows?limit=100&include_content=1');
       assert.equal(options.method,'GET');
-      return {ok:true,status:200,json:async()=>({windows:[{window_id:'imported',title:'Imported shadow',created_at:'2026-09-27T01:00:00Z',content:'Full shadow',sections}]})};
+      return {ok:true,status:200,json:async()=>({portrait_views:{user_view:{text:sections.user_view,title:'Imported shadow',position:1},self_view:{text:'沿用的自己',title:'Earlier shadow',position:2}},windows:[{window_id:'imported',title:'Imported shadow',created_at:'2026-09-27T01:00:00Z',content:'Full shadow',sections}]})};
     });
     const projection=await readLiveWindowShadows();
     t.mock.method(globalThis,'fetch',async(url,options)=>{
@@ -27,6 +27,7 @@ test('imported and revised shadow sections reach portraits without syncing insta
       return {ok:true,json:async()=>projection};
     });
     assert.deepEqual(windowShadowViews((await loadWindowShadows())[0]),{user:sections.user_view,assistant:sections.self_view});
+    assert.deepEqual(windowShadowPortraits(await loadWindowShadows()),{user:{text:sections.user_view,source:''},assistant:{text:'沿用的自己',source:'沿用倒数第 2 篇窗影 · Earlier shadow'}});
     assert.deepEqual(windowShadowViews({...projection.shadows[0],sections:{user_view:'修订后的你',self_view:''}}),{user:'修订后的你',assistant:''});
     assert.deepEqual(windowShadowViews(null),{user:'',assistant:''});
   } finally {

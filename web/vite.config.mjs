@@ -336,6 +336,7 @@ export async function readLiveWindowShadows() {
   const upstream = await callSereinDashboard("/api/window-shadows?limit=100&include_content=1");
   if (!upstream.ok) throw new Error(`window_shadow_live_projection_${upstream.status}`);
   const windows = Array.isArray(upstream.payload?.windows) ? upstream.payload.windows : [];
+  const portraitViews = upstream.payload?.portrait_views;
   const shadows = windows.map((item) => {
     const text = String(item?.content || "").replace(/\r\n?/g, "\n").trim();
     const created = new Date(item?.created_at || 0);
@@ -384,6 +385,7 @@ export async function readLiveWindowShadows() {
     snapshotId: createHash("sha256").update(fingerprint).digest("hex"),
     source: "Serein Window Shadow live read-only projection",
     shadows,
+    portraitViews,
   };
 }
 

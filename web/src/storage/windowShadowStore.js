@@ -30,6 +30,22 @@ export function windowShadowViews(shadow) {
   return { user: views.user.trim(), assistant: views.assistant.trim() };
 }
 
+export function windowShadowPortraits(shadows) {
+  const views = shadows?.[0]?.portraitViews;
+  if (!views || typeof views !== "object") {
+    const latest = windowShadowViews(shadows?.[0]);
+    return { user: { text: latest.user, source: "" }, assistant: { text: latest.assistant, source: "" } };
+  }
+  const portrait = (key) => {
+    const view = views[key];
+    const text = typeof view?.text === "string" ? view.text.trim() : "";
+    const source = text && Number(view?.position) > 1
+      ? `沿用倒数第 ${view.position} 篇窗影 · ${view.title || "旧窗影"}` : "";
+    return { text, source };
+  };
+  return { user: portrait("user_view"), assistant: portrait("self_view") };
+}
+
 function normalizeShadow(shadow) {
   if (
     !shadow
@@ -70,6 +86,7 @@ async function readWindowShadowResponse(response) {
   ) return null;
 
   const shadows = payload.shadows.map(normalizeShadow).filter(Boolean);
+  if (shadows.length && payload.portraitViews) shadows[0].portraitViews = payload.portraitViews;
   return shadows;
 }
 

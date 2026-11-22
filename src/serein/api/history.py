@@ -14,9 +14,16 @@ def routes(settings, auth):
         from ..deployment import feature_enabled
         if not feature_enabled(settings.database,'window_shadows'):
             raise HTTPException(404,'Window shadows are disabled')
-        with Store(settings.database,read_only=True) as store:
+        from ..compat.window_shadows import continuity_shadow
+        with Store(settings.database,read_only=True) as store, store.transaction():
             windows=[]
-            for row in store.conn.execute("SELECT * FROM historical_works WHERE kind='shadow' AND id NOT IN (SELECT document_id FROM deletions)"):
+            rows=store.conn.execute("SELECT * FROM historical_works WHERE kind='shadow' AND id NOT IN (SELECT document_id FROM deletions) "
+                "ORDER BY COALESCE(julianday(json_extract(metadata_json,'$.created_at')),0) DESC,id DESC").fetchall()
+            portrait_views={}
+            display_content=''
+            if rows and include_content and not window_id:
+                display_content, portrait_views=continuity_shadow(store,rows[0])
+            for row in rows:
                 item=json.loads(row['metadata_json'])
                 for field,default in (('sections_json',{}),('moment_bucket_ids_json',[])):
                     item['sections' if field=='sections_json' else 'moment_bucket_ids']=json.loads(item.pop(field,None) or json.dumps(default))
@@ -28,7 +35,8 @@ def routes(settings, auth):
                     if scene:
                         item['scenes'].append(dict(scene))
                 windows.append(item)
-            windows.sort(key=lambda item:(item.get('created_at') or '',item.get('window_id') or ''),reverse=True)
+            if windows and include_content and not window_id:
+                windows[0]['display_content']=display_content
             if window_id:
                 item=next((item for item in windows if item['window_id']==window_id),None)
                 if item is None:raise HTTPException(404,'Window Shadow not found')
@@ -37,6 +45,7 @@ def routes(settings, auth):
                 return {'status':'ok','mode':'window_shadow','window':item,'revision_head_id':head['window_id'],
                         'is_revision_head':head['window_id']==window_id,'ordinary_recall':False}
             return {'status':'ok','mode':'window_shadow','windows':windows[:limit],
+                    'portrait_views':portrait_views,
                     'stats':{'total':len(windows)},'ordinary_recall':False}
 
     @router.get('/api/dreams')

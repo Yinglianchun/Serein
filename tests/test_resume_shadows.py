@@ -263,6 +263,28 @@ def test_latest_shadow_introductions_manual_edit_retry_and_older_revision(settin
     with pytest.raises(Conflict):shadows.write(**current)
 
 
+def test_latest_shadow_fills_each_view_without_changing_historical_reads(settings):
+    from serein.compat.work_reads import read_works
+    save_settings(settings.database, {'features': {'window_shadows': True, 'resume': True}})
+    shadows = WindowShadows(settings.database)
+    shadows.write('a','First',content='## 我眼中的你\nLegacy portrait\n## 这一窗发生的事\nOld event')
+    shadows.write('b','Second',self_view='Newer self portrait', recent_events='Intermediate event')
+    shadows.write('c','Third',recent_events='Current event')
+    current = shadows.read('c')['content']
+    rendered = shadows.read()['content']
+    assert rendered.startswith(current)
+    assert '倒数第 3 篇窗影' in rendered and 'Legacy portrait' in rendered
+    assert '倒数第 2 篇窗影' in rendered and 'Newer self portrait' in rendered
+    assert 'Old event' not in rendered and 'Intermediate event' not in rendered
+    assert 'portrait' not in current and 'Legacy portrait' not in read_works(settings.database, 'shadow', 2)
+    assert rendered in read_works(settings.database, 'shadow', 1)
+    resume = Application(settings).contributions.tools['resume']('new')
+    assert next(i['body_md'] for i in resume['items'] if i['kind']=='shadow') == rendered
+    with Store(settings.database) as store:
+        store.record_deletion('shadow:b','2026-11-22',{})
+    assert 'Newer self portrait' not in shadows.read()['content']
+
+
 def test_selected_events_scenes_original_ids_and_pending_toggle(settings):
     save_settings(settings.database,{'features':{'resume':True,'originals':True},'resume':{'selected_memories':True,'selected_ids':['event']}})
     with Store(settings.database) as store:

@@ -72,7 +72,7 @@ def factory(services, options):
     def resume(window_id: str = 'main', cursor: str = '', handoff_key: str = '', source_session_id: str = '', selection: dict | None = None):
         """Read selected continuity sections: latest shadow, ten recent Events, favorite Scenes, selected memories, recent originals and pending originals. Call with no arguments to start; window_id is optional and defaults to main. Pass next_cursor as cursor until all pages are read; do not rewrite a portrait."""
         from ..deployment import read_settings
-        from ..compat.window_shadows import latest_shadow
+        from ..compat.window_shadows import continuity_shadow, latest_shadow
         state = read_settings(database)
         # HTTP previews can read a validated draft; MCP and chat use saved options.
         overrides=selection or {}
@@ -94,7 +94,7 @@ def factory(services, options):
                 if shadow:
                     shadow_date=json.loads(shadow['metadata_json']).get('created_at','')
                     documents.append({'id':shadow['id'],'kind':'shadow','section':'latest_shadow',
-                        'title':shadow['title'],'revision':shadow['revision'],'body_md':shadow['body_md'],
+                        'title':shadow['title'],'revision':shadow['revision'],'body_md':continuity_shadow(reader.store,shadow)[0],
                         'created_at':shadow_date})
             keys = reader.store.conn.execute("SELECT document_id FROM personal_records WHERE scope='favorite' "
                 "AND deleted=0 AND json_extract(payload_json,'$.favorite')=1 ORDER BY document_id").fetchall()

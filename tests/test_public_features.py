@@ -53,6 +53,23 @@ def test_switch_removes_mcp_and_http_tools_and_preserves_content(settings):
     save_settings(settings.database,{'features':{'memos':False}})
     assert asyncio.run(restricted.list_tools())==[]
 
+def test_window_history_projects_inherited_portraits_without_changing_archived_body(settings):
+    from serein.compat.window_shadows import WindowShadows
+    save_settings(settings.database,{'features':{'window_shadows':True}})
+    shadows=WindowShadows(settings.database)
+    shadows.write('older','Older',user_view='The earlier user view',self_view='The earlier self view')
+    shadows.write('newer','Newer',user_view='The current user view',recent_events='A current event')
+    client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
+    payload=client.get('/api/window-shadows?limit=1&include_content=1').json()
+    assert len(payload['windows'])==1
+    assert payload['portrait_views']['user_view']=={'text':'The current user view','position':1,'title':'Newer'}
+    assert payload['portrait_views']['self_view']=={'text':'The earlier self view','position':2,'title':'Older'}
+    assert 'The earlier self view' not in payload['windows'][0]['content']
+    assert 'The earlier self view' in payload['windows'][0]['display_content']
+    metadata=client.get('/api/window-shadows?limit=1&include_content=0').json()
+    assert metadata['portrait_views']=={}
+    assert 'display_content' not in metadata['windows'][0]
+
 def test_relation_auto_accept_only_new_valid_proposals_and_removal(settings):
     from test_live_relations import seed, create
     client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
