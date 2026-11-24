@@ -16,19 +16,21 @@ def next_ordinal(scope, cards):
     return max(numbers, default=0) + 1
 
 
-def assert_before(store, cards, before_id):
-    """Pre-routing cards must precede both the raw ID and the source clock."""
+def assert_before(store, cards, before_id, *, routed_ids=()):
+    """Only accepted turns in this batch can precede the frame by ID alone."""
     from . import pipeline as p
-    current=store.conn.execute('SELECT created_at FROM raw_events WHERE id=?',(before_id,)).fetchone()
+    current=store.conn.execute('SELECT source,session_id,created_at FROM raw_events WHERE id=?',(before_id,)).fetchone()
     if current is None:raise p.RoutingRecoveryError('Pre-routing source anchor is missing')
-    reference=datetime.fromisoformat(current[0].replace('Z','+00:00'))
+    reference=datetime.fromisoformat(current['created_at'])
     for card in cards:
         anchors=card.get('recent_source_message_ids')
         if not isinstance(anchors,list) or not anchors:
             raise p.RoutingRecoveryError('Pre-routing Track has no proved source anchors: '+card['track_id'])
         for key in anchors:
-            row=store.conn.execute('SELECT created_at FROM raw_events WHERE id=?',(key,)).fetchone() if type(key) is int else None
-            if row is None or key>=before_id or datetime.fromisoformat(row[0].replace('Z','+00:00'))>reference:
+            row=store.conn.execute('SELECT source,session_id,created_at FROM raw_events WHERE id=?',(key,)).fetchone() if type(key) is int else None
+            if (row is None or key>=before_id or
+                    (datetime.fromisoformat(row['created_at'])>reference and
+                     (key not in routed_ids or row[:2]!=current[:2]))):
                 raise p.RoutingRecoveryError('Pre-routing Track contains future source material: '+card['track_id'])
 
 

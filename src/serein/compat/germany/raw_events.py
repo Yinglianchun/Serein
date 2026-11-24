@@ -153,6 +153,7 @@ class RawEventStore:
                 conn.execute(f"ALTER TABLE raw_events ADD COLUMN {name} {declaration}")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_created ON raw_events(created_at DESC, id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_source ON raw_events(source, created_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_session ON raw_events(source, session_id, id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_role ON raw_events(role, created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_raw_events_image_transcription "
                      "ON raw_events(image_transcription_status) WHERE image_transcription_status != ''")

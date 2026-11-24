@@ -20,13 +20,21 @@ class RecallPolicy:
     embedding_batch_size: int = 16
     embedding_concurrency: int = 1
     index_catch_up: bool = False
+    cooldown_mode: str = 'rounds'
+    cooldown_rounds: int = 5
+    cooldown_hours: int = 24
 
     @classmethod
     def from_config(cls, raw):
-        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "direct_pool_limit", "max_cards", "candidate_limit", "domains", "domain_rules", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars", "embedding_batch_size", "embedding_concurrency", "index_catch_up"}
+        unknown = raw.keys() - {"direct_threshold", "body_candidate_threshold", "cue_candidate_threshold", "direct_pool_limit", "max_cards", "candidate_limit", "domains", "domain_rules", "routing_file", "germany_policy_file", "passages_enabled", "passage_min_chars", "embedding_batch_size", "embedding_concurrency", "index_catch_up", "cooldown_mode", "cooldown_rounds", "cooldown_hours"}
         if unknown:
             raise ValueError(f"Unknown recall policy fields: {', '.join(sorted(unknown))}")
         policy = cls(**raw)
+        if policy.cooldown_mode not in ('rounds', 'hours'):
+            raise ValueError('Cooldown mode must be rounds or hours')
+        if any(type(value) is not int or not 1 <= value <= 10000
+               for value in (policy.cooldown_rounds, policy.cooldown_hours)):
+            raise ValueError('Cooldown duration must be an integer between 1 and 10000')
         if type(policy.embedding_batch_size) is not int or not 1<=policy.embedding_batch_size<=64:
             raise ValueError('embedding_batch_size must be an integer between 1 and 64')
         if type(policy.embedding_concurrency) is not int or not 1<=policy.embedding_concurrency<=4:

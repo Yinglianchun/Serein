@@ -5,9 +5,10 @@ import { ModelSettings } from "./ModelSettings.jsx";
 import { FeatureSettings } from "./FeatureSettings.jsx";
 import { PipelineSettings } from "./PipelineSettings.jsx";
 import { LegacyMigration } from "./LegacyMigration.jsx";
+import { VersionUpdate } from "./VersionUpdate.jsx";
 import { togetherCaption } from "../storage/togetherDate.js";
 
-const tabs = [["appearance", "外观"], ["features", "功能"], ["models", "模型"], ["configuration", "配置"], ["summary", "自动摘要管理"], ["imports", "对话导入"], ["migration", "旧库迁移"]];
+const tabs = [["appearance", "外观"], ["features", "功能"], ["models", "模型"], ["configuration", "配置"], ["summary", "自动摘要管理"], ["imports", "对话导入"], ["migration", "旧库迁移"], ["update", "更新版本"]];
 
 export function SettingsPanel({
   open,
@@ -235,10 +236,13 @@ export function SettingsPanel({
             candidateThresholdDraft={candidateThresholdDraft} setCandidateThresholdDraft={setCandidateThresholdDraft}
             passageDraft={passageDraft} setPassageDraft={setPassageDraft} onOpenPipeline={()=>showTab("imports")} onOpenCatalog={()=>showTab("models")} onOpenAssignments={()=>showTab("configuration")} />}
           <div role="tabpanel" id="settings-content-imports" aria-labelledby="settings-tab-imports" aria-hidden={tab !== "imports"} inert={tab !== "imports"}>
-            {open && <PipelineSettings onOpenSummary={openSummary} />}
+            {open && <PipelineSettings active={tab === "imports"} onOpenSummary={openSummary} />}
           </div>
           <div role="tabpanel" id="settings-content-migration" aria-labelledby="settings-tab-migration" aria-hidden={tab !== "migration"} inert={tab !== "migration"}>
             {open && tab === "migration" && <LegacyMigration />}
+          </div>
+          <div role="tabpanel" id="settings-content-update" aria-labelledby="settings-tab-update" aria-hidden={tab !== "update"} inert={tab !== "update"}>
+            <VersionUpdate />
           </div>
         </div>
       </section>

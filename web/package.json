@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@fontsource/noto-serif-sc": "^5.2.8",
+    "@fontsource/pinyon-script": "^5.3.0",
     "@fontsource/source-serif-4": "^5.3.0",
     "@phosphor-icons/react": "^2.1.10",
     "@vitejs/plugin-react": "5.0.4",

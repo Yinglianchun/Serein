@@ -172,6 +172,33 @@ def foreign_bridge_component():
     }
 
 
+def test_routine_hint_is_visible_but_does_not_override_curator_decision():
+    component = foreign_bridge_component()
+    component['track_ids'] = ['a']
+    component['track_cards'] = [{'track_id': 'a'}]
+    component['context_edges'] = []
+    component['memberships'][0]['routing_role'] = 'routine'
+    model_input = latest.event_curator_model_input(component)
+    assert model_input['units'][0]['routing_role_hint'] == 'routine'
+    skipped = latest.normalize_event_curator_output({
+        'events': [], 'skip_unit_roots': [1], 'defer_unit_roots': [],
+        'decision_review': {'events': [], 'boundaries': [], 'dispositions': [
+            {'disposition': 'skip', 'unit_roots': [1], 'reason': 'Routine check only', 'parked_source_message_ids': []}]},
+    }, component)
+    assert skipped['skip_source_message_ids'] == [1, 2]
+    developed = latest.normalize_event_curator_output({
+        'events': [{'action': 'create', 'base_event_ids': [], 'primary_track_id': 'a',
+                    'owned_unit_roots': [1]}],
+        'skip_unit_roots': [], 'defer_unit_roots': [],
+        'decision_review': {'events': [{'event_index': 0, 'reason': 'User developed the activity'}],
+                            'boundaries': [], 'dispositions': []},
+    }, component)
+    assert developed['events'][0]['source_bindings'] == [
+        {'source_message_id': 1, 'activity_role': 'primary_activity'},
+        {'source_message_id': 2, 'activity_role': 'primary_activity'},
+    ]
+
+
 def test_foreign_bridge_only_corridor_must_skip_instead_of_creating_event():
     component = foreign_bridge_component()
     create = {

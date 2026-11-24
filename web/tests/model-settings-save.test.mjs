@@ -25,11 +25,19 @@ async function withModelSettings(run,initial={}) {
       round_gate_enabled:false,append_protected_enabled:false,future_read_only_field:'unknown'},
     dream:{daily_probability:.4,main_prompt:''},index_status:{status:'ready'},memory_ready:false};
   Object.assign(state,structuredClone(initial));
+  const clipboard = [], keyActions = [];
+  Object.defineProperty(navigator, 'clipboard', {value:{writeText:async value=>clipboard.push(value)}});
+  window.confirm = ()=>true;
   const saves=[];
   let rejectNext=false;
   globalThis.fetch=async(url,options={})=>{
     if(url==='/__serein/pipeline/status')return {ok:true,json:async()=>({pending_materials:[]})};
     if(url==='/__serein/settings/index-status')return {ok:true,json:async()=>structuredClone(state.index_status)};
+    if (url.startsWith('/__serein/gateway-key/')) {
+      assert.equal(options.method,'POST');
+      keyActions.push(url.split('/').at(-1));
+      return {ok:true,json:async()=>url.endsWith('/copy')?{key:'synthetic-clipboard-key'}:{status:'rotated'}};
+    }
     assert.equal(url,'/__serein/settings');
     if(options.method==='PATCH'){
       const body=JSON.parse(options.body);saves.push(body);
@@ -76,7 +84,7 @@ async function withModelSettings(run,initial={}) {
     });
     const click=async(text)=>app.act(async()=>{button(text).click();});
 
-    await run({app,state,saves,field,type,click,rejectNextSave:()=>{rejectNext=true;}});
+    await run({app,state,saves,field,type,click,clipboard,keyActions,rejectNextSave:()=>{rejectNext=true;}});
   }finally{
     if(root)await app.act(async()=>root.unmount());
     dom.window.close();delete globalThis.IS_REACT_ACT_ENVIRONMENT;
@@ -89,7 +97,14 @@ async function withModelSettings(run,initial={}) {
 }
 
 test('catalog saves tolerate incompatible pipeline fields and preserve pending configuration edits',async()=>{
-  await withModelSettings(async({app,state,saves,field,type,click,rejectNextSave})=>{
+  await withModelSettings(async({app,state,saves,field,type,click,clipboard,keyActions,rejectNextSave})=>{
+    assert.deepEqual(keyActions,[]);
+    await click('复制 Base URL');
+    await click('复制 Gateway Key');
+    await click('更换 Gateway Key');
+    assert.deepEqual(clipboard,['https://synthetic.invalid/v1','synthetic-clipboard-key']);
+    assert.deepEqual(keyActions,['copy','rotate']);
+    assert.doesNotMatch(document.body.textContent,/synthetic-clipboard-key/);
     await click('添加上游');
     await type('上游名称','Synthetic');await type('API Base URL','https://synthetic.invalid/v1');
     await type('上游模型号','synthetic-model');await type('API Key','synthetic-key');
@@ -135,6 +150,27 @@ test('catalog saves tolerate incompatible pipeline fields and preserve pending c
 });
 
 const eventTasks=['image_transcription','track_router','event_curator','event_writer'];
+test('shared model saves preserve cooldown drafts until configuration is saved',async()=>{
+  await withModelSettings(async({app,state,saves,field,type,click})=>{
+    await app.act(async()=>{app.setPage('configuration');});
+    await type('冷却轮数','9');
+    await app.act(async()=>{app.setPage('models');});
+    await click('保存上游与模型');
+    assert.equal('recall' in saves.at(-1),false);
+    assert.equal(field('冷却轮数').value,'9');
+    await app.act(async()=>{app.setPage('summary');});
+    await click('保存自动摘要设置');
+    assert.equal('recall' in saves.at(-1),false);
+    assert.equal(field('冷却轮数').value,'9');
+    await app.act(async()=>{app.setPage('configuration');});
+    await click('保存配置');
+    assert.equal(state.recall.cooldown_rounds,9);
+    await click('保存配置');
+    assert.equal('cooldown_rounds' in saves.at(-1).recall,false,'the submitted cooldown draft is cleared');
+    assert.equal(field('冷却轮数').value,'9');
+  });
+});
+
 function replacementState() {
   return {upstreams:[{id:'synthetic',name:'Synthetic',base_url:'https://synthetic.invalid/v1',protocol:'openai',api_key_configured:true,
     models:[{id:'old-model',upstream_model:'old-model'},{id:'embedding',upstream_model:'embedding'},{id:'reranker',upstream_model:'reranker'}]}],

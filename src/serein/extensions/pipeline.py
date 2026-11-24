@@ -6,10 +6,10 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from ..core.store import Store, Conflict, encode, digest, now
 from ..deployment import identity, task_model, read_settings
-from .pipeline_limits import blocks, routing_blocks, settlement_window, allowed_ids
+from .pipeline_limits import blocks, routing_blocks, frames_with_lookahead, settlement_window, allowed_ids
 from ..compat.events import Events, reference_blockers
 from ..compat.germany.fact_events import FactEventStore, FactEventSettlementBlockedError
-from .pipeline_rules import dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
+from .pipeline_rules import dialogue_units, iter_dialogue_units, dialogue_unit_is_complete, normalize_event_track_message_output, flushable_dialogue_units
 from . import pipeline_latest as latest
 from . import pipeline_materials
 from .pipeline_config import snapshot, execution
@@ -152,6 +152,23 @@ SCOPE_HEAD="""NOT EXISTS (SELECT 1 FROM pipeline_batches h WHERE h.scope=b.scope
 QUEUE_ORDER="COALESCE(json_extract(b.input_json,'$.queue_order'),b.rowid),COALESCE(json_extract(b.input_json,'$.recovery_path'),''),b.rowid"
 
 
+def pending_session_messages(conn, source, session, filters):
+    page_size = 48
+    query = ('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? '
+             'AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)' + filters)
+    after = None
+    while True:
+        clause = '' if after is None else ' AND r.id>?'
+        args = (source, session) if after is None else (source, session, after)
+        count = 0
+        for row in conn.execute(query + clause + ' ORDER BY r.id LIMIT ?', (*args, page_size)):
+            count += 1
+            after = row['id']
+            yield task_message(row)
+        if count < page_size:
+            return
+
+
 def new_batch(database,include_recent,clock=None,*,retry_repair=False):
     policy=read_settings(database)['pipeline']
     current=(clock or datetime.now(timezone.utc)).astimezone(TZ)
@@ -242,20 +259,20 @@ def new_batch(database,include_recent,clock=None,*,retry_repair=False):
             complete_upload=" AND (json_extract(r.metadata_json,'$.import_upload_id') IS NULL OR json_extract(r.metadata_json,'$.import_upload_id') IN (SELECT id FROM file_imports WHERE cursor=COALESCE(json_extract(payload_json,'$.total'),json_array_length(payload_json,'$.entries'))))"
         import_boundary=" AND NOT EXISTS (SELECT 1 FROM pipeline_import_boundaries b WHERE b.upload_id=json_extract(r.metadata_json,'$.import_upload_id') AND b.released=0)"
         import_boundary+=pending_materials.reservation_clause()
-        scopes=store.conn.execute('SELECT DISTINCT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id').fetchall()
+        scopes=store.conn.execute('SELECT r.source,r.session_id FROM raw_events r WHERE NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id')
+        visited = set()
         for source,session in scopes:
+            if (source, session) in visited:continue
+            visited.add((source, session))
             if digest(encode([source,session]))[:20] in held_scopes:continue
-            rows=[task_message(row) for row in store.conn.execute('SELECT r.* FROM raw_events r WHERE source=? AND session_id=? AND NOT EXISTS (SELECT 1 FROM raw_processing p WHERE p.raw_id=r.id)'+complete_upload+import_boundary+' ORDER BY r.id',(source,session))]
-            # Evaluate the watermark against full envelopes before filtering rows.
-            eligible=[m for unit in dialogue_units(rows)
-                      if max(datetime.fromisoformat(m['created_at'].replace('Z','+00:00')) for m in unit)<=watermark
-                      for m in unit]
-            chunks=routing_blocks(eligible,policy['max_input_chars'])
-            for chunk_index,eligible in enumerate(chunks):
-                if chunk_index+1<len(chunks):
-                    following=dialogue_units(chunks[chunk_index+1])[0]
-                    if not dialogue_unit_is_complete(following):
-                        eligible=[*eligible,*following]  # A later correction must remain readable, never owned.
+            rows = pending_session_messages(store.conn, source, session, complete_upload + import_boundary)
+            # Test the watermark on whole envelopes, even across database pages.
+            eligible_rows = (m for unit in iter_dialogue_units(rows)
+                             if max(datetime.fromisoformat(m['created_at'].replace('Z','+00:00')) for m in unit)<=watermark
+                             for m in unit)
+            for eligible, following in frames_with_lookahead(eligible_rows, policy['max_input_chars']):
+                if following and not dialogue_unit_is_complete(following):
+                    eligible = [*eligible, *following]
                 stable=[];parked=[]
                 # Reply envelopes determine completion / parked tails, while the latest
                 # Router supplies individual messages as Curator ownership atoms.
@@ -541,11 +558,12 @@ async def route_batch(database,batch,data,runner):
             cards=track_state.update_cards(cards,routed,updates,block,data['scope'])
         assignments.extend(routed);prior.extend(block);cursor+=len(block)
     max_chars=data.get('input_policy',{}).get('max_input_chars',read_settings(database)['pipeline']['max_input_chars'])
+    routed_ids={a['source_message_id'] for a in assignments}
     for index,block in enumerate(routing_blocks(data['routing_messages'][cursor:],max_chars),len(frozen)):
         bounded={**data,'routing_messages':block,'tracks':track_state.parked(cards),'next_track_ordinal':ordinal,'recent':router_recent(prior,block)}
         prompt_batch={**batch,'input_json':encode(bounded)}
         with Store(database,read_only=True) as store:
-            track_state.assert_before(store,cards,block[0]['id'])
+            track_state.assert_before(store,cards,block[0]['id'],routed_ids=routed_ids)
         request=request_for(database,prompt_batch,'track_router')
         output=await job(database,batch,request,f'track_router:{index}',runner)
         block=_router_prefix(data,request,cursor)
@@ -554,6 +572,7 @@ async def route_batch(database,batch,data,runner):
         with latest.identity_scope(identity(database)):
             cards=track_state.update_cards(cards,routed,updates,block,data['scope'])
         assignments.extend(routed);prior.extend(block);cursor+=len(block)
+        routed_ids.update(a['source_message_id'] for a in routed)
     used={t for a in assignments for t in [a['primary_track_id'],*a['context_track_ids']]}
     return {'assignments':assignments,'tracks':[t for t in cards if t['track_id'] in used],
             'track_state_updates':cards,'next_track_ordinal':ordinal,'_public_normalized':True}
@@ -608,7 +627,10 @@ def candidates(database,track_ids,*,overflow_out=None):
                 trusted=bool(family_ids) and all(str(origin or '').startswith('assistant_bridge:')
                     for origin, in store.conn.execute('SELECT origin_id FROM fact_events WHERE item_id IN ('+
                         ','.join('?' for _ in family_ids)+')',family_ids))
-                result.append({**dict(row),'event_id':row['item_id'],'primary_track_id':track,'track_id':track,'source_refs':refs,'originals':originals,
+                # Settlement checks predecessor identity by these three fields. The
+                # verified originals already carry the full text in the corridor.
+                source_refs=[{key:ref[key] for key in ('source_system','session_id','message_id')} for ref in refs]
+                result.append({**dict(row),'event_id':row['item_id'],'primary_track_id':track,'track_id':track,'source_refs':source_refs,'originals':originals,
                     'source_message_ids':[m['id'] for m in originals],'session_ids':list({m['session_id'] for m in originals}),
                     'source_activity_roles':details.get('source_activity_roles',{}),'blocked':bool(blockers),
                     'material_snapshot':details.get('material_snapshot') if consistent_sources else None,
@@ -1551,7 +1573,8 @@ def extend_context(database,component,context_request,*,curator=False):
         return pending_materials.read_material(database,component,context_request['pending_material_id'])
     if 'event_id' in context_request:
         base=next(b for b in component['base_event_candidates'] if b['event_id']==context_request['event_id'])
-        candidates=[m for m in component['context_messages'] if m['id'] in set(base['source_message_ids'])]
+        source_ids=set(base['source_message_ids'])
+        candidates=[m for m in component['context_messages'] if m['id'] in source_ids]
         before=context_request.get('before_message_id',max(base['source_message_ids'])+1)
     else:
         return extend_track_context(database,component,context_request,curator=curator)
@@ -1559,7 +1582,7 @@ def extend_context(database,component,context_request,*,curator=False):
         {**context_request,'track_id':base['primary_track_id']})
 
 
-def bounded_curator_context(component,candidates,before,query):
+def bounded_curator_context(component,candidates,before,query,*,reserved_source_ids=frozenset()):
     selected=[];omitted=[];chosen=0
     covered={s for unit in component['memberships'] for s in unit['source_message_ids']}
     sessions=sorted({m['session_id'] for m in candidates})
@@ -1569,6 +1592,8 @@ def bounded_curator_context(component,candidates,before,query):
     for unit in sorted(units,key=lambda unit:unit[0]['id'],reverse=True):
         if any(m['id']>=before for m in unit):continue
         unit_ids={m['id'] for m in unit}
+        if unit_ids & reserved_source_ids:
+            omitted.append(unit[0]['id']);continue
         if unit_ids & covered and not unit_ids.issubset(covered):
             omitted.append(unit[0]['id']);continue
         reading=sorted([*unit,*selected],key=lambda m:m['id'])
@@ -1592,13 +1617,18 @@ def extend_track_context(database,component,context_request,*,curator=False):
         rows=store.conn.execute('SELECT r.* FROM pipeline_routes p JOIN raw_events r ON r.id=p.raw_id WHERE r.id<? '
             'AND EXISTS (SELECT 1 FROM json_each(?) s WHERE r.source=json_extract(s.value,\'$[0]\') '
             'AND r.session_id=json_extract(s.value,\'$[1]\')) '
-            'AND (json_extract(p.route_json,\'$.primary_track_id\')=? OR EXISTS (SELECT 1 FROM json_each(p.route_json,\'$.context_track_ids\') WHERE value=?)) ORDER BY r.id DESC'+('' if curator else ' LIMIT 6'),
+            'AND (json_extract(p.route_json,\'$.primary_track_id\')=? OR EXISTS (SELECT 1 FROM json_each(p.route_json,\'$.context_track_ids\') WHERE value=?)) '
+            +('' if curator else pending_materials.reservation_clause('r'))+' ORDER BY r.id DESC'+('' if curator else ' LIMIT 6'),
             (context_request['before_message_id'],encode(scopes),context_request['track_id'],context_request['track_id'])).fetchall()
+        reserved={int(source_id) for (source_id,) in store.conn.execute(
+            "SELECT DISTINCT ps.value FROM pipeline_pending_materials pm, json_each(pm.source_ids_json) ps "
+            "WHERE pm.status IN ('open','running')")} if curator else set()
     existing={m['id']:m for m in component['context_messages']}
     projected=[task_message(r) for r in reversed(rows)]
     prior=[item for item in projected if item['session_id'] in component['context_session_ids']]
     if curator:
-        return bounded_curator_context(component,prior,context_request['before_message_id'],context_request)
+        return bounded_curator_context(component,prior,context_request['before_message_id'],context_request,
+            reserved_source_ids=reserved)
     units=[[item] for item in sorted(prior,key=lambda item:item['id'])[-6:]]
     selected=[m for unit in units for m in unit]
     existing.update({m['id']:m for m in selected})

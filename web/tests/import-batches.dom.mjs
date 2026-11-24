@@ -10,7 +10,7 @@ const dom=new JSDOM('<div id="root"></div>',{url:'http://synthetic.invalid',pret
 for(const key of ['window','document','navigator','HTMLElement','Event','Node'])
   Object.defineProperty(globalThis,key,{value:dom.window[key],configurable:true});
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
-let poll,root;
+let poll,root,historyReads=0;
 const interval=globalThis.setInterval,clear=globalThis.clearInterval;
 globalThis.setInterval=fn=>{poll=fn;return 1;};globalThis.clearInterval=()=>{};
 const job={id:'synthetic-upload',filename:'Synthetic history.json',format:'messages',sessions:1,total:1000,
@@ -18,7 +18,7 @@ const job={id:'synthetic-upload',filename:'Synthetic history.json',format:'messa
 const requests=[];
 globalThis.fetch=async(url,options={})=>{
   let data;
-  if(url==='/__serein/imports')data={items:[job],tagging:{}};
+  if(url==='/__serein/imports'){historyReads++;data={items:[job],tagging:{}};}
   else if(url.endsWith('/continue')){
     const args=JSON.parse(options.body);requests.push(args);
     job.task={status:'queued',arguments:args};data=job.task;
@@ -29,13 +29,21 @@ globalThis.fetch=async(url,options={})=>{
 };
 const directory=await mkdtemp(join(tmpdir(),'serein-import-dom-'));
 try{
-  const output=await build({stdin:{contents:`import React,{act} from 'react';import {createRoot} from 'react-dom/client';import {ConversationImport} from './src/components/ConversationImport.jsx';export {act};export function mount(){const root=createRoot(document.getElementById('root'));root.render(<ConversationImport/>);return root;}`,resolveDir:process.cwd(),loader:'jsx'},jsx:'automatic',bundle:true,platform:'node',format:'esm',write:false,define:{'process.env.NODE_ENV':'"development"'}});
+  const output=await build({stdin:{contents:`import React,{act} from 'react';import {createRoot} from 'react-dom/client';import {ConversationImport} from './src/components/ConversationImport.jsx';export {act};export function show(root,active){root.render(<ConversationImport active={active}/>);}export function mount(active=true){const root=createRoot(document.getElementById('root'));show(root,active);return root;}`,resolveDir:process.cwd(),loader:'jsx'},jsx:'automatic',bundle:true,platform:'node',format:'esm',write:false,define:{'process.env.NODE_ENV':'"development"'}});
   const path=join(directory,'bundle.mjs');await writeFile(path,output.outputFiles[0].text);
-  const {act,mount}=await import(pathToFileURL(path));
+  const {act,mount,show}=await import(pathToFileURL(path));
   const wait=()=>new Promise(resolve=>setTimeout(resolve,20));
   const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent===text);
   const toggle=()=>[...document.querySelectorAll('label')].find(node=>node.textContent.includes('大批量导入')).querySelector('input');
-  await act(async()=>{root=mount();await wait();});
+  await act(async()=>{root=mount(false);await wait();});
+  assert.equal(historyReads,0,'Inactive settings tab does not read import history');
+  assert.equal(poll,undefined);
+  await act(async()=>{show(root,true);await wait();});
+  assert.equal(historyReads,1);
+  Object.defineProperty(document,'hidden',{value:true,configurable:true});
+  await act(async()=>{await poll();});
+  assert.equal(historyReads,1,'Hidden browser tab skips scheduled reads');
+  delete document.hidden;
   assert.equal(toggle().checked,false,'Large batches are opt-in');
   await act(async()=>{toggle().click();});
   await act(async()=>{button('开始导入').click();await wait();});

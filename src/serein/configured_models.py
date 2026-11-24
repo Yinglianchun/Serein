@@ -6,7 +6,7 @@ import threading
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import urlsplit
-from .deployment import read_settings, task_model
+from .deployment import read_settings, task_model, task_model_from_settings
 
 _prepare_lock = threading.Lock()
 _resources = Path(__file__).parent / 'resources'
@@ -32,9 +32,10 @@ def recall_settings(settings):
 
 
 def effective_settings(settings, *, preparing=False):
-    embedding=task_model(settings.database,'embedding')
-    reranker=task_model(settings.database,'reranker')
-    changes={'recall':recall_settings(settings)}
+    saved = read_settings(settings.database)
+    embedding = task_model_from_settings(saved, 'embedding')
+    reranker = task_model_from_settings(saved, 'reranker')
+    changes = {'recall': {**settings.recall, **saved['recall']}}
     if embedding:
         root=model_index(settings,embedding)
         if not preparing:
@@ -93,9 +94,10 @@ def prepare_selected(settings, *, before_fill=None):
     from .recall.vectors import fill_vectors
     from .recall.passages import fill_passages
     from .semantic_setup import prepare
+    from .adapters.embedding import EmbeddingSetupError, EmbeddingResponseError, check_response
     model=task_model(settings.database,'embedding')
-    if not model:raise ValueError('Select an embedding model first')
-    if model.get('protocol')!='openai':raise ValueError('Embedding requires a compatible embeddings API')
+    if not model:raise EmbeddingSetupError('embedding_not_selected')
+    if model.get('protocol')!='openai':raise EmbeddingSetupError('embedding_protocol_mismatch')
     with _prepare_lock:
         effective=effective_settings(settings,preparing=True)
         root=effective.index.parent;root.mkdir(parents=True,exist_ok=True)
@@ -104,10 +106,15 @@ def prepare_selected(settings, *, before_fill=None):
         with httpx.Client(timeout=30,follow_redirects=False) as client:
             response=client.post(model['base_url']+'/embeddings',json={'model':model['model'],'input':'dimension probe','encoding_format':'float'},
                 headers={'Authorization':'Bearer '+model['api_key']} if model.get('api_key') else {})
-        from .adapters.embedding import check_response
         check_response(response)
-        dimension=len(response.json()['data'][0]['embedding'])
-        if model.get('dimension') and model['dimension']!=dimension:raise ValueError('Configured dimension differs from the provider')
+        try:
+            vector = response.json()['data'][0]['embedding']
+            if not isinstance(vector, list) or not vector:
+                raise ValueError
+            dimension = len(vector)
+        except (ValueError, TypeError, IndexError, KeyError):
+            raise EmbeddingResponseError('Embedding probe returned an invalid vector response') from None
+        if model.get('dimension') and model['dimension']!=dimension:raise EmbeddingSetupError('embedding_dimension_mismatch')
         profile={'model':model['model'],'provider_host':urlsplit(model['base_url']).hostname,'dimension':dimension,
                  'document_instruction':model.get('document_instruction',''),'query_instruction':model.get('query_instruction',''),'max_chars':12000}
         if not effective.index.exists():build_index(settings.database,effective.index)

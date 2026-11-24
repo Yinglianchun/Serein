@@ -1,7 +1,9 @@
 import http from 'node:http';
 import https from 'node:https';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { renameSync, rmSync, writeFileSync } from 'node:fs';
+import { memoryToken } from './sereinBackend.mjs';
 import { preview } from 'vite';
 import { requireWebAuth } from './webAuth.mjs';
 
@@ -16,8 +18,8 @@ if (process.env.SEREIN_PUBLIC_ORIGIN) {
       || publicOrigin.username || publicOrigin.password || publicOrigin.pathname !== '/'
       || publicOrigin.search || publicOrigin.hash) throw new Error('SEREIN_PUBLIC_ORIGIN must be an HTTPS origin or loopback HTTP origin');
 }
-process.env.SEREIN_MEMORY_TOKEN = readFileSync(process.env.SEREIN_MEMORY_TOKEN_FILE, 'utf8').trim();
-if (!process.env.SEREIN_MEMORY_TOKEN) throw new Error('Memory token is empty');
+const tokenFile = process.env.SEREIN_MEMORY_TOKEN_FILE;
+if (!tokenFile || !memoryToken()) throw new Error('Memory token is empty');
 const web = await preview({ root: fileURLToPath(new URL('../', import.meta.url)),
   preview: { host: '127.0.0.1', port: Number(process.env.SEREIN_PREVIEW_PORT || 4173), strictPort: true, allowedHosts: true } });
 const bearerPaths = new Set(['/v1/models', '/v1/chat/completions',
@@ -31,8 +33,8 @@ const server = http.createServer((req, res) => {
     res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff' });
     res.end('Invalid request URL'); return;
   }
-  if (path === '/ready' && req.method === 'GET') {
-    Promise.all([fetch(new URL('/health', core), {signal:AbortSignal.timeout(3000)}),
+  if ((path === '/ready' || path === '/live') && req.method === 'GET') {
+    Promise.all([fetch(new URL(path === '/ready' ? '/health' : '/live', core), {signal:AbortSignal.timeout(3000)}),
       fetch(`http://127.0.0.1:${web.httpServer.address().port}/`, {signal:AbortSignal.timeout(3000)})])
       .then(results => { res.writeHead(results.every(r => r.ok) ? 200 : 503); res.end(); })
       .catch(() => { res.writeHead(503); res.end(); });
@@ -55,6 +57,34 @@ const server = http.createServer((req, res) => {
     if (!originOK) { res.writeHead(403); res.end('Invalid origin'); return; }
   }
   if (!chat && !oauth && !requireWebAuth(req, res, filename)) return;
+  if (path === '/__serein/gateway-key/copy' || path === '/__serein/gateway-key/rotate') {
+    const respond = (status, data) => {
+      res.writeHead(status, {'Content-Type':'application/json; charset=utf-8', 'Cache-Control':'no-store',
+        'X-Content-Type-Options':'nosniff'});
+      res.end(JSON.stringify(data));
+    };
+    if (req.method !== 'POST') return respond(405, {detail:'POST required'});
+    const origin = req.headers.origin;
+    if (!origin || (origin !== publicOrigin?.origin && origin !== `http://${req.headers.host}`)
+        || !String(req.headers['content-type'] || '').startsWith('application/json')) {
+      return respond(403, {detail:'Same-origin JSON required'});
+    }
+    req.resume();
+    if (path.endsWith('/copy')) {
+      const key = memoryToken();
+      return key ? respond(200, {key}) : respond(503, {detail:'Gateway Key 暂不可用。'});
+    }
+    if (!memoryToken()) return respond(503, {detail:'Gateway Key 暂不可用。'});
+    const temporary = `${tokenFile}.${randomBytes(12).toString('hex')}.tmp`;
+    try {
+      writeFileSync(temporary, randomBytes(36).toString('base64url') + '\n', {mode:0o600, flag:'wx'});
+      renameSync(temporary, tokenFile);
+      return respond(200, {status:'rotated'});
+    } catch {
+      try { rmSync(temporary, {force:true}); } catch {}
+      return respond(503, {detail:'无法写入 Gateway Key 文件，请检查部署目录权限。'});
+    }
+  }
   if (!chat && !oauth && !['GET','HEAD','OPTIONS'].includes(req.method)) {
     let originOK = true;
     try { if (req.headers.origin) originOK = new URL(req.headers.origin).host === req.headers.host; }

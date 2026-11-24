@@ -1,4 +1,14 @@
 // Server-only memory backend. Credentials never enter the browser bundle.
+import { readFileSync } from 'node:fs';
+
+export function memoryToken(env = process.env) {
+  if (!env.SEREIN_MEMORY_TOKEN_FILE) return String(env.SEREIN_MEMORY_TOKEN || "").trim();
+  try {
+    return readFileSync(env.SEREIN_MEMORY_TOKEN_FILE, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
 export function sereinConfigured(env = process.env) {
   return Boolean(String(env.SEREIN_MEMORY_URL || "").trim());
 }
@@ -9,7 +19,7 @@ export function sereinBackendTimedOut(error) {
 
 export async function callSereinBackend(path, { method = "GET", body, timeoutMs, signal } = {}, { env = process.env, fetchImpl = fetch, timeout = 30_000 } = {}) {
   const base = String(env.SEREIN_MEMORY_URL || "").trim().replace(/\/$/, "");
-  const token = String(env.SEREIN_MEMORY_TOKEN || "").trim();
+  const token = memoryToken(env);
   if (!base || !token) throw new Error("serein_backend_not_configured");
   const response = await fetchImpl(`${base}${path}`, {
     method,

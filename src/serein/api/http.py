@@ -5,6 +5,8 @@ import asyncio
 import os
 import sqlite3
 import logging
+from pathlib import Path
+from threading import Lock
 from contextlib import asynccontextmanager
 from typing import Literal
 
@@ -37,7 +39,7 @@ class ArcSearch(BaseModel):
     limit: int = Field(default=5, ge=1, le=100)
 
 
-def create_app(settings, *, token: str, live: bool=False):
+def create_app(settings, *, token: str, live: bool=False, token_file: Path | None=None):
     if settings.writable and not live:
         raise ValueError('The HTTP rehearsal requires runtime.writable=false')
     if live and not settings.writable:
@@ -60,7 +62,26 @@ def create_app(settings, *, token: str, live: bool=False):
                 yield
 
     app = FastAPI(title='Serein', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
-    oauth_router, oauth_store = oauth_routes(settings.database, token)
+    active_token = token
+    token_lock = Lock()
+
+    def current_token():
+        nonlocal active_token
+        if token_file is None:
+            return active_token
+        with token_lock:
+            try:
+                latest = token_file.read_text('utf-8').strip()
+            except (OSError, UnicodeError):
+                latest = ''
+            if not latest:
+                raise HTTPException(503, 'Gateway Key is unavailable')
+            if latest != active_token:
+                oauth_store.bind_gateway_key(latest)
+                active_token = latest
+            return active_token
+
+    oauth_router, oauth_store = oauth_routes(settings.database, token, current_gateway_key=current_token)
     app.include_router(oauth_router)
 
     class AuthenticatedMCP:
@@ -78,7 +99,12 @@ def create_app(settings, *, token: str, live: bool=False):
                 return
             authorization = headers.get('authorization', '')
             supplied = authorization[7:] if authorization.startswith('Bearer ') else ''
-            static_ok = hmac.compare_digest(authorization.encode(), ('Bearer '+token).encode())
+            try:
+                expected = 'Bearer ' + current_token()
+            except HTTPException as error:
+                await JSONResponse({'detail':error.detail}, status_code=error.status_code)(scope, receive, send)
+                return
+            static_ok = hmac.compare_digest(authorization.encode(), expected.encode())
             oauth_ok = bool(supplied) and oauth_store.valid_access_token(supplied, resource)
             if not static_ok and not oauth_ok:
                 response = JSONResponse({'detail':'Authentication required'}, status_code=401,
@@ -101,7 +127,7 @@ def create_app(settings, *, token: str, live: bool=False):
         app.router.routes.append(Route(path, endpoint=AuthenticatedMCP()))
 
     def authorize(authorization: str = Header(default='')):
-        expected = 'Bearer '+token
+        expected = 'Bearer ' + current_token()
         if not hmac.compare_digest(authorization.encode(), expected.encode()):
             raise HTTPException(401, 'Authentication required', headers={'WWW-Authenticate':'Bearer'})
 
@@ -138,6 +164,18 @@ def create_app(settings, *, token: str, live: bool=False):
         return {'status':'ok', 'read_only':not live, 'schema':schema,
                 'release':os.environ.get('SEREIN_RELEASE',''),
                 'snapshot':os.environ.get('SEREIN_SNAPSHOT_ID','')}
+
+    startup_lock = Lock()
+    storage_checked = False
+
+    @app.get('/live')
+    def liveness():
+        nonlocal storage_checked
+        with startup_lock:
+            if not storage_checked:
+                health()
+                storage_checked = True
+        return {'status':'ok'}
 
     auth = [Depends(authorize)]
     from .appearance import routes as appearance_routes

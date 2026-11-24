@@ -7,7 +7,26 @@ export function identityName(role) {
     : readLocalPreference("serein.awake.name.assistant", "AI");
 }
 
+let pendingRead;
+
 export async function instanceSettings(changes) {
+  if (changes) {
+    pendingRead = undefined;
+    try {
+      return await requestSettings(changes);
+    } finally {
+      pendingRead = undefined;
+    }
+  }
+  const read = pendingRead ??= requestSettings();
+  try {
+    return await read;
+  } finally {
+    if (pendingRead === read) pendingRead = undefined;
+  }
+}
+
+async function requestSettings(changes) {
   const response = await fetch("/__serein/settings", {
     method: changes ? "PATCH" : "GET",
     headers: changes ? { "Content-Type": "application/json" } : {},

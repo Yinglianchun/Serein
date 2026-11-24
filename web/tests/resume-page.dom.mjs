@@ -14,8 +14,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 const config={identity:{user_name:'User',ai_name:'AI'},features:{resume:true,window_shadows:false},settings_version:1,
   resume:{mode:'mcp',command_enabled:false,mcp_enabled:true,latest_shadow:false,recent_events:false,
     favorite_scenes:false,selected_memories:true,selected_ids:['scene_test'],recent_originals:false,
-    recent_original_limit:20,pending_originals:false}};
-let fail=true,previews=0;
+    recent_event_limit:10,recent_scene_limit:10,recent_original_limit:20,pending_originals:false}};
+let fail=true,previews=0,lastSelection;
 globalThis.fetch=async(url,options={})=>{
   if(url==='/__serein/settings') {
     assert.equal(options.method,'GET');
@@ -23,6 +23,7 @@ globalThis.fetch=async(url,options={})=>{
   }
   assert.equal(url,'/__serein/resume');
   const {selection}=JSON.parse(options.body);
+  lastSelection=selection;
   for(const key of ['mode','command_enabled','mcp_enabled'])assert(!Object.hasOwn(selection,key));
   previews++;
   if(fail)return {ok:false,json:async()=>({detail:'Invalid resume preview selection; use content options only'})};
@@ -54,6 +55,19 @@ try {
   assert.equal(panel.querySelector('[role="alert"]'),null);
   assert.match(panel.textContent,/Synthetic continuity body/);
   assert.equal(previews,2);
+  for (const [label,limit] of [['最近事件',2],['最近 Scene',11]]) {
+    const input=document.querySelector(`input[aria-label="${label}带入条数"]`);
+    assert.equal(input.value,'10');
+    assert(input.disabled);
+    await act(async()=>input.closest('.resume-custom-choice').querySelector('[type="checkbox"]').click());
+    await act(async()=>{
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,String(limit));
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+    });
+  }
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,250));});
+  assert.equal(lastSelection.recent_event_limit,2);
+  assert.equal(lastSelection.recent_scene_limit,11);
   await act(async()=>root.unmount());root=null;
   console.log('PASS resume preview: error visible in reading pane, retry restores content without saving');
 } finally {

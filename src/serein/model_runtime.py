@@ -7,6 +7,7 @@ import logging
 import time
 from types import SimpleNamespace
 from urllib.parse import urlsplit
+from uuid import NAMESPACE_URL, uuid5
 import httpx
 from .chat_context import ClientContext
 from .deployment import task_model
@@ -92,7 +93,7 @@ def deepseek_tool_reasoning_compat(model, payload, *, window_id=''):
     return result, count
 
 
-def request_for(model, payload, *, window_id=''):
+def request_for(model, payload, *, window_id='', go_session_id=None):
     adapter = ClientContext()
     payload = {**payload, 'model': model['model']}
     payload.pop('reasoning_content_compat', None)
@@ -125,6 +126,9 @@ def request_for(model, payload, *, window_id=''):
     if model.get('prompt_cache') == 'anthropic':
         payload.setdefault('cache_control', adapter._anthropic_cache_control(model))
     headers = {'Authorization': 'Bearer ' + model['api_key']} if model.get('api_key') else {}
+    if model.get('opencode_go_session') and go_session_id and model['base_url'] == 'https://opencode.ai/inference/go/openai/v1':
+        scope = model.get('upstream_id') or model['base_url']
+        headers['x-opencode-session'] = 'ses_' + uuid5(NAMESPACE_URL, json.dumps([scope, go_session_id])).hex
     return model['base_url'] + '/chat/completions', headers, payload
 
 
@@ -144,8 +148,8 @@ def normalize_response(model, result):
                       'cache_creation_input_tokens':usage.get('cache_creation_input_tokens',0)}}
 
 
-async def complete(model, payload, *, window_id=''):
-    url, headers, body = request_for(model, {**payload, 'stream':False}, window_id=window_id)
+async def complete(model, payload, *, window_id='', go_session_id=None):
+    url, headers, body = request_for(model, {**payload, 'stream':False}, window_id=window_id, go_session_id=go_session_id)
     timeout=httpx.Timeout(model.get('request_timeout_seconds',120),connect=15,pool=15)
     started=monotonic()
     try:

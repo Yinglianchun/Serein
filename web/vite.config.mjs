@@ -147,7 +147,7 @@ function parseMcpEvent(text) {
   return JSON.parse(data);
 }
 
-import { sereinConfigured, sereinBackendTimedOut, callSereinBackend, callSereinTool } from './server/sereinBackend.mjs';
+import { sereinConfigured, sereinBackendTimedOut, callSereinBackend, callSereinTool, memoryToken } from './server/sereinBackend.mjs';
 
 async function callSereinDashboard(path, options = {}) { return callSereinBackend(path, options); }
 
@@ -336,6 +336,7 @@ export async function readLiveWindowShadows() {
   const upstream = await callSereinDashboard("/api/window-shadows?limit=100&include_content=1");
   if (!upstream.ok) throw new Error(`window_shadow_live_projection_${upstream.status}`);
   const windows = Array.isArray(upstream.payload?.windows) ? upstream.payload.windows : [];
+  const portraitViews = upstream.payload?.portrait_views;
   const shadows = windows.map((item) => {
     const text = String(item?.content || "").replace(/\r\n?/g, "\n").trim();
     const created = new Date(item?.created_at || 0);
@@ -384,6 +385,7 @@ export async function readLiveWindowShadows() {
     snapshotId: createHash("sha256").update(fingerprint).digest("hex"),
     source: "Serein Window Shadow live read-only projection",
     shadows,
+    portraitViews,
   };
 }
 
@@ -491,7 +493,7 @@ function sereinGatewayBridge() {
           return;
         }
 
-        const gatewayToken = String(process.env.SEREIN_MEMORY_TOKEN || "").trim();
+        const gatewayToken = memoryToken();
         const gatewayBase = String(process.env.SEREIN_MEMORY_URL || "").replace(/\/$/, "");
         if (!gatewayToken) {
           response.statusCode = 503;
@@ -599,7 +601,7 @@ function sereinGatewayBridge() {
           return;
         }
 
-        const gatewayToken = String(process.env.SEREIN_MEMORY_TOKEN || "").trim();
+        const gatewayToken = memoryToken();
         const gatewayBase = String(process.env.SEREIN_MEMORY_URL || "").replace(/\/$/, "");
         if (!gatewayToken) {
           response.statusCode = 503;
@@ -647,7 +649,7 @@ function sereinGatewayBridge() {
           return;
         }
 
-        const gatewayToken = String(process.env.SEREIN_MEMORY_TOKEN || "").trim();
+        const gatewayToken = memoryToken();
         const gatewayBase = String(process.env.SEREIN_MEMORY_URL || "").replace(/\/$/, "");
         if (!gatewayToken) {
           response.statusCode = 503;
@@ -702,7 +704,7 @@ function sereinMemoryBridge() {
         if(request.method!=="GET"){response.statusCode=405;response.end();return;}
         try {
           const base=process.env.SEREIN_MEMORY_URL;
-          const token=process.env.SEREIN_MEMORY_TOKEN;
+          const token=memoryToken();
           if(!base || !token)throw new Error("backend_not_configured");
           const result=await fetch(base.replace(/\/$/,"")+"/v1/export/markdown",{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(60_000)});
           response.statusCode=result.status;
@@ -718,7 +720,7 @@ function sereinMemoryBridge() {
         const path=new URL(request.url,"http://localhost").pathname;
         if(request.method==="GET" && /^\/[0-9a-f]{64}\/export$/.test(path)){
           try {
-            const base=process.env.SEREIN_MEMORY_URL,token=process.env.SEREIN_MEMORY_TOKEN;
+            const base=process.env.SEREIN_MEMORY_URL,token=memoryToken();
             if(!base||!token)throw new Error("backend_not_configured");
             const result=await fetch(base.replace(/\/$/,"")+"/v1/migration"+path,
               {headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(1_200_000)});
@@ -801,7 +803,7 @@ function sereinMemoryBridge() {
         response.setHeader("Content-Type","application/json; charset=utf-8");
         response.setHeader("Cache-Control","no-store");
         const action=request.url?.split("?")[0];
-          if(!(request.method==="GET" && (action==="/status" || /^\/(?:attempts|pending)\/\d+$/.test(action))) && !(request.method==="POST" && ["/next","/submit","/rebuild","/retry-image","/retry-batch","/restore-auto-boundary","/recovery-preview","/skip-batch","/rebatch","/resume-pending"].includes(action))) {
+          if(!(request.method==="GET" && (["/status","/progress"].includes(action) || /^\/(?:attempts|pending)\/\d+$/.test(action))) && !(request.method==="POST" && ["/next","/submit","/rebuild","/retry-image","/retry-batch","/restore-auto-boundary","/recovery-preview","/skip-batch","/rebatch","/resume-pending"].includes(action))) {
           response.statusCode=405;response.end(JSON.stringify({error:"method_not_allowed"}));return;
         }
         if(request.method==="POST" && (!String(request.headers["content-type"]).startsWith("application/json") ||

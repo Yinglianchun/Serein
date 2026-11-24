@@ -1,17 +1,80 @@
 """Explicit window writing and latest-window continuity; no model is called here."""
 import json
+import re
 
 from ..core.store import Store, Conflict, encode, digest, now
 
 WRITING_RULE = ('准备换窗时，由正在聊天的主模型写这一窗：我眼中的你、我眼中的自己、这一窗发生的事。'
     '写具体的新认识、变化、选择和未完事项；没有变化可留空，不把暂时情绪写成固定人格。'
-    '最近的事可引用已有 Scene，不自动把窗影拆成 Scene。新窗口只读最新窗影，不重新生成画像。')
+    '最近的事可引用已有 Scene，不自动把窗影拆成 Scene。换窗读取最新正文，空白画像沿用各自最近一次填写的内容。')
 
 
 def latest_shadow(store):
     return store.conn.execute("SELECT * FROM historical_works WHERE kind='shadow' "
         "AND id NOT IN (SELECT document_id FROM deletions) "
-        "ORDER BY json_extract(metadata_json,'$.created_at') DESC,id DESC LIMIT 1").fetchone()
+        "ORDER BY COALESCE(julianday(json_extract(metadata_json,'$.created_at')),0) DESC,id DESC LIMIT 1").fetchone()
+
+
+VIEW_LABELS = {'user_view': '我眼中的你', 'self_view': '我眼中的自己'}
+
+
+def _shadow_views(row):
+    raw = json.loads(row['metadata_json']).get('sections_json')
+    try:
+        sections = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        sections = None
+    if isinstance(sections, dict) and sections:
+        return {key: value.strip() for key in VIEW_LABELS
+                if isinstance(value := sections.get(key), str) and value.strip()}
+
+    # Some imports only stored the authored Markdown. Ignore headings inside code.
+    paragraphs = {key: [] for key in VIEW_LABELS}
+    labels = {label: key for key, label in VIEW_LABELS.items()}
+    current, depth, fence = None, 0, ''
+    for line in row['body_md'].splitlines():
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+        if marker:
+            token = marker[1]
+            if not fence:
+                fence = token
+            elif token.startswith(fence) and not line[marker.end():].strip():
+                fence = ''
+        heading = not marker and not fence and re.match(r'^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$', line)
+        if heading:
+            label = heading[2]
+            if label in labels:
+                current, depth = labels[label], len(heading[1])
+                continue
+            if label == '这一窗发生的事' or len(heading[1]) <= depth:
+                current = None
+        if current:
+            paragraphs[current].append(line)
+    return {key: text for key, lines in paragraphs.items() if (text := '\n'.join(lines).strip())}
+
+
+def continuity_shadow(store, row):
+    """Resolve missing views for the latest shadow; its archived body stays verbatim."""
+    views = {}
+    def collect(source, position):
+        for key, text in _shadow_views(source).items():
+            views.setdefault(key, {'text': text, 'position': position, 'title': source['title']})
+
+    collect(row, 1)
+    if len(views) < len(VIEW_LABELS):
+        older = store.conn.execute("SELECT title,body_md,metadata_json FROM historical_works "
+            "WHERE kind='shadow' AND id NOT IN (SELECT document_id FROM deletions) AND id<>? "
+            "ORDER BY COALESCE(julianday(json_extract(metadata_json,'$.created_at')),0) DESC,id DESC", (row['id'],))
+        for position, source in enumerate(older, 2):
+            collect(source, position)
+            if len(views) == len(VIEW_LABELS):
+                break
+    parts = [row['body_md']]
+    for key, label in VIEW_LABELS.items():
+        view = views.get(key)
+        if view and view['position'] > 1:
+            parts.append(f"## {label}（沿用倒数第 {view['position']} 篇窗影）\n\n{view['text']}")
+    return '\n\n'.join(parts), views
 
 
 def sync_introductions(store, sections):
@@ -77,11 +140,12 @@ class WindowShadows:
     def read(self, window_id: str = ''):
         """Read the shadow's full content once, with section headings preserved. Omit window_id for the latest; explicit IDs are for history/editing."""
         with Store(self.database,read_only=True) as store:
+            store.conn.execute("BEGIN")
             row = store.conn.execute("SELECT * FROM historical_works WHERE kind='shadow' AND id IN (?,?) "
                 "AND id NOT IN (SELECT document_id FROM deletions)",(window_id,'shadow:'+window_id)).fetchone() if window_id else latest_shadow(store)
             if row is None:return {'status':'not_found'}
             meta=json.loads(row['metadata_json'])
             return {'status':'ok','id':row['id'],'window_id':meta.get('window_id'), 'title':row['title'],
-                'content':row['body_md'],'revision':row['revision'],
+                'content':row['body_md'] if window_id else continuity_shadow(store,row)[0],'revision':row['revision'],
                 'scene_ids':json.loads(meta.get('moment_bucket_ids_json') or '[]'),'ordinary_recall':False,
                 'writing_rule':WRITING_RULE}

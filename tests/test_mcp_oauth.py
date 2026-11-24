@@ -34,10 +34,12 @@ def _authorize(client, registration, *, state='exact-state', resource='https://m
 
 
 def test_oauth_discovery_pkce_refresh_rotation_and_static_bearer(tmp_path):
+    token_file = tmp_path/'gateway-key'
+    token_file.write_text('synthetic-gateway-key', encoding='utf-8')
     settings = Settings(tmp_path/'memory.db')
     with Store(settings.database) as store:
         store.create('scene_oauth', 'scene', 'OAuth fixture', 'Protected body')
-    app = create_app(settings, token='synthetic-gateway-key')
+    app = create_app(settings, token='synthetic-gateway-key', token_file=token_file)
     with TestClient(app, base_url='https://memory.example') as client:
         protected = client.get('/.well-known/oauth-protected-resource').json()
         assert protected == {
@@ -111,13 +113,16 @@ def test_oauth_discovery_pkce_refresh_rotation_and_static_bearer(tmp_path):
         surviving = client.post('/token', data={
             'grant_type':'authorization_code', 'client_id':registration['client_id'],
             'code':code2, 'redirect_uri':params2['redirect_uri'], 'code_verifier':verifier2,
-        }).json()['access_token']
+        }).json()
 
-    # Rotating the installation Gateway Key revokes every previously issued OAuth grant.
-    with TestClient(create_app(settings, token='replacement-gateway-key'),
-                    base_url='https://memory.example') as client:
-        headers = {'Authorization':'Bearer '+surviving, 'Accept':'application/json, text/event-stream'}
-        assert client.post('/serein/mcp', headers=headers, json=initialize).status_code == 401
+        # Rotation takes effect in the running service before an old grant can be refreshed.
+        token_file.write_text('replacement-gateway-key', encoding='utf-8')
+        refresh = client.post('/token', data={'grant_type':'refresh_token', 'client_id':registration['client_id'],
+                                             'refresh_token':surviving['refresh_token']})
+        assert refresh.status_code == 400 and refresh.json()['error'] == 'invalid_grant'
+        headers = {'Accept':'application/json, text/event-stream'}
+        for key in (surviving['access_token'], 'synthetic-gateway-key'):
+            assert client.post('/serein/mcp', headers={**headers,'Authorization':'Bearer '+key}, json=initialize).status_code == 401
         headers['Authorization'] = 'Bearer replacement-gateway-key'
         assert client.post('/serein/mcp', headers=headers, json=initialize).status_code == 200
 

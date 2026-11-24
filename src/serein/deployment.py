@@ -15,8 +15,8 @@ DEFAULT_UPSTREAM = {'base_url': '', 'model': '', 'writer_model': '', 'api_key': 
 DEFAULT_FEATURES = {'memos':False, 'persona':False, 'anti_retreat':False, 'window_shadows':False, 'association':False, 'write_context':False, 'relations_auto_accept':False, 'resume':False, 'originals':False, 'favorites':False, 'narrative_tools':False, 'narrative_nightly_organize':False, 'event_to_scene':False, 'current_time':False, 'image_transcription_async':False, 'image_eyes':False}
 DEFAULT_FEATURES.update(dream_read=False, dream_morning=False, memory_candidates=False, pipeline_agent=False)
 DEFAULT_CLOCK = {'timezone':'Asia/Shanghai'}
-DEFAULT_RESUME = {'mode':'command', 'command_enabled':True, 'mcp_enabled':False, 'latest_shadow':True, 'recent_events':True, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
-                  'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
+DEFAULT_RESUME = {'mode':'command', 'command_enabled':True, 'mcp_enabled':False, 'latest_shadow':True, 'recent_events':True, 'recent_scenes':False, 'favorite_scenes':True, 'selected_memories':False, 'selected_ids':[],
+                  'recent_event_limit':10, 'recent_scene_limit':10, 'recent_originals':False, 'recent_original_limit':20, 'pending_originals':True}
 DEFAULT_DOMAINS = [
     {'key':'relationship','label':'关系','description':'身份、称呼、承诺、边界与沟通方式','policy':'normal'},
     {'key':'intimacy','label':'亲密','description':'身体、欲望与具身互动','policy':'normal'},
@@ -29,7 +29,7 @@ DEFAULT_DOMAINS = [
 TASKS = ('chat', 'writer', 'embedding', 'reranker', 'relations', 'dreams', 'narrative_scout', 'event_pipeline',
          'persona', 'anti_retreat', 'track_router', 'image_transcription', 'event_curator', 'event_writer', 'operit_tagging', 'arc_linker')
 TASK_LABELS = {'chat':'聊天', 'writer':'Narrative Writer', 'embedding':'Embedding', 'reranker':'Reranker',
-               'relations':'Scene 关系', 'dreams':'梦境', 'narrative_scout':'叙事卷找材料', 'event_pipeline':'原话自动摘要',
+               'relations':'Scene 关系', 'dreams':'梦境', 'narrative_scout':'叙事卷找材料', 'event_pipeline':'Event 整理',
                'persona':'心绪/防撤退', 'track_router':'原话 · 归线', 'image_transcription':'图片转录 / 眼睛',
                'event_curator':'原话 · 切分', 'event_writer':'原话 · Event 写作', 'operit_tagging':'打标', 'arc_linker':'Event · Arc 归档'}
 
@@ -117,7 +117,8 @@ def configured_models(state):
             entries.append({'id':default,'upstream_model':default})
         for entry in entries:
             result.append({**connection, **entry, 'model':entry['upstream_model'],
-                           'label':entry.get('label') or entry['upstream_model'], 'upstream_name':upstream['name']})
+                           'label':entry.get('label') or entry['upstream_model'], 'upstream_name':upstream['name'],
+                           **({'upstream_id':upstream.get('id')} if upstream.get('opencode_go_session') else {})})
     return result
 
 
@@ -214,13 +215,14 @@ def save_settings(database, changes):
             raise ValueError('Unknown reasoning content compatibility policy')
         known = {item['id'] for item in catalog}
         if len(known) != len(catalog):
-            raise ValueError('Client model IDs must be unique; use aliases for models offered by multiple upstreams')
+            raise ValueError('模型内部 ID 重复。不同上游使用同一模型时，请分别设置不同的 id，upstream_model 保留提供方的模型号。')
         public_names = [client_model_id(model) for model in chat_models(current)]
         if len(set(public_names)) != len(public_names):
-            raise ValueError('Models in an upstream need distinct aliases; upstream names must distinguish their models')
-        missing = [TASK_LABELS.get(task, task) for task, value in current['assignments'].items() if value and value not in known]
-        if missing:
-            raise ValueError('以下功能选择的模型已移除，请重新选择模型或清空选择：' + '、'.join(missing))
+            raise ValueError('模型显示名称重复。请区分上游名称，或给同一上游内的模型设置不同别名。')
+        missing_tasks = [task for task, value in current['assignments'].items() if value and value not in known]
+        if missing_tasks:
+            names = '、'.join(TASK_LABELS.get(task, '其他功能') for task in missing_tasks)
+            raise ValueError('以下功能绑定的模型不在新的模型列表中：' + names + '。请保留对应模型的内部 ID，或先更改这些功能的模型选择并保存。')
         image_features = current['features']['image_transcription_async'], current['features']['image_eyes']
         if all(image_features):
             raise ValueError('“异步图片转录”和“眼睛”只能开启一个')
@@ -290,8 +292,11 @@ def expanded_identity(names):
 
 
 def task_model(database, task, *, requested=''):
+    return task_model_from_settings(read_settings(database), task, requested=requested)
+
+
+def task_model_from_settings(state, task, *, requested=''):
     if task == 'anti_retreat':task = 'persona'
-    state = read_settings(database)
     catalog = chat_models(state) if task == 'chat' else configured_models(state)
     if task == 'chat' and state['upstreams'] and not requested and not state['assignments'].get('chat'):
         if len(state['upstreams']) != 1 or state['models']:

@@ -53,6 +53,23 @@ def test_switch_removes_mcp_and_http_tools_and_preserves_content(settings):
     save_settings(settings.database,{'features':{'memos':False}})
     assert asyncio.run(restricted.list_tools())==[]
 
+def test_window_history_projects_inherited_portraits_without_changing_archived_body(settings):
+    from serein.compat.window_shadows import WindowShadows
+    save_settings(settings.database,{'features':{'window_shadows':True}})
+    shadows=WindowShadows(settings.database)
+    shadows.write('older','Older',user_view='The earlier user view',self_view='The earlier self view')
+    shadows.write('newer','Newer',user_view='The current user view',recent_events='A current event')
+    client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
+    payload=client.get('/api/window-shadows?limit=1&include_content=1').json()
+    assert len(payload['windows'])==1
+    assert payload['portrait_views']['user_view']=={'text':'The current user view','position':1,'title':'Newer'}
+    assert payload['portrait_views']['self_view']=={'text':'The earlier self view','position':2,'title':'Older'}
+    assert 'The earlier self view' not in payload['windows'][0]['content']
+    assert 'The earlier self view' in payload['windows'][0]['display_content']
+    metadata=client.get('/api/window-shadows?limit=1&include_content=0').json()
+    assert metadata['portrait_views']=={}
+    assert 'display_content' not in metadata['windows'][0]
+
 def test_relation_auto_accept_only_new_valid_proposals_and_removal(settings):
     from test_live_relations import seed, create
     client=TestClient(create_app(settings,token='test',live=True),headers={'Authorization':'Bearer test'})
@@ -214,3 +231,31 @@ def test_persona_and_anti_retreat_independent_and_memo_ack(settings,monkeypatch)
     assert application.contributions.tools['memo_list']()['items'][0]['reminder_count']==0
     delivered(settings.database,'window',receipt)
     assert application.contributions.tools['memo_list']()['items']==[]
+
+
+
+def test_gateway_persona_shares_evaluation_round_and_seeds_latest_mood(settings, monkeypatch):
+    from contextlib import closing
+    from serein.chat_features import delivered, after_reply, persona_engine
+    from serein.deployment import read_settings
+
+    save_settings(settings.database, {'models':[{'id':'local','model':'synthetic',
+        'base_url':'http://127.0.0.1:9/v1'}], 'assignments':{'persona':'local'}, 'features':{'persona':True}})
+    engine = persona_engine(settings.database, 'persona', read_settings(settings.database))
+    engine.get_current_state('legacy')
+    with closing(engine._connect()) as conn, conn:
+        conn.execute("UPDATE persona_session_state SET valence=.42 WHERE session_id='legacy'")
+    calls = []
+
+    async def evaluate(self, session_id, *args, **kwargs):
+        calls.append(session_id)
+
+    monkeypatch.setattr(type(engine), 'update_from_exchange', evaluate)
+    for window in ('a','b','c'):
+        receipt = {'round':1}
+        delivered(settings.database, window, receipt)
+        asyncio.run(after_reply(settings.database, window, 'hello', 'answer', [], persona_round=receipt['persona_round']))
+    assert calls == ['gateway-shared']
+    with closing(engine._connect()) as conn:
+        rows = conn.execute('SELECT session_id,valence FROM persona_session_state ORDER BY session_id').fetchall()
+        assert [tuple(row) for row in rows] == [('gateway-shared',.42), ('legacy',.42)]

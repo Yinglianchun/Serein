@@ -354,6 +354,12 @@ def test_historical_curator_text_is_reused_with_current_scope(settings):
     assert reusable_transcriptions(settings, [], [{**image, 'sha256':'changed'}]) == []
 
 
+def test_idle_work_poll_reads_while_another_connection_owns_write_lock(settings):
+    from serein import work_tasks as tasks
+    with Store(settings.database) as writer, writer.transaction(immediate=True):
+        assert tasks.poll_work(settings.database) == []
+
+
 def test_image_queue_recovers_expired_lease_and_can_finish_after_restart(settings, monkeypatch):
     from serein import work_tasks as tasks
     configure(settings)
@@ -363,7 +369,7 @@ def test_image_queue_recovers_expired_lease_and_can_finish_after_restart(setting
     with Store(settings.database) as store:
         store.conn.execute('UPDATE background_state SET value_json=? WHERE name=?',
                            (json.dumps(queued), 'work:'+queued['id']))
-    tasks.recover_image_work(settings.database)
+    assert [row['id'] for row in tasks.poll_work(settings.database)] == [queued['id']]
     recovered = tasks.status(settings.database, queued['id'])
     assert recovered['status'] == 'queued' and recovered['run_id'] != queued['run_id']
     async def success(*args):

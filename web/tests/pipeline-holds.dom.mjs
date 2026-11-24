@@ -13,11 +13,14 @@ dom.window.HTMLDialogElement.prototype.close=function(){this.open=false;};
 const holds=[{scope:'chat-held',batch_id:'route:repair',hold_status:'needs_repair',reason:'frozen range cannot be proved'},
  {scope:'chat-backoff',batch_id:'route:wait',hold_status:'retry_wait',reason:'synthetic network failure',next_retry_at:'2026-10-10T00:45:00Z'}];
 const mutations=[];
+let progressRequests=0;
+let progressReport={stage:'done',archived:4,admitted:4,routed:4,processed:4,pending:0,eta_reliable:true,eta_human:'已完成'};
 globalThis.fetch=async(url,options={})=>{
  let data;
  if(url==='/__serein/settings')data={identity:{user_name:'User',ai_name:'AI'},features:{},pipeline:{auto_enabled:true}};
  else if(url==='/__serein/imports')data={items:[],tagging:{}};
  else if(url==='/__serein/pipeline/status')data={status:'blocked',stage:'blocked',blocked_scopes:holds,paused_batches:[],result:{status:'blocked'}};
+ else if(url==='/__serein/pipeline/progress'){progressRequests++;data=progressReport;}
  else if(url==='/__serein/pipeline/rebuild'){mutations.push(JSON.parse(options.body));data={status:'rebuilt'};}
  else if(url==='/__serein/pipeline/next')data={status:'queued'};
  else throw Error('Unexpected request '+url);
@@ -34,6 +37,17 @@ try{
  assert.match(document.body.textContent,/下次重试/);assert.match(document.body.textContent,/其他聊天可继续/);
  assert.match(document.body.textContent,/当日尚未全部结算/);assert.equal(mutations.length,0);
  assert.match(document.body.textContent,/route:repair/);
+ assert.equal(progressRequests,0,'progress is fetched only on request');
+ const progressButton=[...document.querySelectorAll('button')].find(b=>b.textContent==='查看 Event 整理进度与预计时间');
+ await act(async()=>{progressButton.click();await wait();});
+ assert.equal(progressRequests,1);assert.match(document.body.textContent,/已完成整理/);
+ assert.doesNotMatch(document.body.textContent,/预计还需约 已完成/);
+ progressReport={...progressReport,stage:'processing',pending:2,eta_reliable:false,eta_reason:'paused_or_throttled'};
+ await act(async()=>{progressButton.click();await wait();});
+ assert.match(document.body.textContent,/结算阶段近期没有新的处理记录/);
+ progressReport={...progressReport,eta_reliable:true,eta_human:'3 分 0 秒'};
+ await act(async()=>{progressButton.click();await wait();});
+ assert.match(document.body.textContent,/结算阶段预计还需约 3 分 0 秒.*不含后续阶段/);
  const buttons=[...document.querySelectorAll('button')];
  await act(async()=>{buttons.find(b=>b.textContent==='查看重建确认').click();await wait();});
  assert.equal(document.querySelector('dialog[open] code').textContent,'route:repair');

@@ -80,6 +80,14 @@ Windows Docker Desktop 需要启动且使用 Linux containers。Linux 上有 `do
 
 Termux 缺编译工具时按 [部署指南](deployment-guide.md#安卓-termux)补齐。依赖安装失败后，菜单 12 仍可排查；修复后重新执行部署，避免自行更换实例虚拟环境里的零散包。
 
+## Windows Docker 开启自动整理后健康检查变慢
+
+先对照 gateway 的 `/live` 与 `/ready`。两个入口都检查网页。前者访问 memory 的 `/live`，首次就绪后无需反复开库；后者访问 memory 的 `/health`，每次检查当前存储状态。若只在打开自动整理后变慢，再检查 memory 的 `/data` 是否绑定了 Windows 目录。报告者在同一份 1.79 GB 库上仅改用 Docker 命名卷，健康检查便从连续 10 次超时恢复为连续 10 次成功。[问题 #83](https://github.com/Yinglianchun/Serein/issues/83)
+
+在本机 Docker Desktop 的小样本中，每轮做 143 次 SQLite 提交，每次提交后另开连接读取 schema。两轮 Windows 目录挂载的读耗时中位数分别为 13.73 和 16.34 毫秒，Docker 卷均为 0.38 毫秒。这项测量覆盖存储开销，完整服务的耗时还取决于库大小与任务负载。
+
+**已有数据的实例**请保留原挂载。如果自行管理 Compose 并准备换卷，先停止所有写入服务、备份完整数据目录，把数据复制到空卷，在停写状态核对主库与索引库的完整性和记录数，再切换挂载启动。直接将空卷挂到 `/data` 会让服务打开空库。回退前先停写，切换后产生的新数据需先备份并核对。菜单安装的实例仍从宿主机 `deploy/runtime` 读取备份和迁移文件，单独改 Compose 会让菜单指向旧目录。
+
 ## SSH 连接超时或被拒绝
 
 SSH 在 Serein 启动前就可能失败，应先解决服务器连接：
@@ -214,7 +222,7 @@ with urlopen(request, timeout=15) as response:
 
 在网页召回观察中区分候选、准入、冷却和实际交付。没有匹配内容可以不召回；重排失败也不会把未经评分的候选直接注入。看到向量候选不代表模型已收到记忆。
 
-同一窗口固定 `X-Serein-Window-ID`，新窗口换值。所有客户端都不填时会共用 `main` 的冷却与提醒轮次。编辑正文、换 Embedding 后按页面提示补齐索引；不要像旧 Markdown 桶那样在 Obsidian 或同步软件中直接改 Serein 主库。
+同一窗口固定 `X-Serein-Window-ID`，新窗口换值。所有客户端都不填时会共用 `main` 的提醒轮次与续接会话。网关自动召回冷却和心绪由实例共用。编辑正文、换 Embedding 后按页面提示补齐索引；不要像旧 Markdown 桶那样在 Obsidian 或同步软件中直接改 Serein 主库。
 
 ## 更新被拒绝或没有出现菜单 12
 

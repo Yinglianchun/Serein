@@ -70,9 +70,9 @@ def factory(services, options):
             return {'key':key,'revision':revision,'status':'saved'}
 
     def resume(window_id: str = 'main', cursor: str = '', handoff_key: str = '', source_session_id: str = '', selection: dict | None = None):
-        """Read selected continuity sections: latest shadow, ten recent Events, favorite Scenes, selected memories, recent originals and pending originals. Call with no arguments to start; window_id is optional and defaults to main. Pass next_cursor as cursor until all pages are read; do not rewrite a portrait."""
+        """Read selected continuity sections: latest shadow, recent Events and Scenes, favorite Scenes, selected memories, recent originals and pending originals. Call with no arguments to start; window_id is optional and defaults to main. Pass next_cursor as cursor until all pages are read; do not rewrite a portrait."""
         from ..deployment import read_settings
-        from ..compat.window_shadows import latest_shadow
+        from ..compat.window_shadows import continuity_shadow, latest_shadow
         state = read_settings(database)
         # HTTP previews can read a validated draft; MCP and chat use saved options.
         overrides=selection or {}
@@ -94,7 +94,7 @@ def factory(services, options):
                 if shadow:
                     shadow_date=json.loads(shadow['metadata_json']).get('created_at','')
                     documents.append({'id':shadow['id'],'kind':'shadow','section':'latest_shadow',
-                        'title':shadow['title'],'revision':shadow['revision'],'body_md':shadow['body_md'],
+                        'title':shadow['title'],'revision':shadow['revision'],'body_md':continuity_shadow(reader.store,shadow)[0],
                         'created_at':shadow_date})
             keys = reader.store.conn.execute("SELECT document_id FROM personal_records WHERE scope='favorite' "
                 "AND deleted=0 AND json_extract(payload_json,'$.favorite')=1 ORDER BY document_id").fetchall()
@@ -117,18 +117,25 @@ def factory(services, options):
                         documents.append({'id':key,'kind':doc['kind'],'section':'selected_memory','title':doc['title'],
                             'revision':doc['revision'],'body_md':doc['body_md'],'created_at':doc['created_at']})
                         existing_ids.add(key)
-            events = reader.store.conn.execute("SELECT id FROM documents WHERE kind='event' AND lifecycle='active' "
-                "ORDER BY created_at DESC,id DESC").fetchall()
-            recent_events = []
-            for row in (events if selection['recent_events'] else []):
-                obj = reader.read(row['id'], with_evidence=False)
-                if obj['readable'] and obj.get('document'):
-                    doc = obj['document']
-                    recent_events.append({'id':row['id'],'kind':'event','section':'recent_event',
-                        'title':doc['title'],'revision':doc['revision'],'body_md':doc['body_md'],'created_at':doc['created_at']})
-                    if len(recent_events)==10:break
-            favorite_ids={d['id'] for d in documents}
-            documents.extend(item for item in reversed(recent_events) if item['id'] not in favorite_ids)
+            def recent_documents(kind, limit):
+                rows = reader.store.conn.execute(
+                    "SELECT id FROM documents WHERE kind=? AND lifecycle='active' ORDER BY created_at DESC,id DESC",
+                    (kind,))
+                recent = []
+                for row in rows:
+                    obj = reader.read(row['id'], with_evidence=False)
+                    if obj['readable'] and obj.get('document'):
+                        doc = obj['document']
+                        recent.append({'id':row['id'], 'kind':kind, 'section':'recent_'+kind, 'title':doc['title'],
+                                       'revision':doc['revision'], 'body_md':doc['body_md'], 'created_at':doc['created_at']})
+                        if len(recent) == limit:
+                            break
+                return recent
+
+            recent_events = recent_documents('event', selection['recent_event_limit']) if selection['recent_events'] else []
+            recent_scenes = recent_documents('scene', selection['recent_scene_limit']) if selection['recent_scenes'] else []
+            for recent in (recent_events, recent_scenes):
+                documents.extend(item for item in reversed(recent) if item['id'] not in existing_ids)
             raw_ids=set()
             recent_raw=[]
             if selection['recent_originals']:
@@ -194,7 +201,7 @@ def factory(services, options):
                 'event_ids':[d['id'] for d in items if d['section']=='recent_event'],
                 'raw_message_ids':[d['raw_id'] for d in items if d['kind']=='raw'],
                 'total_selected_memories':selected_count,'total_favorites':favorite_count,'total_recent_events':len(recent_events),'total_pending_originals':len(raw),
-                'total_recent_originals':len(recent_raw),
+                'total_recent_originals':len(recent_raw),'total_recent_scenes':len(recent_scenes),
                 'items':items,'handoff':note if not cursor else None,'has_more':more,
                 'next_cursor':f'{generation}:{index}:{offset}' if more else None,
                 'body_budget_chars':budget,'injected':False,

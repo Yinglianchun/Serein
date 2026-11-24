@@ -3,7 +3,7 @@ export const defaultDiaryEntries = [];
 export const defaultDiaryCommentIdentity = {get author(){return identityName("user");},role:"user"};
 export const defaultDarkroom = {
   unlockAt: "",
-  title: "未寄出的信",
+  title: "时空慢递",
   get lockedTitle() { return `${identityName("assistant")} 锁了门。`; },
   lockedQuestion: "有密码吗？",
   lockedCopy: "……这扇门不认密码，只认时间。",

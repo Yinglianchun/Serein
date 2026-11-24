@@ -9,6 +9,7 @@ def routes(settings, auth):
     router = APIRouter(dependencies=auth)
 
     @router.get('/api/pipeline/progress')
+    @router.get('/v1/pipeline/progress')
     def progress():
         return progress_report(settings.database)
 

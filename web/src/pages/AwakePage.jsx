@@ -26,7 +26,7 @@ import {
 import {
   loadWindowShadows,
   readFallbackWindowShadows,
-  windowShadowViews,
+  windowShadowPortraits,
 } from "../storage/windowShadowStore.js";
 import { dreamExcerpt, loadDreams } from "../storage/dreamStore.js";
 import { instanceSettings, identityName } from "../storage/instanceStore.js";
@@ -140,9 +140,9 @@ export function AwakePage({
     finally { setIdentityBusy(false); }
   };
   const latestShadow = windowShadows[0];
-  const views = windowShadowViews(shadowsEnabled && shadowsStatus === "ready" ? latestShadow : null);
+  const portraits = windowShadowPortraits(shadowsEnabled && shadowsStatus === "ready" ? windowShadows : []);
   const portraitPlaceholder = !shadowsEnabled ? "窗影尚未开启。" : shadowsStatus === "loading" ? "正在读回上一窗。" : shadowsStatus === "error" ? "窗影暂时没有接通。" : latestShadow ? "这一窗还没有写下这部分。" : "还没有窗影。";
-  const resolvedPeople = people.map((person) => ({ ...person, name: identityName(person.key), detail: views[person.key] || portraitPlaceholder }));
+  const resolvedPeople = people.map((person) => ({ ...person, name: identityName(person.key), detail: portraits[person.key].text || portraitPlaceholder, source: portraits[person.key].source }));
   const latestDream = dreams.find((dream) => dream.hasBody) ?? dreams[0] ?? null;
 
   useEffect(() => {
@@ -604,7 +604,7 @@ export function AwakePage({
                       <div className="portrait__name-row">
                         <h4>{person.name}</h4>
                       </div>
-                      <PortraitIntro name={person.name} text={person.detail} />
+                      <PortraitIntro name={person.name} text={person.detail} source={person.source} />
                     </div>
                   </article>
                 ))}

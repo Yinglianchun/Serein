@@ -33,6 +33,32 @@ def test_auth_and_read_only_boundary(profile):
     assert profile.database.read_bytes() == before
 
 
+def test_liveness_checks_storage_until_first_success_and_health_always_checks(profile, monkeypatch):
+    from serein.api import http
+
+    probes = []
+    original_reader = http.Reader
+
+    def counted_reader(database):
+        probes.append(database)
+        return original_reader(database)
+
+    monkeypatch.setattr(http, 'Reader', counted_reader)
+    with TestClient(create_app(profile, token='test-secret')) as client:
+        moved = profile.database.with_suffix('.offline')
+        profile.database.rename(moved)
+        assert client.get('/live').status_code == 503
+        moved.rename(profile.database)
+        assert client.get('/live').status_code == 200
+        profile.database.rename(moved)
+        assert client.get('/live').status_code == 200
+        assert len(probes) == 2
+        assert client.get('/health').status_code == 503
+        moved.rename(profile.database)
+        assert client.get('/health').status_code == 200
+        assert len(probes) == 4
+
+
 def test_recall_crosses_http_boundary_without_writing(profile):
     before = profile.database.read_bytes()
     with TestClient(create_app(profile, token='test-secret'), headers={'Authorization':'Bearer test-secret'}) as client:

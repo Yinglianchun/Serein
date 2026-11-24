@@ -1,12 +1,13 @@
 import {useEffect,useRef,useState} from 'react';
 import {Copy} from '@phosphor-icons/react';
 import {MarkdownProjection} from '../components/MarkdownProjection.jsx';
-import {ResumeSelection} from '../components/ResumeSelection.jsx';
+import {ResumeSelection,countFields} from '../components/ResumeSelection.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
 import {appendResumePage,resumeMaterials,resumePagesText} from '../utils/resumePages.js';
 import './resume-page.css';
 
-const labels={latest_shadow:'窗影',favorite:'收藏 Scene',selected_memory:'自选记忆',recent_event:'最近事件',recent_original:'最近原话',pending_original:'待整理原话'};
+const labels={latest_shadow:'窗影',favorite:'收藏 Scene',selected_memory:'自选记忆',recent_event:'最近事件',recent_scene:'最近 Scene',recent_original:'最近原话',pending_original:'待整理原话'};
+const validCount=value=>Number.isInteger(value)&&value>=1&&value<=50;
 
 export function ResumePage({onOpenSettings}) {
   const [config,setConfig]=useState(null),[selection,setSelection]=useState(null),[pages,setPages]=useState([]);
@@ -15,7 +16,7 @@ export function ResumePage({onOpenSettings}) {
   const version=useRef(0),previewVersion=useRef(0),request=useRef(null);
   const previewPanel=useRef(null),previewBody=useRef(null);
   const enabled=!!config?.features.resume;
-  const valid=!!selection&&Number.isInteger(selection.recent_original_limit)&&selection.recent_original_limit>=1&&selection.recent_original_limit<=50;
+  const valid=!!selection&&Object.values(countFields).every(key=>validCount(selection[key]));
   const dirty=!!config&&JSON.stringify(selection)!==JSON.stringify(config.resume);
   const last=pages.at(-1),items=resumeMaterials(pages);
   function cancelPreview(){previewVersion.current++;request.current?.abort();}
@@ -43,7 +44,13 @@ export function ResumePage({onOpenSettings}) {
     panel.addEventListener('wheel',wheel,{passive:false});
     return()=>panel.removeEventListener('wheel',wheel);
   },[enabled]);
-  function change(value){cancelPreview();setSelection(value);setPages([]);setStatus('');}
+  function change(value){
+    const next={...value};
+    for(const [option,key] of Object.entries(countFields)){
+      if(!next[option]&&!validCount(next[key]))next[key]=config.resume[key];
+    }
+    cancelPreview();setSelection(next);setPages([]);setStatus('');
+  }
   async function save(event) {
     event.preventDefault();const current=++version.current;setBusy('saving');setError('');
     const {mode,command_enabled,mcp_enabled,...contentSelection}=selection;
@@ -79,7 +86,7 @@ export function ResumePage({onOpenSettings}) {
         <div className="resume-actions"><button type="submit" disabled={!!busy||!dirty||!valid}>{busy==='saving'?'正在保存…':'保存选择'}</button><button type="button" disabled={!!busy} onClick={reload}>重新读取</button></div>
       </form><section ref={previewPanel} className="resume-preview" aria-labelledby="resume-preview-title">
         <header><div><p>当前选择会读到</p><h2 id="resume-preview-title">续接资料</h2></div><button type="button" disabled={!!busy||previewing||!valid} onClick={()=>preview()}>{previewing?'正在读取…':'重新预览'}</button></header>
-        {!valid&&<p className="resume-note">原话条数需填写 1–50 的整数，填好后会自动预览。</p>}
+        {!valid&&<p className="resume-note">带入条数需填写 1–50 的整数，填好后会自动预览。</p>}
         {(dirty||!!pages.length)&&<p className="resume-note">{dirty&&'当前选择尚未保存。 '}{!!pages.length&&<>已读 {items.filter(item=>item.body_complete).length} / {last.total_items} 条 · {pages.length} 页{last.has_more?' · 还有资料':' · 已完整读取'}</>}</p>}
         <div ref={previewBody} className="resume-preview-scroll" tabIndex={0} role="region" aria-label="续接资料正文">
         {previewError?<div className="resume-empty" role="alert"><p>续接资料读取失败</p><span>{previewError}</span><span>可点击上方“重新预览”重试。</span></div>:!pages.length?<div className="resume-empty"><p>一窗结束，另一窗接起。</p><span>{previewing?'正在读取当前选择…':'勾选要带走的内容，预览会自动更新。'}</span></div>:<>

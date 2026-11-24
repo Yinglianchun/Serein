@@ -22,7 +22,7 @@ def tools_for(settings):
         tools['dream_read'] = dream_read
     if enabled['window_shadows']:
         def window_shadow_read(index: StrictInt | StrictStr = 1) -> str:
-            """Read complete retained window shadows by newest-first position: 1 is newest, 2 previous; omit index for newest. Use index=\"1,3,5\" to read several (at most 20). Deleted shadows do not occupy a position; positions shift after saving. Returns positions, never IDs. Reading never writes or updates introductions."""
+            """Read complete retained window shadows by newest-first position: 1 is newest, 2 previous; omit index for newest. Use index=\"1,3,5\" to read several (at most 20). Deleted shadows do not occupy a position; positions shift after saving. Returns positions, never IDs. The newest shadow includes missing portraits from their most recent nonempty windows. Older positions return the authored text."""
             if not read_settings(settings.database)['features']['window_shadows']:
                 raise ValueError('Window shadows are disabled')
             from ..compat.work_reads import read_works

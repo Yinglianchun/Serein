@@ -186,7 +186,7 @@ def test_append_total_body_limit_remains_1500_and_preserves_old_body_on_overflow
         assert len(body)<=1500 and body.startswith(old+'\n\n')
 
 
-@pytest.mark.parametrize('old_chars', [1498, 1500])
+@pytest.mark.parametrize('old_chars', [1497, 1492, 1449, 1498, 1500])
 def test_full_old_body_stays_active_and_new_sources_form_a_followup(settings, old_chars):
     ingest(settings)
     with Store(settings.database) as store:

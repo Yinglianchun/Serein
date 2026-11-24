@@ -237,9 +237,17 @@ export function DiaryPage() {
   useEffect(() => {
     if (!darkroomOpen) return undefined;
     let cancelled = false;
-    const refresh = () => loadDiarySnapshot().then((snapshotEntries) => {
-      if (!cancelled && Array.isArray(snapshotEntries)) setEntries(sortEntries(snapshotEntries));
-    });
+    let pending = false;
+    const refresh = async () => {
+      if (document.hidden || pending) return;
+      pending = true;
+      try {
+        const snapshotEntries = await loadDiarySnapshot();
+        if (!cancelled && Array.isArray(snapshotEntries)) setEntries(sortEntries(snapshotEntries));
+      } finally {
+        pending = false;
+      }
+    };
     const onVisible = () => { if (!document.hidden) { setDarkroomClock(Date.now()); refresh(); } };
     refresh();
     const refreshTimer = window.setInterval(refresh, 15000);
@@ -789,7 +797,7 @@ export function DiaryPage() {
                     </div>
                   ) : (
                     <div className="darkroom-open-room__empty">
-                      <BookOpenText size={25} weight="light" aria-hidden="true" />
+                      <DarkroomTitle />
                       <h3>这里还没有信。</h3>
                       <p>留给以后的话，会在这里等着。</p>
                     </div>

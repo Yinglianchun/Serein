@@ -69,9 +69,14 @@ def test_passage_settings_are_optional_strict_and_independent(deployment):
     from serein.deployment import save_settings
     settings,client=deployment
     initial=client.get('/v1/settings').json()
-    assert initial['recall']=={'direct_threshold':.65,'body_candidate_threshold':.5,
-                               'cue_candidate_threshold':.55,'direct_pool_limit':20,'passages_enabled':False,'passage_min_chars':500,
-                               'embedding_batch_size':16,'embedding_concurrency':1,'index_catch_up':False}
+    expected_defaults = {
+        'direct_threshold': .65, 'body_candidate_threshold': .5, 'cue_candidate_threshold': .55,
+        'direct_pool_limit': 20, 'passages_enabled': False, 'passage_min_chars': 500,
+        'embedding_batch_size': 16, 'embedding_concurrency': 1, 'index_catch_up': False,
+        'cooldown_mode': 'rounds', 'cooldown_rounds': 5, 'cooldown_hours': 24,
+    }
+    for key, value in expected_defaults.items():
+        assert initial['recall'][key] == value, key
     enabled=client.patch('/v1/settings',json={'recall':{'passages_enabled':True,'passage_min_chars':800}})
     assert enabled.status_code==200
     client.patch('/v1/settings',json={'recall':{'direct_threshold':.6}})
@@ -125,9 +130,8 @@ def test_candidate_thresholds_default_persist_and_survive_old_client_updates(dep
     assert saved.json()['recall']['direct_threshold']==.62
     client.patch('/v1/settings',json={'recall':{'direct_threshold':.61}}).raise_for_status()
     current=client.get('/v1/settings').json()['recall']
-    assert current=={'direct_threshold':.61,'body_candidate_threshold':.47,
-                     'cue_candidate_threshold':.59,'direct_pool_limit':20,'passages_enabled':False,'passage_min_chars':500,
-                     'embedding_batch_size':16,'embedding_concurrency':1,'index_catch_up':False}
+    assert current == {**initial['recall'], 'direct_threshold': .61,
+                       'body_candidate_threshold': .47, 'cue_candidate_threshold': .59}
     assert effective_settings(settings).recall['body_candidate_threshold']==.47
     assert not (settings.database.parent/'model-indexes').exists()
     for field in ('body_candidate_threshold','cue_candidate_threshold'):

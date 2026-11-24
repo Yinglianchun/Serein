@@ -81,6 +81,48 @@ def test_template_import_and_shared_task_choices(deployment):
     assert isinstance(BackgroundJobs(settings,features={'dreams'}).dreams.client,TaskClient)
 
 
+@pytest.mark.parametrize('code,reason', [(403,'index_configuration_or_contract_error'), (200,'embedding_invalid_response')])
+def test_index_status_distinguishes_missing_selection_and_provider_response(deployment, monkeypatch, code, reason):
+    _, client = deployment
+    def status():
+        return client.get('/v1/settings/index-status').json()
+
+    calls = []
+    def respond(self, request):
+        calls.append(str(request.url))
+        return httpx.Response(code, text='synthetic-private-body')
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', respond)
+    assert client.post('/v1/settings/prepare-memory').status_code == 400
+    state = status()
+    assert state['reason'] == 'embedding_not_selected' and not calls
+    assert client.post('/v1/settings/resume-index', json={'confirm':'RESUME_INDEX_EMBEDDING',
+                       'recovery_token':state['recovery_token']}).status_code == 200
+    assert client.patch('/v1/settings', json={'upstreams':upstreams(), 'assignments':{'embedding':'a-smart'}}).status_code == 200
+    assert client.post('/v1/settings/prepare-memory').status_code == 400
+    state = status()
+    assert calls == ['https://a.example/v1/embeddings']
+    assert state['reason'] == reason and state['status'] == 'paused'
+    assert state.get('provider_http_status') == (403 if code == 403 else None)
+    assert 'synthetic-private-body' not in json.dumps(state)
+
+
+def test_template_explains_url_and_binding_errors_separately(deployment):
+    _, client = deployment
+    def submit(url, models):
+        template = {'gateway': {'upstreams': [{'name':'example', 'base_url':url, 'models':models}]}}
+        return client.post('/v1/settings/upstreams-template', json={'template':json.dumps(template)})
+
+    url = 'https://example.invalid/v1'
+    invalid = submit('image[' + url + ']', ['one'])
+    assert invalid.status_code == 400 and 'base_url' in invalid.json()['detail']
+    assert url not in invalid.text
+    assert submit(url, ['one']).status_code == 200
+    assert client.patch('/v1/settings', json={'assignments':{'writer':'one'}}).status_code == 200
+    missing = submit(url, ['two'])
+    assert missing.status_code == 400 and 'Narrative Writer' in missing.json()['detail']
+    assert client.get('/v1/settings').json()['assignments']['writer'] == 'one'
+
+
 def test_upstream_keys_survive_save_and_alias_conflicts_are_atomic(deployment):
     settings,client=deployment
     client.patch('/v1/settings',json={'upstreams':upstreams()})
@@ -201,3 +243,37 @@ def test_duplicate_display_names_are_rejected_and_distinct_secrets_not_merged(de
     assert len(page['upstreams'])==2
     assert task_model(settings.database,'chat',requested='one')['api_key']=='secret-one'
     assert task_model(settings.database,'chat',requested='two')['api_key']=='secret-two'
+
+
+
+def test_opencode_go_session_is_optional_and_scoped_to_stable_chat_windows(deployment, monkeypatch):
+    _, client = deployment
+    go = {'id':'go','name':'Go','base_url':'https://opencode.ai/inference/go/openai/v1',
+          'opencode_go_session':True,'models':['go-model']}
+    ordinary = {'name':'Other','base_url':'https://ordinary.invalid/v1','models':['ordinary-model']}
+    client.patch('/v1/settings', json={'upstreams':[go,ordinary]}).raise_for_status()
+    bad = client.patch('/v1/settings',json={'upstreams':[{**go,'base_url':'https://ordinary.invalid/v1'}]})
+    assert bad.status_code == 422
+    headers = []
+    original = httpx.AsyncClient
+
+    def upstream(request):
+        headers.append(request.headers.get('x-opencode-session'))
+        if json.loads(request.content).get('stream'):
+            return httpx.Response(200, text='data: {"choices":[{"index":0,"delta":{"content":"reply"}}]}\n\ndata: [DONE]\n\n')
+        return httpx.Response(200, json={'choices':[{'message':{'role':'assistant','content':'reply'}}]})
+
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs: original(transport=httpx.MockTransport(upstream),**kwargs))
+
+    def chat(model, window='', stream=False):
+        return client.post('/v1/chat/completions', headers={'X-Serein-Window-ID':window} if window else {},
+                           json={'model':model,'messages':[{'role':'user','content':'hello'}],'stream':stream})
+
+    chat('Go/go-model','first').raise_for_status()
+    chat('Go/go-model','first',stream=True).raise_for_status()
+    chat('Go/go-model','second').raise_for_status()
+    chat('Go/go-model').raise_for_status()
+    chat('Other/ordinary-model','first').raise_for_status()
+    assert headers[0].startswith('ses_') and 'first' not in headers[0]
+    assert headers[0] == headers[1] and headers[0] != headers[2]
+    assert headers[3:] == [None,None]

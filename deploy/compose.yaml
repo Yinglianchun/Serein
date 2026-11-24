@@ -15,7 +15,7 @@ services:
     entrypoint: ["python", "-m", "serein.launch"]
     command: ["--config", "/config/config.toml", "http", "--live", "--host", "0.0.0.0", "--port", "8011"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8011/live', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -24,6 +24,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Gateway.Dockerfile
+      args:
+        VITE_SEREIN_COMMIT: ${VITE_SEREIN_COMMIT:-}
     restart: unless-stopped
     depends_on:
       memory:
@@ -39,10 +41,10 @@ services:
     ports:
       - "${SEREIN_BIND:-127.0.0.1}:${SEREIN_PORT:-18217}:8080"
     volumes:
-      - ./secrets:/secrets:ro
+      - ./secrets:/secrets
     networks: [serein]
     healthcheck:
-      test: ["CMD", "node", "--input-type=module", "-e", "const r = await fetch('http://127.0.0.1:8080/ready'); if (!r.ok) process.exit(1)"]
+      test: ["CMD", "node", "--input-type=module", "-e", "const r = await fetch('http://127.0.0.1:8080/live'); if (!r.ok) process.exit(1)"]
       interval: 10s
       timeout: 5s
       retries: 12

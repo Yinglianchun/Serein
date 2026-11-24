@@ -98,6 +98,9 @@ CLIENT_CONTEXT_BLOCK_TITLES = {
 }
 
 
+GATEWAY_PERSONA_SESSION = 'gateway-shared'
+
+
 class PersonaStateEngine:
     """
     Maintains a global relationship state plus per-session affect.
@@ -841,6 +844,18 @@ class PersonaStateEngine:
         conn.commit()
         conn.close()
         return state
+
+    def shared_gateway_session(self) -> str:
+        """Seed the shared mood from the most recently updated saved session."""
+        from contextlib import closing
+        session = GATEWAY_PERSONA_SESSION
+        with closing(self._connect()) as conn, conn:
+            columns = ('profile_id, session_id, valence, arousal, tenderness, possessiveness, longing, '
+                       'security, protective_drive, libido, mood_label, session_defensiveness, residue, inner_thought, updated_at')
+            conn.execute(f"""INSERT OR IGNORE INTO persona_session_state ({columns})
+                SELECT {columns.replace('session_id', '?', 1)} FROM persona_session_state
+                WHERE profile_id = ? ORDER BY updated_at DESC, session_id LIMIT 1""", (session, self.profile_id))
+        return session
 
     def _ensure_session_state(self, session_id: str, now: datetime) -> dict:
         conn = self._connect()

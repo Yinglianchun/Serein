@@ -31,6 +31,50 @@ def test_resume_http_toggle_and_persistent_selection_without_mcp_tool(settings):
         assert client.post('/v1/extensions/resume',json={'window_id':'new'}).status_code==404
 
 
+def test_recent_scenes_without_events_preview_save_and_deduplicate(settings):
+    save_settings(settings.database, {'features': {'resume': True}})
+    with Store(settings.database) as store:
+        for i in range(12):
+            store.create(f'scene-{i:02}', 'scene', 'Scene', f'Body {i}', created_at='2026-01-01')
+        store.create('hidden', 'scene', 'Hidden', 'Hidden', lifecycle='archived', created_at='2026-02-01')
+    Personal(settings.database).save('favorite', 'scene-10', {'favorite': True}, document_id='scene-10')
+    draft = {'recent_scenes': True, 'selected_memories': True, 'selected_ids': ['scene-11']}
+    with TestClient(create_app(settings, token='test', live=True), headers={'Authorization':'Bearer test'}) as client:
+        def read(selection):
+            response = client.post('/v1/extensions/resume', json=selection)
+            assert response.status_code == 200, response.text
+            return response.json()
+        assert read({})['total_recent_scenes'] == 0
+        preview = read({'selection': draft})
+        assert preview['total_recent_scenes'] == 10
+        assert [item['id'] for item in preview['items']] == [
+            'scene-10', 'scene-11', *[f'scene-{i:02}' for i in range(2, 10)]]
+        assert [item['body_md'] for item in preview['items'] if item['section']=='recent_scene'] == [
+            f'Body {i}' for i in range(2, 10)]
+        assert client.patch('/v1/settings', json={'resume': draft}).status_code == 200
+        assert read({})['items'] == preview['items']
+
+
+def test_recent_event_and_scene_limits_are_independent_in_preview_and_saved_resume(settings):
+    save_settings(settings.database, {'features': {'resume': True}, 'resume': {'recent_scenes': True}})
+    with Store(settings.database) as store:
+        for kind in ('scene', 'event'):
+            for i in range(12):
+                store.create(f'{kind}-{i:02}', kind, kind, str(i), created_at='2026-01-01')
+    with TestClient(create_app(settings, token='test', live=True), headers={'Authorization':'Bearer test'}) as client:
+        def counts(body):
+            result = client.post('/v1/extensions/resume', json=body).json()
+            return result['total_recent_events'], result['total_recent_scenes']
+        draft = {'recent_event_limit': 2, 'recent_scene_limit': 11}
+        assert counts({'selection': draft}) == (2, 11)
+        assert counts({}) == (10, 10)
+        assert client.patch('/v1/settings', json={'resume': draft}).status_code == 200
+        assert counts({}) == (2, 11)
+        for key in draft:
+            for invalid in (0, 51, 1.5, True):
+                assert client.patch('/v1/settings', json={'resume': {key: invalid}}).status_code == 422
+
+
 def test_draft_resume_preview_pages_without_saving_or_changing_tool_selection(settings):
     save_settings(settings.database,{'features':{'resume':True},'resume':{'mode':'mcp',
         'latest_shadow':False,'recent_events':False,'favorite_scenes':False,'pending_originals':False}})
@@ -261,6 +305,28 @@ def test_latest_shadow_introductions_manual_edit_retry_and_older_revision(settin
     with Store(settings.database) as store:store.record_deletion('shadow:b','2026-09-10',{})
     assert shadows.read()['window_id']=='a'
     with pytest.raises(Conflict):shadows.write(**current)
+
+
+def test_latest_shadow_fills_each_view_without_changing_historical_reads(settings):
+    from serein.compat.work_reads import read_works
+    save_settings(settings.database, {'features': {'window_shadows': True, 'resume': True}})
+    shadows = WindowShadows(settings.database)
+    shadows.write('a','First',content='## 我眼中的你\nLegacy portrait\n## 这一窗发生的事\nOld event')
+    shadows.write('b','Second',self_view='Newer self portrait', recent_events='Intermediate event')
+    shadows.write('c','Third',recent_events='Current event')
+    current = shadows.read('c')['content']
+    rendered = shadows.read()['content']
+    assert rendered.startswith(current)
+    assert '倒数第 3 篇窗影' in rendered and 'Legacy portrait' in rendered
+    assert '倒数第 2 篇窗影' in rendered and 'Newer self portrait' in rendered
+    assert 'Old event' not in rendered and 'Intermediate event' not in rendered
+    assert 'portrait' not in current and 'Legacy portrait' not in read_works(settings.database, 'shadow', 2)
+    assert rendered in read_works(settings.database, 'shadow', 1)
+    resume = Application(settings).contributions.tools['resume']('new')
+    assert next(i['body_md'] for i in resume['items'] if i['kind']=='shadow') == rendered
+    with Store(settings.database) as store:
+        store.record_deletion('shadow:b','2026-11-22',{})
+    assert 'Newer self portrait' not in shadows.read()['content']
 
 
 def test_selected_events_scenes_original_ids_and_pending_toggle(settings):

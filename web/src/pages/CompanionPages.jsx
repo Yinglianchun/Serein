@@ -80,8 +80,9 @@ export function PersonaPage() {
     {data && <>
     <section className="persona-history persona-history--direct" aria-label="心情卡片">
       <div className="persona-toolbar">
-          <div className="companion-actions">{data.sessions.length > 0 && <select aria-label="聊天窗口" disabled={busy} value={data.session_id} onChange={event => { setData(null); setSelectedSession(event.target.value); }}>
-            {data.sessions.map(session => <option key={session.session_id} value={session.session_id}>{session.session_id}{session.mood_label ? ` · ${session.mood_label}` : ""}</option>)}
+          <div className="companion-actions">{data.sessions.length > 0 && <select aria-label="心绪记录范围" disabled={busy} value={selectedSession} onChange={event => { setData(null); setSelectedSession(event.target.value); }}>
+            <option value="">全部心绪</option>
+            {data.sessions.filter(session => session.session_id !== "gateway-shared").map(session => <option key={session.session_id} value={session.session_id}>{session.session_id}{session.mood_label ? ` · ${session.mood_label}` : ""}</option>)}
           </select>}<button type="button" aria-label="刷新心绪" title="刷新" disabled={busy} onClick={() => load()}><ArrowClockwise size={17} aria-hidden="true" /></button></div>
       </div>
       {!events.length && <p className="companion-empty">还没有变化记录。下一场对话之后，再来看一看。{!data.model_configured && <><br /><a href="#settings">配置心绪 ↗</a></>}</p>}

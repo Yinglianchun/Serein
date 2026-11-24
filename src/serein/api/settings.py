@@ -112,6 +112,7 @@ class UpstreamEntry(ModelConnection):
     default_model: str = Field(default='', max_length=200)
     anthropic_version: str = Field(default='2023-06-01', max_length=100, pattern=r'^[^\r\n]+$')
     anthropic_beta: str = Field(default='', max_length=500, pattern=r'^[^\r\n]*$')
+    opencode_go_session: bool = Field(default=False, strict=True)
     models: list[ModelRoute] = Field(default_factory=list, max_length=500)
 
     @field_validator('models', mode='before')
@@ -123,6 +124,9 @@ class UpstreamEntry(ModelConnection):
 
     @model_validator(mode='after')
     def model_list(self):
+        if self.opencode_go_session and (self.protocol != 'openai'
+                or self.base_url != 'https://opencode.ai/inference/go/openai/v1'):
+            raise ValueError('OpenCode Go session requires the official Go Chat Completions base URL')
         if not self.models and not self.default_model:
             raise ValueError('Each upstream needs a model list or default_model')
         return self
@@ -167,9 +171,12 @@ class ResumePatch(BaseModel):
 
     latest_shadow: bool | None = None
     recent_events: bool | None = None
+    recent_scenes: bool | None = None
     favorite_scenes: bool | None = None
     selected_memories: bool | None = None
     recent_originals: bool | None = None
+    recent_event_limit: int | None = Field(default=None, ge=1, le=50, strict=True)
+    recent_scene_limit: int | None = Field(default=None, ge=1, le=50, strict=True)
     recent_original_limit: int | None = Field(default=None, ge=1, le=50, strict=True)
     pending_originals: bool | None = None
     selected_ids: list[str] | None = Field(default=None, max_length=200)
@@ -242,10 +249,14 @@ class RecallPatch(BaseModel):
     embedding_batch_size: int | None = Field(default=None, ge=1, le=64, strict=True)
     embedding_concurrency: int | None = Field(default=None, ge=1, le=4, strict=True)
     index_catch_up: bool | None = Field(default=None, strict=True)
+    cooldown_mode: Literal['rounds', 'hours'] | None = None
+    cooldown_rounds: int | None = Field(default=None, ge=1, le=10000, strict=True)
+    cooldown_hours: int | None = Field(default=None, ge=1, le=10000, strict=True)
 
     @field_validator('direct_threshold', 'body_candidate_threshold', 'cue_candidate_threshold',
                      'direct_pool_limit', 'passages_enabled', 'passage_min_chars',
-                     'embedding_batch_size', 'embedding_concurrency', 'index_catch_up', mode='before')
+                     'embedding_batch_size', 'embedding_concurrency', 'index_catch_up',
+                     'cooldown_mode', 'cooldown_rounds', 'cooldown_hours', mode='before')
     @classmethod
     def reject_null(cls, value):
         if value is None: raise ValueError('Recall settings cannot be null')
@@ -439,7 +450,8 @@ def routes(settings, auth):
         return {**read_settings(settings.database, public=True), 'recall':{key:getattr(policy,key) for key in
                 ('direct_threshold','body_candidate_threshold','cue_candidate_threshold',
                  'direct_pool_limit','passages_enabled','passage_min_chars',
-                 'embedding_batch_size','embedding_concurrency','index_catch_up')},
+                 'embedding_batch_size','embedding_concurrency','index_catch_up',
+                 'cooldown_mode','cooldown_rounds','cooldown_hours')},
                 'memory_ready': status['ready'], 'memory_status':status,
                 'index_status':index_status(settings.database)}
 
@@ -531,10 +543,28 @@ def routes(settings, auth):
             template = yaml.safe_load(body.template)
             gateway = template.get('gateway', template) if isinstance(template,dict) else {}
             if not isinstance(gateway,dict) or 'upstreams' not in gateway:
-                raise ValueError('The template must contain gateway.upstreams')
+                raise HTTPException(400, '请提供包含 gateway.upstreams 列表的 YAML 或 JSON 模板。')
+            if not isinstance(gateway['upstreams'], list):
+                raise HTTPException(400, 'gateway.upstreams 需要填写上游列表。')
             patch = SettingsPatch(upstreams=gateway['upstreams'])
-        except (yaml.YAMLError, ValidationError, ValueError, TypeError):
-            raise HTTPException(400, 'Invalid upstream template; check names, model aliases and connection settings') from None
+        except yaml.YAMLError as error:
+            mark = getattr(error, 'problem_mark', None)
+            where = f'（第 {mark.line + 1} 行附近）' if mark else ''
+            raise HTTPException(400, f'模板语法有误{where}，请检查缩进，并只粘贴 YAML 或 JSON 内容。') from None
+        except ValidationError as error:
+            location = error.errors(include_input=False, include_context=False)[0]['loc']
+            where = f'第 {location[1] + 1} 个上游' if len(location) > 1 and isinstance(location[1], int) else '上游列表'
+            if location[-1] == 'base_url':
+                message = '请在 base_url 填写纯 HTTP(S) 地址，去掉链接标记、账号密码、查询参数和片段。'
+            elif location[-1] == 'name':
+                message = '请填写有效的上游名称。'
+            elif 'models' in location:
+                message = '请检查 models 列表，每项填写模型号，或包含 id 和 upstream_model 的对象。'
+            else:
+                message = '请对照模板检查必填项、字段名称和取值。'
+            raise HTTPException(400, f'{where}配置有误。{message}') from None
+        except (ValueError, TypeError):
+            raise HTTPException(400, '模板中存在无效的字段值，请对照示例检查。') from None
         return save(patch, response)
 
     return router

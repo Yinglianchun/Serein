@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { scryptSync } from 'node:crypto';
@@ -22,12 +22,12 @@ test('gateway separates web auth from API auth, saves settings and streams respo
   writeFileSync(join(dir,'auth.json'),record('password-one'));writeFileSync(join(dir,'token'),'synthetic-api-key');
   const requests=[];
   const core=http.createServer((req,res)=>{
-    if(req.url==='/health'){res.setHeader('Content-Type','application/json');res.end('{"status":"ok"}');return;}
+    if(['/live','/health'].includes(req.url)){requests.push({path:req.url});res.setHeader('Content-Type','application/json');res.end('{"status":"ok"}');return;}
     requests.push({path:req.url,auth:req.headers.authorization,method:req.method,forwardedHost:req.headers['x-forwarded-host'],forwardedProto:req.headers['x-forwarded-proto'],protocol:req.headers['mcp-protocol-version']});
     if(req.url.startsWith('/.well-known/oauth-') || ['/authorize','/token','/register'].includes(req.url)){
       res.writeHead(req.url==='/register'?201:200,{'Content-Type':'application/json'});res.end('{"oauth":true}');return;
     }
-    if(req.headers.authorization!=='Bearer synthetic-api-key'){res.writeHead(401);res.end('{}');return;}
+    if(req.headers.authorization!=='Bearer '+readFileSync(join(dir,'token'),'utf8').trim()){res.writeHead(401);res.end('{}');return;}
     if(req.url==='/v1/extensions/resume'){
       let raw='';req.on('data',chunk=>raw+=chunk);req.on('end',()=>{
         requests.push({path:req.url,body:JSON.parse(raw)});
@@ -99,6 +99,8 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     assert.ok(started,output);
     assert.equal((await fetch(base)).status,401);
     assert.equal((await fetch(base+'/ready')).status,200);
+    assert.equal((await fetch(base+'/live')).status,200);
+    assert.deepEqual(requests.filter(r=>['/health','/live'].includes(r.path)).map(r=>r.path),['/health','/live']);
     for(const [path,method] of [['/.well-known/oauth-protected-resource','GET'],['/.well-known/oauth-authorization-server','GET'],['/register','POST'],['/authorize','GET'],['/token','POST']]){
       const response=await fetch(base+path,{method,headers:method==='POST'?{'Content-Type':'application/json'}:{},body:method==='POST'?'{}':undefined});
       assert.ok([200,201].includes(response.status));
@@ -129,7 +131,7 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     assert.ok(requests.some(r=>r.path==='/v1/settings/models/discover'&&r.method==='POST'&&r.auth==='Bearer synthetic-api-key'));
     assert.equal((await fetch(base+'/__serein/settings/models/discover',{method:'POST',headers:{...auth,'Content-Type':'application/json',Origin:'https://foreign.invalid'},body:'{}'})).status,403);
     assert.equal((await fetch(base+'/__serein/settings',{method:'PATCH',headers:{...auth,'Content-Type':'application/json',Origin:'https://foreign.invalid'},body:'{}'})).status,403);
-    for(const path of ['/__serein/pipeline/status','/__serein/pipeline/attempts/1','/__serein/pipeline/pending/17']){
+    for(const path of ['/__serein/pipeline/status','/__serein/pipeline/progress','/__serein/pipeline/attempts/1','/__serein/pipeline/pending/17']){
       assert.equal((await fetch(base+path,{headers:auth})).status,200);
       assert.ok(requests.some(r=>r.path===path.replace('/__serein/','/v1/')&&r.method==='GET'));
     }
@@ -318,6 +320,22 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     const reader=stream.body.getReader();const first=new TextDecoder().decode((await reader.read()).value);
     assert.ok(first.includes('part')&&!first.includes('[DONE]'));
     const second=new TextDecoder().decode((await reader.read()).value);assert.ok(second.includes('[DONE]'));
+    const keyAction = (action, headers=postHeaders) => fetch(base+'/__serein/gateway-key/'+action,
+      {method:'POST', headers, body:'{}'});
+    assert.equal((await keyAction('copy', {'Content-Type':'application/json', Origin:base})).status,401);
+    assert.equal((await keyAction('rotate', {...postHeaders,Origin:'https://unrelated.example'})).status,403);
+    const copy = await keyAction('copy');
+    assert.equal(copy.headers.get('cache-control'),'no-store');
+    assert.deepEqual(await copy.json(),{key:'synthetic-api-key'});
+    const rotation = await keyAction('rotate');
+    assert.equal(rotation.status,200);
+    assert.deepEqual(await rotation.json(),{status:'rotated'});
+    const replacement = (await (await keyAction('copy')).json()).key;
+    assert.match(replacement,/^[A-Za-z0-9_-]{48}$/);
+    assert.equal((await fetch(base+'/v1/models',{headers:{Authorization:'Bearer synthetic-api-key'}})).status,401);
+    assert.equal((await fetch(base+'/v1/models',{headers:{Authorization:'Bearer '+replacement}})).status,200);
+    assert.equal((await fetch(base+'/__serein/settings',{headers:auth})).status,200);
+    assert.ok(!(await (await fetch(base,{headers:auth})).text()).includes(replacement));
     writeFileSync(join(dir,'auth.json'),record('password-two'));
     assert.equal((await fetch(base,{headers:auth})).status,401);
     assert.equal((await fetch(base,{headers:{Authorization:basic('password-two')}})).status,200);
