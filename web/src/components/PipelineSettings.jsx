@@ -1,7 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {ConversationImport} from './ConversationImport.jsx';
 import {instanceSettings} from '../storage/instanceStore.js';
-import {PendingMaterials} from './PendingMaterials.jsx';
+import {PendingMaterials,displayPipelineReason} from './PendingMaterials.jsx';
 
 function progressMessage(report) {
   if(report.stage==='done')return '已完成整理。';
@@ -171,13 +171,6 @@ export function PipelineSettings({onOpenSummary,active=true}) {
     const url=URL.createObjectURL(new Blob([JSON.stringify(task,null,2)],{type:'application/json'}));
     const link=document.createElement('a');link.href=url;link.download=task.role+'-task.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
-  async function downloadAttempt(id){
-    try{
-      const result=await call('attempts/'+id);
-      const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
-      const link=document.createElement('a');link.href=url;link.download='pipeline-attempt-'+id+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-    }catch(error){setStatus(error.message);}
-  }
   async function submit() {
     setBusy(true);
     try {const saved=await call('submit',{job_id:task.job_id,output:JSON.parse(output)});setTask(null);setOutput('');accept(await call('next',{include_recent:true}));setStatus(saved.status==='host_deferred'?'Curator 再次遗漏原话，所在审阅范围已留待下轮；原话没有跳过。':'结果已校验并保存，后台继续下一步。');}
@@ -201,23 +194,23 @@ export function PipelineSettings({onOpenSummary,active=true}) {
       {candidateOverflows.map(item=><p key={item.track_id} className="import-error">Track <code>{item.track_id}</code> 有 {item.eligible_active_leaf_count} 条 active Event leaves，超过上限 {item.limit}；本批未调用 Curator 或 Writer。请先归档误归线或不再需要的 Event，或人工安全合并相关 leaves。</p>)}
       {work.result?.skipped>0&&<p>本批跳过 {work.result.skipped} 条原话，原始记录仍保留。</p>}
       {work.result?.missing_images?.length>0&&<p>已跳过 {work.result.missing_images.length} 个缺失的图片附件；原话文字保留，未猜补图片内容。</p>}
-      {(work.failed_images||[]).map(image=><p className="import-error" key={image.sha256}>
-        图片 {image.sha256.slice(0,8)} 转录失败三次，已暂停自动重试；依赖它的原话仍保留。
-        <button type="button" disabled={busy||running} onClick={()=>retryImage(image.sha256)}>重试这张图片</button></p>)}
+      {work.failed_images?.length>0&&<details className="settings-disclosure"><summary>图片转录记录（{work.failed_images.length}）</summary>
+        <p>缺少转录的图片只记录张数，文字照常参与整理。</p>
+        {work.failed_images.map(image=><p key={image.sha256}>图片 {image.sha256.slice(0,8)}{' '}
+          <button type="button" disabled={busy||running} onClick={()=>retryImage(image.sha256)}>重试这张图片</button></p>)}
+      </details>}
       {holds.filter(item=>item.hold_status!=='paused_failure').map(item=><p className="import-error" key={item.batch_id}>
-        聊天 <code>{item.scope}</code>：{item.hold_status==='needs_repair'?(item.repair_kind==='runtime_contract'?'旧计划版本已变化':'归线证据待修复'):item.hold_status==='retry_wait'?'等待有限重试':'归线尚未完成'}。{item.repair_kind==='runtime_contract'?'重新校验不会迁移旧计划；请先查看重建确认。':item.reason}
+        聊天 <code>{item.scope}</code>：{item.hold_status==='needs_repair'?(item.repair_kind==='runtime_contract'?'旧计划版本已变化':'归线证据待修复'):item.hold_status==='retry_wait'?'等待有限重试':'归线尚未完成'}。{item.repair_kind==='runtime_contract'?'重新校验不会迁移旧计划；请先查看重建确认。':displayPipelineReason(item.reason)}
         {item.next_retry_at&&<> 下次重试：{new Date(item.next_retry_at).toLocaleString()}。</>}
         {' '}原文保留，此聊天按序等待，其他聊天可继续；当日尚未全部结算。
         {item.hold_status==='needs_repair'&&<button type="button" disabled={busy||running} onClick={()=>beginRebuild(item.batch_id)}>查看重建确认</button>}
         {recoveryButtons(item.batch_id)}
       </p>)}
-      {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批已暂停：{batch.reason}。同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button>{recoveryButtons(batch.batch_id)}</p>)}
+      {(work.paused_batches||[]).map(batch=><p className="import-error" key={batch.batch_id}>本批已暂停：{displayPipelineReason(batch.reason)} 同一聊天的后续整理等待它恢复，其他聊天可继续。<button type="button" disabled={busy||running} onClick={()=>retryBatch(batch.batch_id)}>重试此批次</button>{recoveryButtons(batch.batch_id)}</p>)}
       {failedBatch&&<p className="import-error">批次：<code>{failedBatch}</code>。{recoveryButtons(failedBatch)}</p>}
-      {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{failure}</p>}
+      {failure&&<p className="import-error">{needsRepair?'待修复原因':'失败原因'}：{displayPipelineReason(failure)}</p>}
       {needsRepair&&<p>批次：<code>{repairHold?.batch_id||work.result?.batch_id||work.batch_id}</code>。原话与已完成步骤保留。{runtimeContractRepair?'当前程序与冻结旧计划的版本不一致，重新校验不会迁移旧计划。请查看重建确认，明确同意后才重新归线；也可继续整理其他聊天。':'先重新校验以恢复历史归线；无法恢复时，可明确作废本批计划并重新归线。'}不会跳过原话或删除已保存的 Event。</p>}
       {task&&<p>等待 {stages[task.role]||task.role}：下载任务交给 Agent，再提交返回的 JSON。</p>}</div>}
-    {work?.attempts?.length>0&&<details><summary>模型返回与纠错记录</summary>{work.attempts.map(item=><p key={item.id}>
-      第 {item.attempt} 次：{item.error||'校验通过'} · {item.output_chars} 字符 <button type="button" onClick={()=>downloadAttempt(item.id)}>下载返回</button></p>)}</details>}
     <div className="settings-actions"><button type="button" disabled={busy||running} onClick={next}>{running?'后台整理中…':runtimeContractRepair?'继续整理其他聊天':needsRepair?'重新校验并继续':'继续整理'}</button>
       {needsRepair&&<button type="button" disabled={busy||running} onClick={beginRebuild}>{runtimeContractRepair?'查看重建确认':'作废本批计划并重新归线'}</button>}
       {task&&<button type="button" onClick={download}>下载 agent 任务</button>}</div>

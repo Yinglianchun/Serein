@@ -33,7 +33,7 @@ globalThis.fetch=async(url,options={})=>{
   return {ok:true,json:async()=>structuredClone(result)};
 };
 const button=text=>[...document.querySelectorAll('button')].find(node=>node.textContent===text);
-async function render(status){if(root)await act(async()=>root.unmount());requests.length=0;skipped=false;await act(async()=>{root=mount({status,pending_materials:[item]});});}
+async function render(status,attempts=[]){if(root)await act(async()=>root.unmount());requests.length=0;skipped=false;await act(async()=>{root=mount({status,attempts,pending_materials:[item]});});}
 async function click(text){await act(async()=>{button(text).click();});}
 after(async()=>{if(root)await act(async()=>root.unmount());dom.window.close();stop();for(const c of channels){c.port1.close();c.port2.close();}globalThis.MessageChannel=NativeChannel;await rm(directory,{recursive:true,force:true});});
 test('pending summaries do not fetch originals until explicitly opened',async()=>{
@@ -60,6 +60,24 @@ test('locating the longest original opens its complete text and focuses the corr
   const message=document.querySelector('[data-raw-id="102"]');
   assert.equal(message.querySelector('details').open,true);
   assert.equal(message.querySelector('pre').textContent.length,2000);
+});
+
+test('attempt history shows the recorded model and prompt and opens only its own batch',async()=>{
+  const attempt={id:42,batch_id:'synthetic',role:'track_router:0',model:'previous-model',prompt_chars:90000,
+    attempt:1,output_chars:0,error:'Upstream returned HTTP 400'};
+  await render('completed',[attempt]);
+  const history=document.querySelector('summary').parentElement;
+  history.open=true;
+  assert.match(history.textContent,/上游拒绝了归线请求/);
+  assert.match(history.textContent,/previous-model/);
+  assert(history.textContent.includes((90000).toLocaleString()));
+  assert.match(history.textContent,/本批 2 条原话/);
+  assert.equal(requests.length,0);
+  await click('查看最长原话');
+  assert.equal(document.activeElement.dataset.rawId,'102');
+  await render('completed',[{...attempt,batch_id:'other',model:null,prompt_chars:null}]);
+  assert.equal(button('查看最长原话'),undefined);
+  assert(!document.querySelector('summary').parentElement.textContent.includes('请求提示词'));
 });
 
 test('skipping is limited to the selected batch and requires a preview plus confirmation',async()=>{

@@ -5,6 +5,20 @@ const roleNames={user:'你',assistant:'AI',tool:'工具',system:'系统'};
 const stageName=role=>({track_router:'归线',event_curator:'切分',event_writer:'Event 写作'}[role?.split(':')[0]]||role||'尚未调用模型');
 const dateLabel=value=>formatSourceTime(value,{includeYear:true});
 
+export function displayPipelineReason(reason) {
+  return reason==='每张输入图片必须恰有一份 image_transcriptions 转录'
+    ?'模型返回的转录条数与输入图片数不符。':reason;
+}
+
+function AttemptSummary({attempt}) {
+  const stage=stageName(attempt.role);
+  const reason=attempt.error==='Upstream returned HTTP 400'
+    ?`上游拒绝了${stage}请求（HTTP 400），没有收到模型正文。`:displayPipelineReason(attempt.error);
+  return <>{stage}{attempt.attempt?` · 第 ${attempt.attempt} 次记录`:''}{attempt.model&&` · 模型 ${attempt.model}`}
+    {attempt.prompt_chars!=null&&` · 请求提示词 ${attempt.prompt_chars.toLocaleString()} 字符`}<br/>
+    {reason||'校验通过'}{(attempt.output_chars>0||!reason)&&` · 输出 ${attempt.output_chars??0} 字符`}</>;
+}
+
 export function PendingMaterials({work,onChange,onStatus,id}) {
   const [items,setItems]=useState([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[detail,setDetail]=useState(null);
   const [preview,setPreview]=useState(null),[limit,setLimit]=useState(5000),[notice,setNotice]=useState('');
@@ -51,6 +65,13 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
     catch(e){if(sequence===readSequence.current)setError(e.message);}
     finally{if(sequence===readSequence.current)setLoadingId(null);}
   }
+  async function downloadAttempt(id){
+    try{
+      const result=await call('attempts/'+id);
+      const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));
+      const link=document.createElement('a');link.href=url;link.download='pipeline-attempt-'+id+'.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(e){setError(e.message);}
+  }
   async function continueWork(message){
     setNotice(message);setDetail(null);
     try{await call('next',{include_recent:true});}
@@ -84,8 +105,18 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
   const open=items.filter(item=>['open','running'].includes(item.status));
   const finished=items.filter(item=>!['open','running'].includes(item.status));
   const lastOutput=detail?.last_error||detail?.last_attempt;
+  const attempts=(work??observedWork)?.attempts||[];
+  const attemptBatch=attempts.length?items.find(item=>item.batch_id===attempts[0].batch_id):null;
+  const longest=attemptBatch?.locator?.longest_message;
   return <section id={id} className="settings-group pending-materials" aria-label="待处理材料" tabIndex={-1}><div className="settings-group__heading"><h3>待处理材料</h3>
     <p>先核对是哪段聊天，再处理这一批。这里保留原话、错误输出与已完成步骤，尚未补写的内容不会作为新 Event 保存。</p></div>
+    {attempts.length>0&&<details><summary>模型返回与纠错记录</summary>
+      {attemptBatch&&<p>本批 {attemptBatch.originals} 条原话，共 {attemptBatch.original_chars.toLocaleString()} 字符
+        {longest&&<>{` · 最长一条 ${longest.chars.toLocaleString()} 字符 `}<button type="button" className="settings-link"
+          disabled={loadingId===attemptBatch.id} onClick={()=>read(attemptBatch.id,longest.id)}>查看最长原话</button></>}</p>}
+      {attempts.map(attempt=><p key={attempt.id}><AttemptSummary attempt={attempt}/>{' '}
+        <button type="button" onClick={()=>downloadAttempt(attempt.id)}>下载返回</button></p>)}
+    </details>}
     {!open.length&&<p>暂无待处理材料。</p>}
     {open.length>0&&<p className="pending-materials__notice">有 {open.length} 批材料待处理。下方字符数是原话长度；“本次提示词”还包含规则和候选内容。</p>}
     {open.map(item=><article key={item.id} className="pending-material" aria-label={`待办 ${item.id}`}><h4>待办 {item.id} · {item.kind==='writing'?'已切分待补写':'待归线／切分修复'}</h4>
@@ -98,8 +129,8 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
         {item.locator.longest_message&&<p className="pending-material__meta">最长原话：{roleNames[item.locator.longest_message.role]||item.locator.longest_message.role} · raw:{item.locator.longest_message.id} · {item.locator.longest_message.chars.toLocaleString()} 字符{' '}
           <button type="button" className="settings-link" disabled={loadingId===item.id} onClick={()=>read(item.id,item.locator.longest_message.id)}>定位这条原话</button></p>}
       </>}
-      <p className="pending-material__reason">{item.reason}</p>
-      {item.last_attempt&&<p>最后步骤：{stageName(item.last_attempt.role)}{item.last_attempt.attempt?` · 第 ${item.last_attempt.attempt} 次记录`:''} · {item.last_attempt.error||'已返回结果'} · 输出 {item.last_attempt.output_chars} 字符</p>}
+      {item.reason!==item.last_attempt?.error&&<p className="pending-material__reason">{displayPipelineReason(item.reason)}</p>}
+      {item.last_attempt&&<p>最后步骤：<AttemptSummary attempt={item.last_attempt}/></p>}
       <div className="settings-actions"><button type="button" disabled={loadingId===item.id} onClick={()=>read(item.id)}>{loadingId===item.id?'正在读取原话…':'查看原话与最后输出'}</button>
         <button type="button" disabled={busy||running||item.status==='running'} onClick={()=>resume(item.id)}>从失败步骤继续</button>
         <button type="button" disabled={busy||running||item.status==='running'} onClick={()=>resume(item.id,true)}>{item.kind==='unrouted'?'重新归线':'重新切分，保留归线'}</button>
@@ -120,7 +151,7 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
     {finished.length>0&&<details><summary>已处理记录（{finished.length}）</summary>{finished.map(item=><p key={item.id}>待办 {item.id} · {item.status==='resolved_routing'?'已恢复归线':item.status==='resolved_skipped'?'已手动跳过，原话保留':item.resolved_event_ids.length?'已保存／承接为 '+item.resolved_event_ids.join('、'):'已处理'} <button type="button" onClick={()=>read(item.id)}>查看记录</button></p>)}</details>}
     {detail&&<section className="pending-material-detail" ref={material} tabIndex={-1} aria-label={`待办 ${detail.id} 的原话与最后输出`}>
       <header><h4>待办 {detail.id} 的原话与最后输出</h4><button type="button" onClick={()=>{readSequence.current++;setDetail(null);}}>收起材料</button></header>
-      <p>{detail.reason}</p>
+      <p>{displayPipelineReason(detail.reason)}</p>
       <h5>这一批原话</h5>
       <p className="pending-material__meta">按原话顺序展示，长消息可展开全文。{detail.originals??detail.messages.length} 条 · {detail.original_chars?.toLocaleString()??'—'} 字符。</p>
       <div className="pending-originals">{detail.messages.map((message,index)=><article key={message.id??index} data-raw-id={message.id} tabIndex={-1}>
@@ -128,7 +159,7 @@ export function PendingMaterials({work,onChange,onStatus,id}) {
         {(message.content||'').length>1200?<details><summary>{message.content.slice(0,160)}… · 展开完整原话（{message.content.length.toLocaleString()} 字符）</summary><pre>{message.content}</pre></details>:<pre>{message.content||'（此条没有文字正文）'}</pre>}
       </article>)}</div>
       <h5>{detail.last_error?'最后一次错误输出':'最后一次模型输出'}</h5>
-      {lastOutput?<><p>{stageName(lastOutput.role)} · {lastOutput.error||'已返回结果'}{lastOutput.created_at?` · ${dateLabel(lastOutput.created_at)}`:''}</p>
+      {lastOutput?<><p>{stageName(lastOutput.role)} · {displayPipelineReason(lastOutput.error)||'已返回结果'}{lastOutput.created_at?` · ${dateLabel(lastOutput.created_at)}`:''}</p>
         {lastOutput.output_text?<pre className="pending-output">{lastOutput.output_text}</pre>:<p>这次没有收到模型输出正文，错误记录已保留。</p>}</>:<p>这批还没有模型返回记录。</p>}
       <details className="settings-disclosure"><summary>阶段结果与技术记录</summary><p>批次编号：<code>{detail.batch_id||'未记录'}</code> · 已保留 {detail.jobs?.filter(job=>job.output!==null).length??0} 个阶段结果。</p><pre className="pending-output">{JSON.stringify(detail,null,2)}</pre></details>
     </section>}

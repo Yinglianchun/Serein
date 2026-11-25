@@ -209,6 +209,42 @@ def pictures(count=3):
             for i in range(count)]
 
 
+@pytest.mark.parametrize('image_model_enabled',[False,True])
+def test_text_with_an_unreadable_attachment_reaches_the_saved_event(settings,monkeypatch,image_model_enabled):
+    save_settings(settings.database,{
+        'models':[{'id':'stub','model':'synthetic','base_url':'http://127.0.0.1:9/v1'}],
+        'assignments':{**{role:'stub' for role in p.ROLES},'image_transcription':'stub' if image_model_enabled else ''},
+        'features':{'image_transcription_async':image_model_enabled,'image_eyes':False},
+        'pipeline':{'execution_mode':'api'},
+    })
+    text='move the book club meeting to Thursday'
+    raw_archive(settings).ingest([
+        {'source_event_id':'mixed','session_id':'books','role':'user','text':text,
+         'created_at':'2025-01-01T00:00:00Z','metadata':{'attachments':[{'kind':'image','url':PNG}]}},
+        {'source_event_id':'reply','session_id':'books','role':'assistant','text':'Thursday works.',
+         'created_at':'2025-01-01T00:01:00Z'},
+    ],source='synthetic')
+    image_tasks=[]
+    async def complete(model,payload):
+        with Store(settings.database,read_only=True) as store:
+            request=json.loads(store.conn.execute('SELECT request_json FROM pipeline_jobs ORDER BY rowid DESC LIMIT 1').fetchone()[0])
+        if request.get('transcription_only'):
+            image_tasks.append(request['execution']['task'])
+            output={'image_transcriptions':[]}
+        else:
+            if request['role'] in ('event_curator','event_writer'):
+                assert text in payload['messages'][1]['content']
+                assert request['images']==[] and request['curator_image_transcriptions']==[]
+            output=output_for(request['role'],request)
+        return {'choices':[{'message':{'content':json.dumps(output)}}]}
+    monkeypatch.setattr('serein.model_runtime.complete',complete)
+    result=asyncio.run(p.advance(settings.database,include_recent=True))
+    assert result['events']==1 and result['processed_originals']==2
+    assert 'track_router' in image_tasks and ('image_transcription' in image_tasks)==image_model_enabled
+    with Store(settings.database,read_only=True) as store:
+        assert text in store.conn.execute('SELECT body FROM fact_events').fetchone()[0]
+
+
 def test_chat_partial_failure_preserves_success_and_only_retries_missing(settings, monkeypatch):
     configure(settings, feature=True)
     urls = pictures()
@@ -301,6 +337,34 @@ def test_waiting_for_transcription_agent_is_pending_not_failed(settings):
     assert task['status'] == 'awaiting_agent' and task['request']['transcription_only']
     message_id = task['request']['images'][0]['source_message_id']
     assert raw_archive(settings).get_event(message_id)['image_transcription_status'] == 'pending'
+
+
+def test_agent_continues_with_original_text_after_image_failures(settings):
+    from serein.image_transcription import FAILURE_LIMIT
+    save_settings(settings.database,{'pipeline':{'execution_mode':'agent'}})
+    text='reschedule the book club meeting to Thursday'
+    raw_archive(settings).ingest([
+        {'source_event_id':'mixed','session_id':'agent','role':'user','text':text,
+         'created_at':'2025-01-01T00:00:00Z','metadata':{'attachments':[{'kind':'image','url':PNG}]}},
+        {'source_event_id':'reply','session_id':'agent','role':'assistant','text':'Agreed.',
+         'created_at':'2025-01-01T00:01:00Z'}],source='synthetic')
+    def next_task():
+        return asyncio.run(p.advance(settings.database,include_recent=True))
+    task=next_task()
+    p.submit(settings.database,task['job_id'],output_for(task['role'],task['request']))
+    for _ in range(FAILURE_LIMIT):
+        task=next_task()
+        assert task['request']['transcription_only']
+        with pytest.raises(ValueError,match='image_transcriptions'):
+            p.submit(settings.database,task['job_id'],{'image_transcriptions':[]})
+    for role in ('event_curator','event_writer'):
+        task=next_task()
+        assert task['role']==role and not task['request'].get('transcription_only')
+        assert text in task['request']['prompt'] and not task['request'].get('images')
+        p.submit(settings.database,task['job_id'],output_for(role,task['request']))
+    assert next_task()['events']==1
+    with Store(settings.database,read_only=True) as store:
+        assert text in store.conn.execute('SELECT body FROM fact_events').fetchone()[0]
 
 
 def test_durable_image_queue_recovers_with_bounded_delayed_retry(settings, monkeypatch):

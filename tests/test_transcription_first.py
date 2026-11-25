@@ -140,7 +140,7 @@ def test_partial_cache_keeps_each_images_original_source_fingerprint(settings):
     assert [row['position'] for row in transcribed_image_receipts(messages, refs)] == [2]
 
 
-@pytest.mark.parametrize('failure', ['transcription', 'download', 'missing', 'unreadable'])
+@pytest.mark.parametrize('failure', ['transcription', 'missing_receipt', 'download', 'missing', 'unreadable'])
 def test_images_without_text_finish_summary_with_count(settings, monkeypatch, failure):
     from test_image_transcription import pictures
     urls = pictures(2)
@@ -163,6 +163,8 @@ def test_images_without_text_finish_summary_with_count(settings, monkeypatch, fa
     seen = []
     async def runner(role, request):
         if request.get('transcription_only'):
+            if failure == 'missing_receipt':
+                return {'image_transcriptions': []}
             if failure == 'unreadable':
                 return {'image_transcriptions': [{'input_image': 1, 'text': '', 'unreadable': True}]}
             raise TimeoutError('Synthetic transcription timeout')
@@ -170,8 +172,8 @@ def test_images_without_text_finish_summary_with_count(settings, monkeypatch, fa
             seen.append(role)
             assert request['images'] == []
             assert request['image_fallbacks'] == [{'source_message_id': 1, 'image_count': 2,
-                'evidence_role': 'owned', 'text': '发了 2 张图片'}]
-            assert '发了 2 张图片' in request['prompt']
+                'evidence_role': 'owned', 'text': 'user 发送了 2 张图'}]
+            assert 'user 发送了 2 张图' in request['prompt']
         output = output_for(role, request)
         if role == 'event_writer':
             sentence = '她发了 2 张图片。'

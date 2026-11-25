@@ -97,6 +97,20 @@ test('paused failure retains its batch retry and continuation calls',async()=>{
   assert(requests.some(item=>item.url.endsWith('/next')));
   assert(!requests.some(item=>item.url.endsWith('/rebuild')));
 });
+test('image history stays collapsed and a paused batch still has its own recovery action',async()=>{
+  const images=['355e6438','70da2a73','674655d8','a30ec923'].map(sha256=>({sha256:sha256.repeat(8),failures:3}));
+  await render({status:'completed',stage:'processed',failed_images:images});
+  const history=button('重试这张图片').closest('details');
+  assert.equal(history.open,false);
+  assert.equal(history.querySelector('summary').textContent,'图片转录记录（4）');
+  assert.equal(document.querySelectorAll('.import-error').length,0);
+  assert(!button('重试此批次'));
+  assert.equal(requests.filter(item=>item.body).length,0);
+  await render({status:'blocked',stage:'blocked',failed_images:images,paused_batches:[
+    {batch_id:'old-batch',reason:'每张输入图片必须恰有一份 image_transcriptions 转录'}]});
+  assert.doesNotMatch(document.body.textContent,/image_transcriptions/);
+  assert.match(button('重试此批次').closest('p').textContent,/本批已暂停.*转录条数/);
+});
 test('each runtime hold is explained when ordinary and runtime repairs coexist',async()=>{
   const value=held();value.blocked_scopes.push({batch_id:'runtime-second',scope:'other',hold_status:'needs_repair',repair_kind:'runtime_contract',reason:'synthetic old version'});
   await render(value);
