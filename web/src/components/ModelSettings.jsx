@@ -186,7 +186,8 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
       if(catalogOnly){
         const result=await instanceSettings({expected_version:config.settings_version,...modelsAndAssignments});
         setConfig(current=>({...current,settings_version:result.settings_version,models:result.models,upstreams:result.upstreams,assignments:result.assignments,
-          memory_ready:result.memory_ready,index_status:result.index_status,upstream:{...current.upstream,memory_enabled:result.upstream.memory_enabled}}));
+          memory_ready:result.memory_ready,index_status:result.index_status,
+          upstream:{...current.upstream,memory_enabled:result.memory_ready?current.upstream.memory_enabled:result.upstream.memory_enabled}}));
         setStatus("上游、模型与各功能的模型选择已保存。");
         return;
       }
@@ -222,7 +223,8 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
         ...(agentDraft!==null?{features:{pipeline_agent:agentDraft}}:{})});
       setConfig(current=>({...current,settings_version:result.settings_version,pipeline:result.pipeline,features:result.features,
         models:result.models,upstreams:result.upstreams,assignments:result.assignments,
-        memory_ready:result.memory_ready,index_status:result.index_status,upstream:{...current.upstream,memory_enabled:result.upstream.memory_enabled}}));
+        memory_ready:result.memory_ready,index_status:result.index_status,
+        upstream:{...current.upstream,memory_enabled:result.memory_ready?current.upstream.memory_enabled:result.upstream.memory_enabled}}));
       setPipelineDraft({});setAgentDraft(null);setStatus('自动摘要设置已保存。');
     } catch(error){setStatus(error.message);}finally{setBusy(false);}
   }

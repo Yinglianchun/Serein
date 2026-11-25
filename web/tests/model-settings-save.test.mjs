@@ -51,6 +51,10 @@ async function withModelSettings(run,initial={}) {
         return {ok:false,status:400,json:async()=>({detail:'A selected model is missing'})};
       if(next.pipeline.execution_mode==='api'&&['track_router','event_curator','event_writer'].some(role=>!next.assignments[role]))
         return {ok:false,status:400,json:async()=>({detail:'Missing API stage model'})};
+      // The replacement embedding has no prepared index in this synthetic fixture.
+      if(next.assignments.embedding!==state.assignments.embedding){
+        state.memory_ready=false;state.upstream.memory_enabled=false;
+      }
       for(const key of ['upstreams','models'])if(key in body)state[key]=body[key];
       for(const key of ['assignments','recall','upstream','pipeline','dream'])Object.assign(state[key],body[key]);
       state.settings_version++;
@@ -176,6 +180,57 @@ function replacementState() {
     models:[{id:'old-model',upstream_model:'old-model'},{id:'embedding',upstream_model:'embedding'},{id:'reranker',upstream_model:'reranker'}]}],
     assignments:Object.fromEntries([...eventTasks,'writer','persona','dreams','narrative_scout','relations','operit_tagging','arc_linker'].map(role=>[role,'old-model']).concat([['embedding','embedding'],['reranker','reranker']])),
     pipeline:{auto_enabled:true,execution_mode:'api',max_prompt_chars:200000,timeout_seconds:600}};
+}
+
+for(const saveButton of ['保存上游与模型','保存自动摘要设置']) {
+  for(const savedEnabled of [true,false]) {
+    test(`${saveButton} preserves an unsaved memory toggle from ${savedEnabled} while the index stays ready`,async()=>{
+      await withModelSettings(async({app,state,saves,field,click})=>{
+        await app.act(async()=>{app.setPage('configuration');});
+        await app.act(async()=>{field('聊天时自动带入记忆').click();});
+        assert.equal(field('聊天时自动带入记忆').checked,!savedEnabled);
+        await app.act(async()=>{app.setPage(saveButton==='保存上游与模型'?'models':'summary');});
+        await click(saveButton);
+        assert.equal('upstream' in saves.at(-1),false,'this save does not submit the memory toggle');
+        assert.equal(state.memory_ready,true);
+        assert.equal(state.upstream.memory_enabled,savedEnabled,'the server retains the previously saved choice');
+        await app.act(async()=>{app.setPage('configuration');});
+        assert.equal(field('聊天时自动带入记忆').disabled,false);
+        assert.equal(field('聊天时自动带入记忆').checked,!savedEnabled,'the local choice survives the cross-page save');
+        await click('保存配置');
+        assert.equal(saves.at(-1).upstream.memory_enabled,!savedEnabled);
+        assert.equal(state.upstream.memory_enabled,!savedEnabled);
+      },{...replacementState(),memory_ready:true,
+        upstream:{memory_enabled:savedEnabled,writer_enabled:false,operit_enabled:false}});
+    });
+  }
+
+  test(`${saveButton} disables memory after a replacement embedding invalidates the index`,async()=>{
+    const initial=replacementState();
+    initial.memory_ready=true;
+    initial.upstream={memory_enabled:false,writer_enabled:false,operit_enabled:false};
+    initial.upstreams[0].models.push({id:'unprepared-embedding',upstream_model:'unprepared-embedding'});
+    await withModelSettings(async({app,state,saves,field,click})=>{
+      await app.act(async()=>{app.setPage('configuration');});
+      await app.act(async()=>{field('聊天时自动带入记忆').click();});
+      assert.equal(field('聊天时自动带入记忆').checked,true,'there is a pending enable choice');
+      await app.act(async()=>{
+        const select=document.querySelector('#task-model-embedding');select.value='unprepared-embedding';
+        select.dispatchEvent(new Event('change',{bubbles:true}));
+      });
+      await app.act(async()=>{app.setPage(saveButton==='保存上游与模型'?'models':'summary');});
+      await click(saveButton);
+      assert.equal(saves.at(-1).assignments.embedding,'unprepared-embedding');
+      assert.equal('upstream' in saves.at(-1),false);
+      assert.equal(state.memory_ready,false);
+      assert.equal(state.upstream.memory_enabled,false);
+      await app.act(async()=>{app.setPage('configuration');});
+      assert.equal(field('聊天时自动带入记忆').disabled,true);
+      assert.equal(field('聊天时自动带入记忆').checked,false,'the unprepared embedding overrides the local enable choice');
+      await click('保存配置');
+      assert.equal(saves.at(-1).upstream.memory_enabled,false,'later saves cannot re-enable memory before preparation');
+    },initial);
+  });
 }
 
 for(const saveButton of ['保存上游与模型','保存配置','保存自动摘要设置']) {
