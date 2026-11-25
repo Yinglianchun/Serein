@@ -13,7 +13,12 @@ from test_pipeline_router_retry_report import configure, transport, invalid_resp
 
 def test_upgraded_batch_can_be_identified_without_loading_or_reprocessing_full_originals(settings, monkeypatch):
     batch_id=legacy_backlog(settings,failed=True)
-    p.initialize(settings.database)
+    with Store(settings.database) as store:
+        # Reproduce the existing table layout before any upgraded worker starts.
+        store.conn.execute('ALTER TABLE pipeline_attempts DROP COLUMN model')
+        store.conn.execute('ALTER TABLE pipeline_attempts DROP COLUMN prompt_chars')
+        job=store.conn.execute('SELECT id FROM pipeline_jobs WHERE batch_id=? ORDER BY rowid DESC LIMIT 1',(batch_id,)).fetchone()[0]
+        store.conn.execute("INSERT INTO pipeline_attempts(job_id,attempt,created_at,output_text,error) VALUES (?,1,'2025-01-01','','Upstream returned HTTP 400')",(job,))
     def forbidden(*args,**kwargs):raise AssertionError('Reading a locator must not invoke a model')
     monkeypatch.setattr('serein.model_runtime.complete',forbidden)
     client=TestClient(create_app(settings,token='synthetic',live=True),headers={'Authorization':'Bearer synthetic'})
@@ -21,6 +26,8 @@ def test_upgraded_batch_can_be_identified_without_loading_or_reprocessing_full_o
     assert result.status_code==200
     item=next(item for item in result.json()['pending_materials'] if item['batch_id']==batch_id)
     locator=item['locator']
+    assert item['last_attempt']['model'] is None and item['last_attempt']['prompt_chars'] is None
+    assert item['last_attempt']['error']=='Upstream returned HTTP 400'
     assert item['can_skip'] is True and item['original_chars']==49870
     assert locator['source']=='synthetic' and locator['session_id']=='upgrade-backlog'
     assert locator['timestamp_source']=='import_time'
@@ -42,22 +49,26 @@ def test_http400_batch_exposes_longest_original_and_can_be_skipped_without_delet
         calls.append(frozen['role'])
         return invalid_response(request,frozen,'http400')
     transport(settings,monkeypatch,reply)
-    for _ in range(3):
-        try:asyncio.run(p.advance(settings.database,include_recent=True))
-        except ValueError:pass
+    result=asyncio.run(p.advance(settings.database,include_recent=True))
+    assert result['status']=='retained'
     client=TestClient(create_app(settings,token='synthetic',live=True),headers={'Authorization':'Bearer synthetic'})
-    item=client.get('/v1/pipeline/status').json()['pending_materials'][0]
+    status=client.get('/v1/pipeline/status').json()
+    item=status['pending_materials'][0]
+    attempt,=status['attempts']
+    assert attempt['batch_id']==item['batch_id'] and attempt['id']==item['last_attempt']['id']
+    assert attempt['prompt_chars']==item['last_attempt']['prompt_chars'] and attempt['model']=='synthetic'
     detail=client.get('/v1/pipeline/pending/'+str(item['id'])).json()
     assert detail['original_chars']==88420
     assert detail['locator']['longest_message']['chars']==44210
-    assert detail['last_error']['output_text']=='' and detail['last_error']['error']=='Upstream returned HTTP 400'
-    assert item['last_attempt']['attempt']==3
+    assert detail['last_error']['output_text']=='' and '上游拒绝了归线请求（HTTP 400）' in detail['last_error']['error']
+    assert item['last_attempt']['attempt']==1 and item['last_attempt']['model']=='synthetic'
+    assert item['last_attempt']['prompt_chars']>item['original_chars']
     preview=client.post('/v1/pipeline/recovery-preview',json={'batch_id':item['batch_id']}).json()
     assert preview['can_rebatch'] is False and preview['originals']==2
     response=client.post('/v1/pipeline/skip-batch',json={'batch_id':item['batch_id'],'confirm':'SKIP_PIPELINE_BATCH'})
     assert response.status_code==200,response.text
     assert response.json()['skipped_originals']==2
-    assert calls==['track_router']*3
+    assert calls==['track_router']
     with Store(settings.database,read_only=True) as store:
         assert store.conn.execute('SELECT sum(length(text)) FROM raw_events').fetchone()[0]==88420
         assert store.conn.execute('SELECT count(*) FROM fact_events').fetchone()[0]==0

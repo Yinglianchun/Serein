@@ -8,6 +8,11 @@ from ..core.store import Store, Conflict, encode, now
 
 
 def initialize(conn):
+    columns={row[1] for row in conn.execute('PRAGMA table_info(pipeline_attempts)')}
+    if columns and 'model' not in columns:
+        conn.execute('ALTER TABLE pipeline_attempts ADD COLUMN model TEXT')
+    if columns and 'prompt_chars' not in columns:
+        conn.execute('ALTER TABLE pipeline_attempts ADD COLUMN prompt_chars INTEGER')
     conn.execute('''CREATE TABLE IF NOT EXISTS pipeline_pending_materials(
         id INTEGER PRIMARY KEY AUTOINCREMENT, batch_id TEXT NOT NULL UNIQUE REFERENCES pipeline_batches(id) ON UPDATE CASCADE ON DELETE CASCADE,
         scope TEXT NOT NULL, status TEXT NOT NULL, kind TEXT NOT NULL,
@@ -115,7 +120,7 @@ def entries(conn, *, limit=100):
 
 
 def last_attempt(conn,batch_id,data,*,compact=False,errors_only=False):
-    columns='a.id,a.attempt,a.created_at,a.error,length(a.output_text) AS output_chars,j.role' if compact else 'a.*,j.role'
+    columns='a.id,a.attempt,a.created_at,a.error,a.model,a.prompt_chars,length(a.output_text) AS output_chars,j.role' if compact else 'a.*,j.role'
     # A resumed completed batch gets a new ID; keep its previous output visible.
     seen=set()
     while batch_id and batch_id not in seen:

@@ -114,13 +114,14 @@ def routes(settings,auth):
                         completed=store.conn.execute("SELECT count(*) FROM pipeline_jobs WHERE batch_id=? AND output_json IS NOT NULL AND json_extract(request_json,'$.role')!='event_evidence'",(row['batch_id'],)).fetchone()[0],
                         error='' if ready else '发现尚未完成的整理阶段，可点击继续；旧版本未保存的错误返回无法还原。')
             value['attempts']=[dict(row) for row in store.conn.execute(
-                'SELECT id,attempt,created_at,error,length(output_text) output_chars FROM pipeline_attempts WHERE job_id=? ORDER BY id DESC LIMIT 5',
-                (value.get('job_id',''),))] if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='pipeline_attempts'").fetchone() else []
+                '''SELECT a.id,a.attempt,a.created_at,a.error,a.model,a.prompt_chars,length(a.output_text) output_chars,j.batch_id,j.role
+                   FROM pipeline_attempts a LEFT JOIN pipeline_jobs j ON j.id=a.job_id
+                   WHERE a.job_id=? AND a.error<>'curator_omission_retry_reset' ORDER BY a.id DESC LIMIT 5''',
+                (value.get('job_id') or (value.get('result') or {}).get('job_id',''),))] if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='pipeline_attempts'").fetchone() else []
         if value.get('blocked_scopes') and value['status'] in ('idle','completed'):
             value.update(status='blocked',stage='blocked')
-        from ..extensions.pipeline_pending import entries,recover_runs,initialize as initialize_pending
+        from ..extensions.pipeline_pending import entries,recover_runs
         with Store(settings.database) as store:
-            initialize_pending(store.conn)
             recover_runs(store.conn,value['status'])
             value['pending_materials']=entries(store.conn) if store.conn.execute("SELECT 1 FROM sqlite_master WHERE name='pipeline_batches'").fetchone() else []
         return value

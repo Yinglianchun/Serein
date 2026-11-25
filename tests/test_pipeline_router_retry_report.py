@@ -58,8 +58,8 @@ def invalid_response(request, frozen, kind):
     return httpx.Response(200, json={'choices': [{'message': {'content': text}}]}, request=request)
 
 
-@pytest.mark.parametrize('kind', ['json', 'coverage', 'context', 'http400'])
-def test_router_stops_after_three_failures_and_retains_originals(settings, monkeypatch, kind):
+@pytest.mark.parametrize(('kind','expected_calls'), [('json',3), ('coverage',3), ('context',3), ('http400',1)])
+def test_router_stops_and_retains_originals(settings, monkeypatch, kind, expected_calls):
     configure(settings)
     calls = []
     def reply(request, frozen):
@@ -73,12 +73,12 @@ def test_router_stops_after_three_failures_and_retains_originals(settings, monke
             continue
         if result['status'] == 'retained':
             break
-    assert len(calls) == 3 and set(calls) == {'track_router'}
+    assert calls == ['track_router'] * expected_calls
     for _ in range(10):
         assert asyncio.run(p.advance(settings.database, include_recent=True))['status'] == 'current'
-    assert len(calls) == 3
+    assert len(calls) == expected_calls
     with Store(settings.database, read_only=True) as store:
-        assert store.conn.execute('SELECT count(*) FROM pipeline_attempts').fetchone()[0] == 3
+        assert store.conn.execute('SELECT count(*) FROM pipeline_attempts').fetchone()[0] == expected_calls
         assert store.conn.execute('SELECT count(*) FROM fact_events').fetchone()[0] == 0
         assert store.conn.execute('SELECT count(*) FROM raw_processing').fetchone()[0] == 0
         assert store.conn.execute('SELECT sum(length(text)) FROM raw_events').fetchone()[0] == 88420
@@ -100,7 +100,37 @@ def test_mixed_errors_share_one_budget_instead_of_restarting_per_error_type(sett
     assert calls == ['json', 'coverage', 'context']
 
 
-def test_daytime_router_http400_keeps_its_budget_across_scheduler_ticks(settings, monkeypatch):
+@pytest.mark.parametrize('role',['track_router','event_curator','event_writer'])
+def test_explicit_resume_after_rejected_correction_uses_new_model(settings,monkeypatch,role):
+    configure(settings)
+    calls=[]
+    def reply(request,frozen):
+        body=json.loads(request.content)
+        calls.append((frozen['role'],body['model'],sum(len(m['content']) for m in body['messages'])))
+        if frozen['role']==role and body['model']=='synthetic':
+            kind='json' if sum(r==role for r,_,_ in calls)==1 else 'http400'
+            return invalid_response(request,frozen,kind)
+        return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(short_output(frozen['role'],frozen))}}]})
+    transport(settings,monkeypatch,reply)
+    result=asyncio.run(p.advance(settings.database,include_recent=True))
+    assert result['status']=='retained'
+    rejected=[(model,size) for stage,model,size in calls if stage==role]
+    assert len(rejected)==2 and rejected[1][1]>rejected[0][1]
+    with Store(settings.database,read_only=True) as store:
+        item=p.pending_materials.entries(store.conn)[0]
+        job_id=result['job_id']
+        history=store.conn.execute('SELECT model,prompt_chars FROM pipeline_attempts WHERE job_id=? ORDER BY id',(job_id,)).fetchall()
+        assert [tuple(row) for row in history]==rejected
+    save_settings(settings.database,{'models':[{'id':'synthetic','model':'replacement','base_url':'https://synthetic.invalid/v1'}]})
+    before=len(calls)
+    assert asyncio.run(p.advance(settings.database,include_recent=True))['status']=='current'
+    assert len(calls)==before
+    p.pending_materials.resume(settings.database,item['id'])
+    assert asyncio.run(p.advance(settings.database,include_recent=True))['events']==1
+    assert calls[before][:2]==(role,'replacement')
+
+
+def test_daytime_router_http400_is_not_retried_across_scheduler_ticks(settings, monkeypatch):
     configure(settings, daytime=True)
     calls = []
     def reply(request, frozen):
@@ -112,7 +142,7 @@ def test_daytime_router_http400_keeps_its_budget_across_scheduler_ticks(settings
         # Advance retry eligibility without actually waiting 5/10 minutes.
         with Store(settings.database) as store:
             store.conn.execute("UPDATE pipeline_batches SET result_json=json_set(result_json,'$.next_retry_at','2000-01-01T00:00:00+00:00') WHERE status='retry_wait'")
-    assert len(calls) == 3
+    assert len(calls) == 1
     with Store(settings.database, read_only=True) as store:
         assert store.conn.execute('SELECT count(*) FROM pipeline_batches').fetchone()[0] == 1
         assert store.conn.execute("SELECT count(*) FROM pipeline_pending_materials WHERE status='open'").fetchone()[0] == 1
@@ -149,8 +179,8 @@ def test_old_2274_attempt_records_do_not_grant_unlimited_new_retries(settings, m
             asyncio.run(p.advance(settings.database, include_recent=True))
         except ValueError:
             pass
-    assert len(calls) == 3
+    assert len(calls) == 1
     with Store(settings.database, read_only=True) as store:
-        assert store.conn.execute('SELECT count(*) FROM pipeline_attempts').fetchone()[0] == 2277
+        assert store.conn.execute('SELECT count(*) FROM pipeline_attempts').fetchone()[0] == 2275
         assert {row[0] for row in store.conn.execute('SELECT DISTINCT job_id FROM pipeline_attempts')} == {key}
-        assert store.conn.execute('SELECT max(attempt) FROM pipeline_attempts').fetchone()[0] == 2277
+        assert store.conn.execute('SELECT max(attempt) FROM pipeline_attempts').fetchone()[0] == 2275

@@ -67,7 +67,7 @@ def initialize(database):
             CREATE TABLE IF NOT EXISTS pipeline_event_details(event_id TEXT PRIMARY KEY,details_json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS pipeline_schedule(day TEXT PRIMARY KEY,completed INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS pipeline_attempts(id INTEGER PRIMARY KEY,job_id TEXT NOT NULL,attempt INTEGER NOT NULL,
-                created_at TEXT NOT NULL,output_text TEXT NOT NULL,error TEXT NOT NULL);
+                created_at TEXT NOT NULL,output_text TEXT NOT NULL,error TEXT NOT NULL,model TEXT,prompt_chars INTEGER);
             CREATE TABLE IF NOT EXISTS pipeline_job_failures(job_id TEXT PRIMARY KEY,failures INTEGER NOT NULL,error TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS pipeline_media(batch_id TEXT NOT NULL,source_message_id INTEGER NOT NULL,
                 position INTEGER NOT NULL,sha256 TEXT NOT NULL,mime_type TEXT NOT NULL,body BLOB NOT NULL,
@@ -75,7 +75,8 @@ def initialize(database):
         ''')
         from .pipeline_recovery import initialize as initialize_recovery
         initialize_recovery(store.conn)
-        pending_materials.initialize(store.conn)
+        with store.transaction(immediate=True):
+            pending_materials.initialize(store.conn)
         from ..image_transcription import initialize_failures
         initialize_failures(store.conn)
         from ..imports import archive_imported_originals
@@ -1146,12 +1147,12 @@ def validate(request,output):
             if errors:raise ValueError('; '.join(errors))
 
 
-def record_attempt(database,job_id,output,error=''):
+def record_attempt(database,job_id,output,error='',*,model=None,prompt_chars=None):
     if not isinstance(output,str):output=encode(output)
     with Store(database) as store,store.transaction(immediate=True):
         number=store.conn.execute('SELECT count(*) FROM pipeline_attempts WHERE job_id=?',(job_id,)).fetchone()[0]+1
-        store.conn.execute('INSERT INTO pipeline_attempts(job_id,attempt,created_at,output_text,error) VALUES (?,?,?,?,?)',
-            (job_id,number,now(),output[:2_000_000],error[:1000]))
+        store.conn.execute('INSERT INTO pipeline_attempts(job_id,attempt,created_at,output_text,error,model,prompt_chars) VALUES (?,?,?,?,?,?,?)',
+            (job_id,number,now(),output[:2_000_000],error[:1000],model,prompt_chars))
 
 
 def curator_omission_attempts(database,job_id):
@@ -1311,13 +1312,14 @@ def stage_failures(database,job_id):
     return row[0] if row else 0
 
 
-def fail_stage(database,batch,job_id,error):
+def fail_stage(database,batch,job_id,error,*,pause_reason=None):
     from ..work_tasks import failure_reason
-    reason=failure_reason(error)
+    reason=pause_reason or failure_reason(error)
     with Store(database) as store,store.transaction(immediate=True):
         store.conn.execute("INSERT INTO pipeline_job_failures VALUES (?,1,?) ON CONFLICT(job_id) DO UPDATE SET failures=failures+1,error=excluded.error",(job_id,reason))
         count=store.conn.execute('SELECT failures FROM pipeline_job_failures WHERE job_id=?',(job_id,)).fetchone()[0]
-        if count>=3:
+        pause=pause_reason is not None or count>=3
+        if pause:
             result={'status':'paused','batch_id':batch['id'],'scope':json.loads(batch['input_json'])['scope'],'job_id':job_id,'reason':reason,'failures':count}
             store.conn.execute("UPDATE pipeline_batches SET status='paused_failure',result_json=? WHERE id=?",(encode(result),batch['id']))
         elif batch['id'].startswith('route:'):
@@ -1326,7 +1328,7 @@ def fail_stage(database,batch,job_id,error):
                     'job_id':job_id,'reason':reason,'failures':count,'next_retry_at':retry_at}
             store.conn.execute("UPDATE pipeline_batches SET status='retry_wait',result_json=? WHERE id=?",
                                (encode(result),batch['id']))
-    if count>=3:raise PausedBatch(reason) from error
+    if pause:raise PausedBatch(reason) from error
 
 
 def retry_batch(database,batch_id):
@@ -1425,18 +1427,20 @@ async def job(database,batch,request,key,runner):
     model=config['models'].get(request.get('execution',{}).get('task',request['role'])) if policy['execution_mode']!='agent' else None
     if model is None and request.get('transcription_only') and policy['execution_mode']!='agent':
         model=config['models'].get('event_curator')
-    if not runner and not model:
+    agent_delivery=not runner and not model
+    image=request['images'][0] if request.get('transcription_only') and len(request.get('images',[]))==1 else None
+    if image:
+        from ..image_transcription import image_failures, record_image_failure, FAILURE_LIMIT
+        # An Agent fallback hands the image to the same executor again.
+        if (agent_delivery or not request.get('transcription_fallback')) and image_failures(database,image['sha256'])>=FAILURE_LIMIT:
+            raise ValueError('图片转录已失败三次，等待手动重试')
+    if agent_delivery:
         task=agent_task(request,identifier,policy['max_prompt_chars'])
         delivery_chars=len(encode(agent_text_task(task)))
         if delivery_chars>policy['max_prompt_chars']:
             raise PromptLimitError(f"当前 Agent 任务完整返回包共 {delivery_chars} 字符，超过 {policy['max_prompt_chars']} 字符上限；"
                              '包含工具任务结构与 JSON 转义，尚未截断或交付。请减小每批材料后重建未完成计划。')
         raise AwaitAgent(task)
-    image=request['images'][0] if request.get('transcription_only') and len(request.get('images',[]))==1 else None
-    if image:
-        from ..image_transcription import image_failures, record_image_failure, FAILURE_LIMIT
-        if not request.get('transcription_fallback') and image_failures(database,image['sha256'])>=FAILURE_LIMIT:
-            raise ValueError('图片转录已失败三次，等待手动重试')
     if runner:
         try:output=await runner(request['role'],request)
         except Exception as error:
@@ -1444,12 +1448,12 @@ async def job(database,batch,request,key,runner):
             else:fail_stage(database,batch,identifier,error)
             raise
     else:
-        from ..model_runtime import complete
+        from ..model_runtime import UpstreamError, complete
         prompt=request['prompt']
         attempts=1 if request.get('transcription_fallback') else FAILURE_LIMIT-image_failures(database,image['sha256']) if image else max(1,3-stage_failures(database,identifier))
         for attempt in range(attempts):
-            progress(attempt=attempt+1,stage=request['role'],
-                     prompt_chars=len(prompt)+len(request['rules']))
+            prompt_chars=len(prompt)+len(request['rules'])
+            progress(attempt=attempt+1,stage=request['role'],prompt_chars=prompt_chars)
             raw='';received=False;output={}
             try:
                 content=([{'type':'text','text':prompt}]+[{'type':'image_url','image_url':{'url':item['url']}} for item in request.get('images',[])]) if request.get('images') else prompt
@@ -1472,12 +1476,18 @@ async def job(database,batch,request,key,runner):
                     raise ValueError('模型未返回最终 JSON 内容'+suffix)
                 output=prepare_stage_output(request,json.loads(raw))
                 validate(request,output)
-                record_attempt(database,identifier,raw)
+                record_attempt(database,identifier,raw,model=model['model'],prompt_chars=prompt_chars)
                 break
             except Exception as error:
                 from ..work_tasks import failure_reason
-                reason=failure_reason(error)
-                record_attempt(database,identifier,raw,reason)
+                rejected=(not request.get('transcription_only') and isinstance(error,UpstreamError)
+                          and error.response.status_code==400)
+                if rejected:
+                    stage={'track_router':'归线','event_curator':'切分','event_writer':'Event 写作'}[request['role']]
+                    reason=f'上游拒绝了{stage}请求（HTTP 400），没有收到模型正文。请检查该阶段的模型、输入长度和请求格式。'
+                else:
+                    reason=failure_reason(error)
+                record_attempt(database,identifier,raw,reason,model=model['model'],prompt_chars=prompt_chars)
                 progress(error=reason,attempt=attempt+1)
                 if isinstance(error,latest.CuratorCoverageError):
                     if curator_omission_attempts(database,identifier)>=2:
@@ -1489,7 +1499,7 @@ async def job(database,batch,request,key,runner):
                         return accept_curator_omission(database,identifier,error,output,encoded_request)['output']
                     continue
                 elif image:record_image_failure(database,image,error)
-                else:fail_stage(database,batch,identifier,error)
+                else:fail_stage(database,batch,identifier,error,pause_reason=reason if rejected else None)
                 if (not image and (not received or not isinstance(error,ValueError))) or attempt==attempts-1:raise
                 correction='\n请按原角色规则纠正结构或证据校验错误，只返回完整 JSON。保留人物归属、比喻及不确定程度，不按词句数量改写文风。编号使用原始编号，不得按展示位置重新编号。\n'+('materials 必须只覆盖 host 指定的 material_annotation_source_ids_by_event；继承标注只读，不重复输出。\n' if request['role']=='event_curator' and request.get('component',{}).get('writer_material_review') else '')+encode({'validation_error':reason,**correction_scope(request,output)})
                 room=policy['max_prompt_chars']-len(request['rules'])-len(request['prompt'])-len(correction)-80
