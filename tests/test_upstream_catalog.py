@@ -144,6 +144,42 @@ def test_upstream_keys_survive_save_and_alias_conflicts_are_atomic(deployment):
     assert invalid.status_code==400 and 'never-echo-this-secret' not in invalid.text
 
 
+def test_replace_catalog_and_all_task_models_atomically(deployment):
+    settings,client=deployment
+    roles=('writer','persona','dreams','relations','narrative_scout','operit_tagging','arc_linker',
+           'image_transcription','track_router','event_curator','event_writer')
+    catalog=[{'id':'provider','name':'Synthetic','base_url':'https://synthetic.invalid/v1',
+              'api_key':'synthetic-secret','models':['old-model','embedding','reranker']}]
+    initial=client.patch('/v1/settings',json={'upstreams':catalog,'assignments':{
+        **{role:'old-model' for role in roles},'embedding':'embedding','reranker':'reranker'},
+        'pipeline':{'execution_mode':'api'},'features':{'image_eyes':True}})
+    initial.raise_for_status()
+    public=initial.json()
+    replacement=public['upstreams']
+    for upstream in replacement:upstream.pop('api_key_configured',None)
+    replacement[0]['models']=['new-model','embedding','reranker']
+    # An old client that omits the summary assignments gets actionable task names,
+    # and the rejected request must leave both catalog and settings version intact.
+    failed=client.patch('/v1/settings',json={'expected_version':public['settings_version'],
+        'models':[],'upstreams':replacement,'assignments':{'writer':'new-model'}})
+    assert failed.status_code==400,failed.text
+    for label in ('图片转录 / 眼睛','原话 · 归线','原话 · 切分','原话 · Event 写作'):
+        assert label in failed.json()['detail']
+    assert 'synthetic-secret' not in failed.text
+    assert client.get('/v1/settings').json()['settings_version']==public['settings_version']
+    assert task_model(settings.database,'track_router')['model']=='old-model'
+    saved=client.patch('/v1/settings',json={'expected_version':public['settings_version'],
+        'models':[],'upstreams':replacement,'assignments':{role:'new-model' for role in roles}})
+    saved.raise_for_status()
+    for role in roles:
+        model=task_model(settings.database,role)
+        assert model['model']=='new-model'
+        assert model['api_key']=='synthetic-secret'
+    assert task_model(settings.database,'embedding')['model']=='embedding'
+    assert task_model(settings.database,'reranker')['model']=='reranker'
+    assert 'synthetic-secret' not in saved.text
+
+
 def test_streaming_routes_alias_to_its_upstream(deployment,monkeypatch):
     settings,client=deployment
     client.patch('/v1/settings',json={'upstreams':upstreams()})

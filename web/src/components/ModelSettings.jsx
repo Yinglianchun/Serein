@@ -128,7 +128,6 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
     value!=='' && Number.isFinite(Number(value)) && Number(value)>=0 && Number(value)<=1);
   const upstreamForm=useRef(null);
   const [agentDraft,setAgentDraft]=useState(null);
-  const [eventAssignments,setEventAssignments]=useState({});
   const [status,setStatus]=useState("");
   const [busy,setBusy]=useState(false);
   const [pendingWork,setPendingWork]=useState(null);
@@ -171,21 +170,25 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
     setConfig(current=>({...current,upstreams,assignments:Object.fromEntries(Object.entries(current.assignments).map(([key,value])=>[key,ids.has(value)?value:""]))}));
     setStatus("上游设置尚未保存。");
   }
+  function modelChanges() {
+    const models=config.models.map(({api_key_configured,clear_key,...model})=>{
+      if(clear_key)model.api_key="";
+      else if(!model.api_key)delete model.api_key;
+      if(!model.dimension)delete model.dimension;
+      return model;
+    });
+    return {models,upstreams:upstreamsForSave(config.upstreams || [],upstreamForm.current),assignments:config.assignments};
+  }
   async function save(event,catalogOnly=false) {
     event.preventDefault();setBusy(true);setStatus("");
     try {
-      const models=config.models.map(({api_key_configured,clear_key,...model})=>{
-        if(clear_key)model.api_key="";
-        else if(!model.api_key)delete model.api_key;
-        if(!model.dimension)delete model.dimension;
-        return model;
-      });
-      const upstreams=upstreamsForSave(config.upstreams || [],upstreamForm.current);
+      const modelsAndAssignments=modelChanges();
       if(catalogOnly){
-        const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:Object.fromEntries(Object.entries(config.assignments).filter(([key])=>!(key in eventAssignments)))});
-        setConfig(current=>({...current,settings_version:result.settings_version,models:result.models,upstreams:result.upstreams,assignments:{...result.assignments,...eventAssignments},
-          memory_ready:result.memory_ready,index_status:result.index_status,upstream:{...current.upstream,memory_enabled:result.upstream.memory_enabled}}));
-        setStatus("上游与模型已保存。");
+        const result=await instanceSettings({expected_version:config.settings_version,...modelsAndAssignments});
+        setConfig(current=>({...current,settings_version:result.settings_version,models:result.models,upstreams:result.upstreams,assignments:result.assignments,
+          memory_ready:result.memory_ready,index_status:result.index_status,
+          upstream:{...current.upstream,memory_enabled:result.memory_ready?current.upstream.memory_enabled:result.upstream.memory_enabled}}));
+        setStatus("上游、模型与各功能的模型选择已保存。");
         return;
       }
       if(!validThreshold)throw new Error('召回阈值需填写 0 到 1 之间的数字。');
@@ -200,28 +203,29 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
         if (key in cooldownDraft && (!Number.isInteger(Number(cooldownDraft[key])) || Number(cooldownDraft[key]) < 1 || Number(cooldownDraft[key]) > 10000))
           throw new Error('冷却轮数与小时数需填写 1 到 10000 之间的整数。');
       }
-      const result=await instanceSettings({expected_version:config.settings_version,models,upstreams,assignments:Object.fromEntries(Object.entries(config.assignments).filter(([key])=>!taskGroups.find(group=>group.key==="events").tasks.includes(key))),dream:config.dream,
+      const result=await instanceSettings({expected_version:config.settings_version,...modelsAndAssignments,dream:config.dream,
         recall:{...passageDraft,...Object.fromEntries(Object.entries(cooldownDraft).map(([key,value])=>[key,key==='cooldown_mode'?value:Number(value)])),...Object.fromEntries(Object.entries(indexDraft).map(([key,value])=>[key,key==='index_catch_up'?value:Number(value)])),...('passage_min_chars' in passageDraft?{passage_min_chars:Number(passageMinChars)}:{}),
           ...(recallThreshold!==null?{direct_threshold:Number(threshold)}:{}),
           ...Object.fromEntries(Object.entries(candidateThresholdDraft).map(([key,value])=>[key,Number(value)]))},upstream:{
         writer_enabled:config.upstream.writer_enabled,memory_enabled:config.upstream.memory_enabled,operit_enabled:config.upstream.operit_enabled}});
-      setConfig(current=>({...result,pipeline:current.pipeline,assignments:{...result.assignments,...eventAssignments}}));setIndexDraft({});setCooldownDraft({});setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
+      setConfig(current=>({...result,pipeline:current.pipeline}));setIndexDraft({});setCooldownDraft({});setRecallThreshold(null);setCandidateThresholdDraft({});setPassageDraft({});setStatus("设置已保存。");
     } catch(error){setStatus(error.message);}
     finally{setBusy(false);}
   }
   function eventOption(key,value) {
-    setEventAssignments(current=>({...current,[key]:value}));
     setConfig(current=>({...current,assignments:{...current.assignments,[key]:value}}));
   }
   async function saveSummary(event) {
     event.preventDefault();setBusy(true);setStatus('');
     try {
       const result=await instanceSettings({expected_version:config.settings_version,
-        pipeline:pipelineDraft,assignments:eventAssignments,
+        ...modelChanges(),pipeline:pipelineDraft,
         ...(agentDraft!==null?{features:{pipeline_agent:agentDraft}}:{})});
       setConfig(current=>({...current,settings_version:result.settings_version,pipeline:result.pipeline,features:result.features,
-        assignments:{...current.assignments,...Object.fromEntries(taskGroups.find(group=>group.key==='events').tasks.map(key=>[key,result.assignments[key]||'']))}}));
-      setPipelineDraft({});setEventAssignments({});setAgentDraft(null);setStatus('自动摘要设置已保存。');
+        models:result.models,upstreams:result.upstreams,assignments:result.assignments,
+        memory_ready:result.memory_ready,index_status:result.index_status,
+        upstream:{...current.upstream,memory_enabled:result.memory_ready?current.upstream.memory_enabled:result.upstream.memory_enabled}}));
+      setPipelineDraft({});setAgentDraft(null);setStatus('自动摘要设置已保存。');
     } catch(error){setStatus(error.message);}finally{setBusy(false);}
   }
   async function recoverIndex() {
@@ -250,7 +254,7 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
       <section className="settings-group" aria-label="上游与模型">
         {config&&<form ref={upstreamForm} onSubmit={event=>save(event,true)}>
       <div className="settings-group__heading"><h3>上游与模型</h3></div>
-      <p className="model-connection-help">按上游管理模型，密钥只保存在服务端。</p>
+      <p className="model-connection-help">按上游管理模型，密钥只保存在服务端。模型列表与各功能的模型选择会一起保存，自动摘要的其他设置单独保存。</p>
       <UpstreamSettings modelIds={availableModels.map(m=>m.id)} assignments={config.assignments} upstreams={config.upstreams || []} onChange={changeUpstreams} onImported={value=>{setConfig(value);setPipelineDraft({});}} busy={busy} setBusy={setBusy} setStatus={setStatus} />
           <button type="button" className="settings-link" onClick={onOpenAssignments}>选择各功能使用的模型</button>
           <div className="settings-actions"><button disabled={busy} type="submit">{busy?"处理中…":"保存上游与模型"}</button></div>
@@ -262,6 +266,7 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
       <section className="settings-group" aria-label="各功能使用的模型">
         {config&&<form onSubmit={save}>
       <div className="settings-group__heading"><h3>基础配置</h3><p>先选择检索模型并准备索引，再开启聊天记忆。</p></div>
+      <p className="model-connection-help">保存时会一并保存模型列表与各功能的模型选择，自动摘要的其他设置单独保存。</p>
       <div className="model-assignments">{['embedding','reranker'].map(key=><div className="settings-field model-assignment" key={key}>
         <span><label htmlFor={`task-model-${key}`}>{tasks[key]}</label> · <a className="settings-link model-assignment__link" href={taskLinks[key].href} target="_blank" rel="noreferrer">{taskLinks[key].label}</a></span>
         <select id={`task-model-${key}`} aria-label={tasks[key]} value={config.assignments[key] || ''} onChange={event=>setConfig(current=>({...current,assignments:{...current.assignments,[key]:event.target.value}}))}>
@@ -351,7 +356,7 @@ export function ModelSettings({page,onOpenEventGuide,onOpenPipeline,onOpenCatalo
       </section>
     </div>
     <div role="tabpanel" id="settings-content-summary" aria-labelledby="settings-tab-summary" aria-hidden={page!=="summary"} inert={page!=="summary"}>
-      <section className="settings-group" aria-label="自动摘要管理"><div className="settings-group__heading"><h3>自动摘要管理</h3><p>开关、模型、输入范围与执行方式在这里统一保存。</p></div>
+      <section className="settings-group" aria-label="自动摘要管理"><div className="settings-group__heading"><h3>自动摘要管理</h3><p>开关、模型、输入范围与执行方式在这里统一保存；模型列表与其他功能的模型选择也会一起保存。</p></div>
       {pendingCount>0&&<div className="pending-materials__notice" role="status">有 {pendingCount} 批材料待处理，原话与错误记录已保留。{' '}
         <button type="button" className="settings-link" onClick={()=>{const target=document.getElementById('summary-pending-materials');const panel=document.getElementById('settings-content-summary');if(target&&panel)panel.scrollTop+=target.getBoundingClientRect().top-panel.getBoundingClientRect().top-16;target?.focus({preventScroll:true});}}>定位并处理卡住的材料</button></div>}
       <button type="button" className="settings-link" onClick={onOpenEventGuide}>了解模型调用与费用</button>
