@@ -162,8 +162,8 @@
 <section class="chapter shell" id="page-14" aria-labelledby="title-14">
   <div class="section-meta"><span>三种接入方式</span></div>
   <div class="split"><div><h2 id="title-14">把记忆接进<br><span class="mark">你正在用的聊天。</span></h2><p class="intro">选择谁来负责查找，谁来把材料交给模型。</p><div class="host-flow"><p>新用户消息</p><p>↓ POST /api/hook/recall</p><p>additional_context 放进模型请求</p><p>↓ 成功后 POST /v1/host/deliveries</p></div></div>
-    <dl class="definitions integrations"><div><dt><span>MCP</span>主动读写</dt><dd>让模型调用工具，保存 Scene、查记忆、读原话、写日记。可用工具由开关控制。</dd></div><div><dt><span>Gateway</span>聊天网关</dt><dd>聊天请求经过 Serein，自动准备召回材料，带入上下文，再交给上游聊天模型。</dd></div><div><dt><span>Hook</span>自建宿主</dt><dd>在新用户轮请求材料，由宿主放入实际请求，模型完整成功回复后登记交付。</dd></div></dl></div>
-  <p class="note">只接 MCP，不等于每轮自动召回，也不会自动导入客户端的全部历史聊天。</p>
+    <dl class="definitions integrations"><div><dt><span>MCP</span>主动读写</dt><dd>让模型调用工具，保存 Scene、查记忆、读原话、写日记。可用工具由开关控制。</dd></div><div><dt><span>Gateway</span>聊天网关</dt><dd>聊天可用 Chat Completions 或 OpenAI Responses。网关把召回材料带入请求，交给所选的上游聊天模型。</dd></div><div><dt><span>Hook</span>自建宿主</dt><dd>在新用户轮请求材料，由宿主放入实际请求，模型完整成功回复后登记交付。</dd></div></dl></div>
+  <p class="note">想同时开推理和记忆工具？若上游提示改用 Responses，在客户端选择 OpenAI Responses，Base URL 填 Serein 网关地址到 <code>/v1</code>，密钥填 Gateway Key。上游模型须支持 Responses 和工具调用，记忆工具连接 <code>/serein/mcp</code>。仅连接 MCP 时，模型可主动查记忆；每轮自动召回需接入 Gateway 或 Hook。</p>
 </section>
 
 <section class="chapter shell" id="page-15" aria-labelledby="title-15">
