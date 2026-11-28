@@ -38,7 +38,7 @@
 密钥保存在实例数据库中，读取接口只返回“是否已配置”；留空保留密钥，显式勾选删除才清空。
 数据库和所有运行目录不进入源码发行包。模型列表不是浏览器 localStorage 配置。
 
-文本生成支持 Chat Completions 和 Anthropic Messages 上游，聊天客户端入口统一为 Chat Completions。
+聊天客户端可以选择 Chat Completions 或 Responses。Chat Completions 可接 OpenAI 兼容或 Anthropic Messages 上游；Responses 请求发到所选 OpenAI 兼容上游的原生 `/responses` 接口，保留推理参数及工具协议。后台摘要等模型任务继续使用原有的模型接口。
 OpenCode Go 的 Chat Completions Base URL 为 `https://opencode.ai/inference/go/openai/v1`。可在该上游启用「发送 OpenCode Go 会话标识」，模板字段为 `opencode_go_session: true`。客户端给出稳定窗口标识时，Serein 才会向 Go 发送对应的 `x-opencode-session`。
 Embedding 使用 `/embeddings`，Reranker 使用 `/rerank`；选择相应用途的模型。
 更换 embedding 后，先保存，再点击“建立 / 补齐检索索引”。它会探测维度，生成完整公开路由例句和正文（开启长文分段时还包括 passages）

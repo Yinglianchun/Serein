@@ -28,9 +28,9 @@ def original(message):
             'attachments': images}
 
 
-def prepare_turn(window_id, incoming):
+def prepare_turn(window_id, incoming, *, history_prefix=''):
     """Stable across tool continuations/retries; only hash prior dialogue for identity."""
-    history = ''
+    history = history_prefix
     anchor = None
     for message in incoming:
         if message.get('role') not in ('user', 'assistant') or message.get('tool_calls'):

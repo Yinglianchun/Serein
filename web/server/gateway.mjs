@@ -22,7 +22,7 @@ const tokenFile = process.env.SEREIN_MEMORY_TOKEN_FILE;
 if (!tokenFile || !memoryToken()) throw new Error('Memory token is empty');
 const web = await preview({ root: fileURLToPath(new URL('../', import.meta.url)),
   preview: { host: '127.0.0.1', port: Number(process.env.SEREIN_PREVIEW_PORT || 4173), strictPort: true, allowedHosts: true } });
-const bearerPaths = new Set(['/v1/models', '/v1/chat/completions',
+const bearerPaths = new Set(['/v1/models', '/v1/chat/completions', '/v1/responses',
   '/api/hook/recall', '/v1/host/deliveries']);
 const hopHeaders = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
 

@@ -69,6 +69,10 @@ test('gateway separates web auth from API auth, saves settings and streams respo
         ? {status:'ok',readable:true,document:{title:'Synthetic scene',body_md:'Complete material text'}}
         : {status:'ok',items:[{kind:'scene',id:'scene_test',title:'Synthetic scene',readable:true}],total:51,next_offset:null}));return;
     }
+    if(req.url==='/v1/responses'){
+      res.writeHead(200,{'Content-Type':'text/event-stream'});
+      res.end('event: response.completed\ndata: {"type":"response.completed"}\n\n');return;
+    }
     if(req.url==='/v1/chat/completions'){
       res.writeHead(200,{'Content-Type':'text/event-stream'});res.write('data: {"part":1}\n\n');
       setTimeout(()=>res.end('data: [DONE]\n\n'),400);return;
@@ -320,6 +324,10 @@ test('gateway separates web auth from API auth, saves settings and streams respo
     const reader=stream.body.getReader();const first=new TextDecoder().decode((await reader.read()).value);
     assert.ok(first.includes('part')&&!first.includes('[DONE]'));
     const second=new TextDecoder().decode((await reader.read()).value);assert.ok(second.includes('[DONE]'));
+    assert.equal((await fetch(base+'/v1/responses',{method:'POST',headers:auth,body:'{}'})).status,401);
+    const native=await fetch(base+'/v1/responses',{method:'POST',headers:{Authorization:'Bearer synthetic-api-key','Content-Type':'application/json'},body:'{"input":"hello","stream":true}'});
+    assert.match(await native.text(),/^event: response\.completed/);
+    assert.ok(requests.some(r=>r.path==='/v1/responses'&&r.auth==='Bearer synthetic-api-key'));
     const keyAction = (action, headers=postHeaders) => fetch(base+'/__serein/gateway-key/'+action,
       {method:'POST', headers, body:'{}'});
     assert.equal((await keyAction('copy', {'Content-Type':'application/json', Origin:base})).status,401);

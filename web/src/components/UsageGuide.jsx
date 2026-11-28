@@ -151,7 +151,8 @@ export function UsageGuide({ onOpenSettingsTab, initialPage }) {
       <p>以下是连接地址模板，请把“公网IP”“网关端口”或“你的域名”替换成自己的实际值。公网 IP 使用安装主机的公网地址，端口使用安装时配置的网关端口；域名示例适用于已配置 HTTPS 的入口。</p>
       <h4>聊天 API · OpenAI 兼容</h4>
       <p>接口类型选 OpenAI 兼容，<strong>Base URL</strong> 填 <code>http://公网IP:网关端口/v1</code>，使用域名时填 <code>https://你的域名/v1</code>；<strong>API Key</strong> 填完整的 Gateway Key，密钥输入框不用加 <code>Bearer </code> 前缀。聊天客户端可拉取已配置的全部上游模型。</p>
-      <p>手动发请求时，模型列表为 <code>GET http://公网IP:网关端口/v1/models</code>，聊天为 <code>POST http://公网IP:网关端口/v1/chat/completions</code>；请求头为 <code>Authorization: Bearer &lt;Gateway Key&gt;</code>，把占位文字及尖括号替换成实际 Key。客户端 Base URL 通常只填到 <code>/v1</code>。</p>
+      <p>客户端 Base URL 填到网关的 <code>/v1</code>，密钥填 Gateway Key。手动请求使用 <code>GET /v1/models</code> 获取模型，聊天可用 <code>POST /v1/chat/completions</code> 或 <code>POST /v1/responses</code>，请求头为 <code>Authorization: Bearer &lt;Gateway Key&gt;</code>。</p>
+      <p>想同时用 OpenAI 的思考和记忆工具时，可在客户端选择 OpenAI Responses 协议，聊天地址仍填 Serein 网关，MCP 另连 <code>/serein/mcp</code>。所选上游也须支持 Responses。</p>
       <h4>MCP · Streamable HTTP</h4>
       <p><strong>服务器 URL</strong> 填 <code>https://你的域名/serein/mcp</code>，<strong>传输类型</strong> 选 <code>Streamable HTTP</code>。支持 OAuth 的客户端把身份验证选为 <strong>OAuth</strong>；浏览器打开 Serein 授权页后，手动输入 Gateway Key 并确认。OAuth 要求 HTTPS 域名，同机 <code>localhost</code> 例外；不要把 Key 写进 URL。</p>
       <p>不支持 OAuth、但可添加请求头的客户端仍可使用静态方式：名称 <code>Authorization</code>，值 <code>Bearer &lt;Gateway Key&gt;</code>；专门的 Bearer Token 输入框只填完整 Key。<code>http://公网IP:网关端口/serein/mcp</code> 也只能使用静态方式。</p>

@@ -128,14 +128,14 @@ Docker 两个 Compose 服务为 `gateway`、`memory`；直跑保持相同的服�
 安装脚本依次构建 memory、gateway，降低小内存 VPS 冷安装时的并行资源占用。
 Python 依赖先按 `pyproject.toml` 单独安装，之后才复制并安装 Serein 源码。只修改源码时复用依赖层；首次构建、依赖配置或基础镜像变化、Docker 构建缓存被清理时才重新安装依赖。pip 下载缓存也保留在 BuildKit 中，依赖层需要重建时可以复用已下载的包。
 网关提供需要页面鉴权的前端与代理；
-`/v1/models`、`/v1/chat/completions` 与远程 `/serein/mcp` 都由 Gateway Key 保护，与页面密码分开。MCP 传输选择 Streamable HTTP，无需额外启动进程。支持 OAuth 的客户端在 `https://你的域名/serein/mcp` 选择 OAuth，随后在 Serein 授权页手动输入 Gateway Key 确认；不支持 OAuth、但可自定义请求头的客户端继续使用 `Authorization: Bearer <Gateway Key>`。OAuth 授权要求 HTTPS 域名（同机 localhost 例外）；公网 IP 的 HTTP 入口只能使用静态 Key。已有反向代理须转发全部路径，不能只放行 `/serein/mcp`，因为 OAuth 还会访问根路径下的 `/.well-known/oauth-*`、`/register`、`/authorize`、`/token`。旧 `/mcp` 和 `/mcp/` 保留兼容。交互菜单配置 HTTPS 时会写入 `SEREIN_PUBLIC_ORIGIN`；手动 Compose/直跑部署也必须把它设为无路径的 HTTPS origin（例如 `https://memory.example.com`）。网关不信任来访请求自行声明的 `X-Forwarded-Proto`。
+`/v1/models`、`/v1/chat/completions`、`/v1/responses` 与远程 `/serein/mcp` 都由 Gateway Key 保护，与页面密码分开。MCP 传输选择 Streamable HTTP，无需额外启动进程。支持 OAuth 的客户端在 `https://你的域名/serein/mcp` 选择 OAuth，随后在 Serein 授权页手动输入 Gateway Key 确认；不支持 OAuth、但可自定义请求头的客户端继续使用 `Authorization: Bearer <Gateway Key>`。OAuth 授权要求 HTTPS 域名（同机 localhost 例外）；公网 IP 的 HTTP 入口只能使用静态 Key。已有反向代理须转发全部路径，不能只放行 `/serein/mcp`，因为 OAuth 还会访问根路径下的 `/.well-known/oauth-*`、`/register`、`/authorize`、`/token`。旧 `/mcp` 和 `/mcp/` 保留兼容。交互菜单配置 HTTPS 时会写入 `SEREIN_PUBLIC_ORIGIN`；手动 Compose/直跑部署也必须把它设为无路径的 HTTPS origin（例如 `https://memory.example.com`）。网关不信任来访请求自行声明的 `X-Forwarded-Proto`。
 
 以网页入口 `https://你的域名` 为例，在客户端填写：
 
 | 用途 | 地址 / 字段 | Key 怎么填 |
 | --- | --- | --- |
 | 聊天 API（OpenAI 兼容） | Base URL：`https://你的域名/v1` | API Key 输入框填完整 Gateway Key，不加 `Bearer` 前缀 |
-| 模型列表 / 手动聊天请求 | `GET https://你的域名/v1/models` / `POST https://你的域名/v1/chat/completions` | 请求头 `Authorization: Bearer <Gateway Key>` |
+| 模型列表 / 手动聊天请求 | `GET /v1/models`、`POST /v1/chat/completions` 或 `POST /v1/responses`，地址均使用 Serein 网关域名 | 请求头 `Authorization: Bearer <Gateway Key>` |
 | MCP（Streamable HTTP + OAuth） | 服务器 URL：`https://你的域名/serein/mcp` | 身份验证选 OAuth；授权页输入 Gateway Key 并确认 |
 | MCP（Streamable HTTP + 静态 Key） | 同一服务器 URL | 请求头 `Authorization: Bearer <Gateway Key>`；专门的 Bearer Token 输入框只填 Key |
 
@@ -294,7 +294,7 @@ Windows Docker Desktop 的目录迁移和直跑目录迁移也要求明确确认
 
 旧版单独模型以所属连接归入上游编辑器，保存时转为上游配置，保留任务绑定、密钥、缓存和向量参数。地址相同但密钥或连接选项不同的旧连接不会自动混用凭据；部署者可确认后手动合并。
 
-“地下室 → 召回观察”默认展示 Gateway 当前请求的全部已加载记录。通过本站 `/v1/chat/completions` 的合法请求会保存当前原句、窗口 ID、自动召回开关、路由与准备材料、上游完成或失败状态；不保存完整提示词、密钥或记忆正文。进行中、失败和中断的用户轮也保留；工具续轮不重复记账。关闭召回的聊天也显示，未完成和失败不算已注入。成功记录在“真正送入模型”中逐条显示记忆类型、标题、ID 和已记录的分数，可标注每条记忆为核心相关、弱相关或无关；判断保存到本站数据库。关闭召回或没有选出记忆时明确说明未注入。“Hook 注入”页签展示 Hook 完成记录，按实际结果区分已注入、未命中与跳过；模型请求成功或宿主回执不证明客户端已显示回复。训练标注导出仍可从页头按钮操作，页面不再常驻显示导出统计面板。
+“地下室 → 召回观察”默认展示 Gateway 当前请求的全部已加载记录。通过本站 `/v1/chat/completions` 或 `/v1/responses` 的合法聊天请求会保存当前原句、窗口 ID、自动召回开关、路由与准备材料、上游完成或失败状态；不保存完整提示词、密钥或记忆正文。进行中、失败和中断的用户轮也保留；工具续轮不重复记账。关闭召回的聊天也显示，未完成和失败不算已注入。成功记录在“真正送入模型”中逐条显示记忆类型、标题、ID 和已记录的分数，可标注每条记忆为核心相关、弱相关或无关；判断保存到本站数据库。关闭召回或没有选出记忆时明确说明未注入。“Hook 注入”页签展示 Hook 完成记录，按实际结果区分已注入、未命中与跳过；模型请求成功或宿主回执不证明客户端已显示回复。训练标注导出仍可从页头按钮操作，页面不再常驻显示导出统计面板。
 
 迁入的旧记录继续保留并标为历史记录；升级前没有保存的原句无法补回。直接连接其他上游或只调用 MCP 的请求不会冒充本站聊天网关请求。自动召回冷却可按成功对话轮数或小时设置，默认 5 轮；查看观察记录不会推进冷却或整理原话。
 

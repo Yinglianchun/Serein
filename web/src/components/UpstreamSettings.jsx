@@ -34,7 +34,7 @@ export function UpstreamSettings({upstreams,modelIds=[],assignments={},onChange,
         onChange={event=>edit(upstream.id,{api_key:event.target.value,...(event.target.value?{clear_key:false}:{})})} /></label>
       {upstream.api_key_configured && <label className="settings-toggle"><span>删除已保存的密钥</span><input type="checkbox" role="switch" checked={upstream.clear_key || false} onChange={event=>edit(upstream.id,{clear_key:event.target.checked})} /></label>}
       <label className="settings-field"><span>接口格式</span><select value={upstream.protocol} onChange={event=>edit(upstream.id,{protocol:event.target.value,opencode_go_session:false,prompt_cache:"",prompt_cache_retention:""})}>
-        <option value="openai">Chat Completions / Embeddings / Rerank</option><option value="anthropic">Anthropic Messages</option></select></label>
+        <option value="openai">OpenAI 兼容（Chat Completions / Responses / Embeddings / Rerank）</option><option value="anthropic">Anthropic Messages</option></select></label>
       {upstream.protocol === "openai" && upstream.base_url?.trim().replace(/\/$/, '') === goBaseUrl &&
         <label className="settings-toggle"><span>发送 OpenCode Go 会话标识
           <small>使用客户端提供的稳定会话 ID。客户端未提供时，Serein 无法替 Go 区分会话。</small></span>

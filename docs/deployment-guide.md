@@ -133,7 +133,9 @@ bash scripts/one_click.sh
 
 **页面密码、Gateway Key、模型提供方 API Key 是三种不同凭据。** 模型提供方密钥填网页“模型”设置；不要把它填成聊天客户端访问 Serein 的 Key。
 
-聊天客户端拉取模型列表后选择实际显示的“上游名／模型别名”。通常 Base URL 填到 `/v1`，具体接口地址由客户端追加；不要误把 `/serein/mcp` 填进聊天地址。不要照抄旧 Ombre 的 `/v1/messages` 接法；当前 Serein 网关的聊天入口是 OpenAI 兼容 `/v1/chat/completions`。
+聊天客户端拉取模型列表后选择实际显示的“上游名／模型别名”。Base URL 填到 Serein 网关的 `/v1`，客户端会按所选协议追加 `/chat/completions` 或 `/responses`。记忆工具单独连接 `/serein/mcp`。
+
+在 Kelivo 等客户端同时使用 OpenAI 推理和记忆工具时，将聊天协议设为 **OpenAI Responses**，地址仍指向 Serein，聊天密钥填 Gateway Key。在 Serein 中选择支持原生 Responses 的 OpenAI 兼容上游。网关将 `reasoning` 和工具调用按 Responses 格式转交，保留自动召回和原话归档。支持普通回复、流式回复、回传工具结果以及 `previous_response_id` 续轮。此入口用于前台聊天请求。
 
 同一聊天会话保持稳定的 `X-Serein-Window-ID`，例如 `chat-001`；新窗口换成新值。不填时使用默认会话 `main`，共用提醒轮次并以默认会话处理续接。心绪和网关自动召回冷却由实例共用。
 

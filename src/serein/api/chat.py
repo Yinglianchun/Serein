@@ -13,7 +13,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from jsonschema.validators import Draft202012Validator, validator_for
 from referencing import Registry
 from referencing.exceptions import Unresolvable
-from fastapi import APIRouter, HTTPException, Header, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Header, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from ..deployment import read_settings, task_model, chat_models, client_model_id
 from ..chat_context import ClientContext
@@ -22,6 +22,7 @@ from ..core.store import digest, encode, Conflict
 from .. import chat_resume
 from ..chat_observation import ChatObservation, recall_summary
 from ..chat_archive import prepare_turn, archive_turn, archive_user_turn
+from .responses import ResponseInput, assistant_output, previous_tool_turn, remember_tool_turn, response_stream
 
 
 async def transcribe_image_turn(settings, turn):
@@ -147,26 +148,35 @@ def routes(settings, services, auth):
         return {'object':'list', 'data':rows}
 
     @router.post('/v1/chat/completions')
-    async def chat(body: dict, background_tasks: BackgroundTasks, x_serein_window_id: str = Header(default=''),
+    @router.post('/v1/responses')
+    async def chat(body: dict, request: Request, background_tasks: BackgroundTasks, x_serein_window_id: str = Header(default=''),
                    x_ombre_session_id: str = Header(default='')):
         observation = ChatObservation(settings.database)
+        responses = request.url.path.endswith('/responses')
         try:
-            return await run_chat(body, background_tasks, x_serein_window_id, x_ombre_session_id, observation)
+            return await run_chat(body, background_tasks, x_serein_window_id, x_ombre_session_id, observation,
+                                  responses=responses)
         except asyncio.CancelledError:
             observation.finish('interrupted', reason='client_disconnected')
             raise
         except HTTPException as exc:
             observation.finish('failed', reason=str(exc.detail))
+            if responses:
+                detail = exc.detail if isinstance(exc.detail, dict) else {'message': str(exc.detail)}
+                return JSONResponse({'error': {'message': detail['message'], 'code': detail.get('code'),
+                    'type': 'invalid_request_error' if exc.status_code < 500 else 'server_error', 'param': None}},
+                    status_code=exc.status_code)
             raise
         except Exception:
             observation.finish('failed', reason='request_failed')
             raise
 
-    async def run_chat(body, background_tasks, x_serein_window_id, x_ombre_session_id, observation):
+    async def run_chat(body, background_tasks, x_serein_window_id, x_ombre_session_id, observation, responses):
         body = deepcopy(body)
         options = body.pop('serein', {})
-        incoming = body.get('messages')
-        if not isinstance(incoming, list) or not incoming or any(not isinstance(item, dict) for item in incoming):
+        native = ResponseInput(body) if responses else None
+        incoming = native.messages if responses else body.get('messages')
+        if not responses and (not isinstance(incoming, list) or not incoming or any(not isinstance(item, dict) for item in incoming)):
             raise HTTPException(400, 'messages must be a nonempty list of messages')
         if not isinstance(options, dict) or options.keys() - {'memory','window_id','delivered_ids'}:
             raise HTTPException(400, 'serein accepts memory, window_id and delivered_ids')
@@ -180,16 +190,28 @@ def routes(settings, services, auth):
         explicit_window = next((str(value).strip() for value in
             (options.get('window_id'), x_serein_window_id, x_ombre_session_id)
             if value is not None and str(value).strip()), '')
-        window_id = explicit_window or 'main'
+        window_id = explicit_window or (native.conversation_id if native else None) or 'main'
         if len(window_id)>200:
             raise HTTPException(400, 'Window ID must be at most 200 characters')
         context.operit_context_rewrite_enabled = state['upstream']['operit_enabled']
         query = context._extract_current_turn_user_query(incoming)
         observation.start(window_id, query, use_memory)
-        archive_input = prepare_turn(window_id, incoming)
+        def chat_model():
+            model = task_model(settings.database, 'chat', requested=str(body.get('model') or ''))
+            if not model:
+                raise HTTPException(503, 'Configure upstreams and models in Settings')
+            return model
+        model = chat_model() if responses else None
+        if responses and model.get('protocol') == 'anthropic':
+            raise HTTPException(400, 'Select an OpenAI-compatible upstream that supports /v1/responses')
+        history_prefix = (body.get('previous_response_id') or '') if responses else ''
+        archive_input = prepare_turn(window_id, incoming, history_prefix=history_prefix)
+        if responses and (native.tool_submission or not archive_input):
+            archive_input = previous_tool_turn(settings.database,model,window_id,body,native.items) or archive_input
         image_context = ''
         image_receipt = {}
-        if state['features'].get('image_eyes'):
+        new_image_turn = not (native and native.tool_submission)
+        if state['features'].get('image_eyes') and new_image_turn:
             try:
                 image_context, image_receipt = await transcribe_image_turn(settings, archive_input)
             except HTTPException as exc:
@@ -204,7 +226,7 @@ def routes(settings, services, auth):
                     'reason':'image_model_unconfigured' if exc.status_code == 409 else 'image_read_failed'}
             if image_receipt:
                 observation.payload['image_transcription'] = {**image_receipt, 'mode':'eyes'}
-        elif state['features'].get('image_transcription_async') and archive_input and archive_input['user'].get('attachments'):
+        elif new_image_turn and state['features'].get('image_transcription_async') and archive_input and archive_input['user'].get('attachments'):
             from ..work_tasks import enqueue_image
             archived = archive_user_turn(settings, archive_input)
             if archived.get('rejected') or len(archived.get('message_ids', [])) != 1:
@@ -213,15 +235,18 @@ def routes(settings, services, auth):
             background_tasks.add_task(run_queued_image_turn, settings, queued)
             observation.payload['image_transcription'] = {'status':'scheduled','mode':'async',
                 'images':len(archive_input['user']['attachments'])}
-        model = task_model(settings.database, 'chat', requested=str(body.get('model') or ''))
-        if not model:
-            raise HTTPException(503, 'Configure upstreams and models in Settings')
+        if not responses:
+            model = chat_model()
         upstream_session = {'go_session_id': explicit_window} if model.get('opencode_go_session') else {}
+        if responses:
+            upstream_session['responses'] = True
         cache_contract={'model':{k:v for k,v in model.items() if k!='api_key'}, 'memory':use_memory,
                         'operit':state['upstream']['operit_enabled'], 'identity':state['identity'],
                         'features':state['features'],'assignments':state['assignments'], 'resume':state['resume'],
                         'eyes_fallback':image_receipt.get('fallback') == 'text_only',
                         'clock':state['clock']}
+        if responses:
+            cache_contract['responses'] = [body.get('previous_response_id'),body.get('conversation'),body.get('instructions')]
         cache_window = window_id + ':' + digest(encode(cache_contract)) if window_id else uuid4().hex
         resume_query = chat_resume.continuation(query)
         command_resume = state['features']['resume'] and state['resume']['command_enabled']
@@ -309,15 +334,22 @@ def routes(settings, services, auth):
                 context.pending_turn_injections[cache_window][snapshot_key]['resume_items'] = resume_items
                 context.pending_turn_injections[cache_window][snapshot_key]['resume_snapshot'] = resume_snapshot
                 context.pending_turn_injections[cache_window][snapshot_key]['recall_observation'] = summary
-        context._restore_cached_reasoning_content(cache_window,body['messages'])
+        if responses:
+            prepared = body.pop('messages')
+            if 'input' in body or prepared:
+                body['input'] = native.wire_input(prepared)
+        else:
+            context._restore_cached_reasoning_content(cache_window,body['messages'])
         observation.prepared(selected, summary, recall_state=recall_state, replayed=replay)
         receipt_id = observation.receipt_id
-        def completed(message):
+        def completed(message, native_result=None):
             if not message or not context._assistant_message_has_output(message):
                 observation.finish('failed', reason='empty_response')
                 return
             try:
                 observation.payload['raw_archive'] = archive_turn(settings, archive_input, message)
+                if native_result is not None:
+                    remember_tool_turn(settings.database,model,archive_input,native_result,message,observation.payload['raw_archive'])
             except Exception as exc:
                 # A storage failure must not discard an already generated reply.
                 # Keep the failure visible in the persisted request observation.
@@ -327,7 +359,8 @@ def routes(settings, services, auth):
             if resume_snapshot:
                 chat_resume.remember(services, window_id, resume_snapshot)
             if window_id:
-                context._update_reasoning_cache(cache_window,message)
+                if not responses:
+                    context._update_reasoning_cache(cache_window,message)
                 context._update_turn_injection_snapshot_after_assistant(cache_window,
                     {'turn_injection_snapshot':{'snapshot_key':snapshot_key}},message)
             final_reply = not message.get('tool_calls') and bool(message.get('content'))
@@ -355,10 +388,18 @@ def routes(settings, services, auth):
         headers_out['X-Serein-Resume'] = 'loaded' if resume_snapshot else 'none'
         headers_out['X-Serein-Observation-Id'] = str(observation.id or '')
         headers_out['X-Serein-Resume-Items'] = str(resume_items)
+        def finish_response(result):
+            if result['status'] == 'completed':
+                completed(assistant_output(result), result)
+            else:
+                observation.finish('failed', reason='response_'+str(result['status']))
         if not body.get('stream'):
             try:
                 result = await complete(model,body,window_id=window_id,**upstream_session)
-                message = result['choices'][0]['message']
+                if responses:
+                    finish_response(result)
+                else:
+                    message = result['choices'][0]['message']
             except (UpstreamError, httpx.HTTPStatusError) as exc:
                 if headers_out['X-Serein-Resume']=='loaded' and chat_resume.context_limit(exc.response):
                     raise HTTPException(413, 'The upstream model rejected the context length. Reduce resume selections or chat history, or choose a model with a larger context window.') from None
@@ -366,7 +407,8 @@ def routes(settings, services, auth):
                 raise HTTPException(status, detail) from None
             except (httpx.HTTPError,ValueError,KeyError,IndexError,TypeError):
                 raise HTTPException(502,'Upstream request failed or returned an invalid response') from None
-            completed(message)
+            if not responses:
+                completed(message)
             return JSONResponse(result,headers=headers_out,background=background_tasks)
         url,headers,payload = request_for(model,body,window_id=window_id,**upstream_session)
         client = httpx.AsyncClient(timeout=120,follow_redirects=False)
@@ -385,6 +427,9 @@ def routes(settings, services, auth):
         except (httpx.HTTPError,ValueError):
             await client.aclose()
             raise HTTPException(502,'Upstream streaming request failed') from None
+        if responses:
+            return StreamingResponse(response_stream(response,client,finish_response,observation),
+                media_type='text/event-stream',headers=headers_out,background=background_tasks)
         async def chunks():
             stream_state={'message':{'role':'assistant','content':'','reasoning_content':''},'tool_calls_by_index':{}}
             converter=AnthropicStream(model['model']) if model.get('protocol')=='anthropic' else None
